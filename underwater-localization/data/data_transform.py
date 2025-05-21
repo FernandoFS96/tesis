@@ -114,7 +114,7 @@ def process_and_save_data(input_paths, output_paths, save_dir, theta_values, spl
     print(f"Theta values saved to {os.path.join(save_dir, 'theta_values_anp.pkl')}")
 
 if __name__ == '__main__':
-    base_dir = '/home/fernando/tesis/testeo_data_ANP/data'
+    base_dir = './data'
 
     channel_dirs = sorted(
         [os.path.join(base_dir, d) for d in os.listdir(base_dir)
