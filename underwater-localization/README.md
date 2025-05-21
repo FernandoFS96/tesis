@@ -9,17 +9,20 @@ The project follows a modular design for maintainability and scalability:
 ```
 underwater-localization/
 │
-├── data/                  # Raw and processed data
-│   ├── channel_option_x.x/
-│   ├── ...
-│   └── data_processed/    # Preprocessed train and validation data
+├── data/
+│   ├── high_variance/           # Raw and processed data
+│   │   ├── channel_option_x.x/
+│   │   ├── ...
+│   │   └── data_processed/
+│   ├── low_variance/
+│   └── data_generator_ANP.py    # Geenrates raw data
 │
 ├── src/                   # Source code
 │   ├── models/            # Model architectures
 │   │   ├── mlp.py
 │   │   └── anp.py
 │   ├── preprocessing/     # Data preprocessing utilities
-│   │   ├── preprocess_data.py
+│   │   ├── process_data.py
 │   │   └── __init__.py
 │   ├── training/          # Training scripts
 │   │   ├── train_mlp.py
@@ -51,10 +54,23 @@ underwater-localization/
 
 ## Data
 The data is organized by `theta` values, with subfolders containing filtered input data and trajectories:
-- `data/channel_option_x.x/filtered_data.npy`
-- `data/channel_option_x.x/trajectory/trajectories.npy`
+- `data/low_data/channel_option_x.x/filtered_data.npy`
+- `data/low_data/channel_option_x.x/trajectory/trajectories.npy`
 
-Processed data is stored in `data_processed/` for training and validation.
+Processed data is stored in `data_processed/` for training and validation. If not present, use script `process_data.py` in `src/preprocessing/` with the following arguments:
+- **subset**: `high_variance` or `low_variance`  
+- **--split**: (optional) fraction for validation set (default: `0.2`)  
+- **--save-dir**: (optional) custom output directory (default: `data/<subset>/data_processed`)
+
+### Example
+
+```bash
+# Process high_variance with default 20% validation split
+python src/preprocessing/process_data.py high_variance
+
+# Process low_variance with 30% validation split
+python src/preprocessing/process_data.py low_variance --split 0.3
+```
 
 ## Usage
 ### Training Models
@@ -62,45 +78,41 @@ Processed data is stored in `data_processed/` for training and validation.
 ```bash
 # Train on low-variance groups (θ 0.0–0.5)
 python src/training/train_mlp.py \
-    --data-dir data/low_variance/ \
-    --result-dir results/MLP/low_variance \
-    --theta-range 0.0 0.5 \
-    --input-dim 4010 \
-    --output-dim 3
+--data-dir data/low_variance/ \
+--result-dir results/MLP/low_variance \
+--theta-range 0.0 0.5 \
+--input-dim 4010 \
+--output-dim 3
 
 # Train on high-variance groups (θ 0.6–1.0)
 python src/training/train_mlp.py \
-    --data-dir data/high_variance/ \
-    --result-dir results/MLP/high_variance\
-    --theta-range 0.6 1.0 \
-    --input-dim 4010 \
-    --output-dim 3
+--data-dir data/high_variance/ \
+--result-dir results/MLP/high_variance\
+--theta-range 0.6 1.0 \
+--input-dim 4010 \
+--output-dim 3
 ```
 
 #### Train ANP
 ```bash
 # Train on low-variance groups (θ 0.0–0.5)
 python src/training/train_anp.py \
-    --train-data data/low_variance/data_processed/train_data_anp.pkl \
-    --val-data data/low_variance/data_processed/val_data_anp.pkl \
-    --result-dir results/ANP/low_variance \
-    --batch-size 8 \
-    --epochs 5000 \
-    --patience 200
+--train-data data/low_variance/data_processed/train_data_anp.pkl \
+--val-data data/low_variance/data_processed/val_data_anp.pkl \
+--result-dir results/ANP/low_variance \
+--batch-size 8 \
+--epochs 5000 \
+--patience 200
 
 # Train on high-variance groups (θ 0.6–1.0)
 python src/training/train_anp.py \
-    --train-data data/high_variance/data_processed/train_data_anp.pkl \
-    --val-data data/high_variance/data_processed/val_data_anp.pkl \
-    --result-dir results/ANP/high_variance \
-    --batch-size 8 \
-    --epochs 5000 \
-    --patience 200
-# datos Borja
-python src/training/train_anp.py     --train-data data/new/data_processed/train_data.pkl     --val-data data/new/data_processed/val_data.pkl     --result-dir results/ANP/new     --batch-size 8  
-   --epochs 5000     --patience 200
+--train-data data/high_variance/data_processed/train_data_anp.pkl \
+--val-data data/high_variance/data_processed/val_data_anp.pkl \
+--result-dir results/ANP/high_variance \
+--batch-size 8 \
+--epochs 5000 \
+--patience 200
 ```
-
 
 ### Evaluate Models
 #### Combined Evaluation
@@ -126,18 +138,13 @@ python src/evaluation/evaluate.py \
 --eval-modes mean heatmap pvals trajectories
 ```
 
-
 This evaluates the ANP and MLP models on the requested channel groups:
 - **Heatmap**: Compares MAE for ANP (with varying context percentages) and MLP models.
 - **Predictions**: Plots predicted trajectories for ANP and MLP (combined).
 - Feel free to add any exta functionality or test that you consider
-
 
 ## Features
 - **Dynamic Data Selection**: Train and evaluate models on different `theta` ranges.
 - **Dynamic Context Percentages**: Evaluate ANP models with varying context sizes.
 - **Evaluation Metrics**: Compute Mean Absolute Error (MAE) for ANP and MLP models.
 - **Visualization**: Generate heatmaps and trajectory plots for result analysis.
-
-
-
