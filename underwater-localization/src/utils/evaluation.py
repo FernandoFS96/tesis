@@ -1,7 +1,7 @@
 # src/utils/evaluation.py
 import torch
 import numpy as np
-from src.preprocessing.preprocess_data import load_and_preprocess_data
+from src.preprocessing.data_process import load_and_preprocess_data
 
 def evaluate_model_on_data(model, X, y):
     """

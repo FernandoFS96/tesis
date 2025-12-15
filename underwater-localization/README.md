@@ -66,10 +66,10 @@ Processed data is stored in `data_processed/` for training and validation. If no
 
 ```bash
 # Process high_variance with default 20% validation split
-python src/preprocessing/process_data.py high_variance
+python data/data_process.py high_variance
 
 # Process low_variance with 30% validation split
-python src/preprocessing/process_data.py low_variance --split 0.3
+python data/data_process.py low_variance --split 0.3
 ```
 
 ## Usage
@@ -102,7 +102,7 @@ python src/training/train_anp.py \
 --result-dir results/ANP/low_variance \
 --batch-size 8 \
 --epochs 5000 \
---patience 200
+--patience 250
 
 # Train on high-variance groups (θ 0.6–1.0)
 python src/training/train_anp.py \
@@ -121,17 +121,17 @@ python src/training/train_anp.py \
 python src/evaluation/evaluate.py \
 --data-path data/low_variance/data_processed/val_data_anp.pkl \
 --theta-path data/low_variance/data_processed/theta_values_anp.pkl \
---anp-path results/ANP/low_variance/experiment_20250430-115900/best_checkpoint.pth.tar \
+--anp-path results/ANP/low_variance/experiment_20251209-165637/best_checkpoint.pth.tar \
 --mlp-dir results/MLP/low_variance \
 --result-dir results/evaluation/low_variance \
 --batch-size 4  \
---eval-modes mean heatmap pvals trajectories
+--eval-modes mean heatmap pvals trajectories all_trajectories
 
 # Evaluación zero-shot sobre high-variance (θ 0.6–1.0)
 python src/evaluation/evaluate.py \
 --data-path data/high_variance/data_processed/val_data_anp.pkl \
 --theta-path data/high_variance/data_processed/theta_values_anp.pkl \
---anp-path results/ANP/low_variance/experiment_20250430-115900/best_checkpoint.pth.tar \
+--anp-path results/ANP/low_variance/experiment_20251209-165329/best_checkpoint.pth.tar \
 --mlp-dir results/MLP/high_variance \
 --result-dir results/evaluation/high_variance \
 --batch-size 4  \
