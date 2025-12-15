@@ -1,0 +1,15 @@
+MLP Specialist Training Summary
+==================================================
+Topology: random
+Theta: 0.3
+Training samples: 105 trajectories
+Validation samples: 30 trajectories
+Best validation MAE: 10.721298
+Final epoch: 1753
+Early stopping counter: 250/250
+Training time: 30.82 minutes
+
+Model architecture:
+  Input dim: 4010
+  Output dim: 3
+  Hidden layers: [256, 512, 256, 128]

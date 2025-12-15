@@ -1,0 +1,55 @@
+MLP Complete Performance Summary
+======================================================================
+
+
+Topology: ALIGNED
+--------------------------------------------------
+Specialists:
+  θ=0.0: MAE = 54.534939
+  θ=0.1: MAE = 55.450409
+  θ=0.2: MAE = 55.416584
+  θ=0.3: MAE = 56.979523
+  θ=0.4: MAE = 59.737057
+  θ=0.5: MAE = 62.436188
+General (all θ): MAE = 57.095167
+
+Topology: ELLIPSOIDAL
+--------------------------------------------------
+Specialists:
+  θ=0.0: MAE = 5.488368
+  θ=0.1: MAE = 5.501698
+  θ=0.2: MAE = 5.511215
+  θ=0.3: MAE = 8.789970
+  θ=0.4: MAE = 15.114313
+  θ=0.5: MAE = 23.881514
+General (all θ): MAE = 12.159912
+
+Topology: RANDOM
+--------------------------------------------------
+Specialists:
+  θ=0.0: MAE = 6.407947
+  θ=0.1: MAE = 6.529140
+  θ=0.2: MAE = 7.332361
+  θ=0.3: MAE = 10.721298
+  θ=0.4: MAE = 17.146328
+  θ=0.5: MAE = 28.004944
+General (all θ): MAE = 13.924849
+
+======================================================================
+Comparison: General vs Best Specialist per Topology
+--------------------------------------------------
+
+Aligned:
+  Best Specialist: θ=0.0, MAE=54.534939
+  General Model:   MAE=57.095167
+  Difference:      -4.69%
+
+Ellipsoidal:
+  Best Specialist: θ=0.0, MAE=5.488368
+  General Model:   MAE=12.159912
+  Difference:      -121.56%
+
+Random:
+  Best Specialist: θ=0.0, MAE=6.407947
+  General Model:   MAE=13.924849
+  Difference:      -117.31%

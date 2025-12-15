@@ -1,0 +1,14 @@
+General MLP Performance Summary
+============================================================
+
+Models trained on ALL theta values per topology
+
+Validation MAE Results:
+------------------------------
+1. Ellipsoidal    : 12.159912
+2. Random         : 13.924849
+3. Aligned        : 57.095167
+
+------------------------------
+Best topology: ellipsoidal (MAE: 12.159912)
+Performance difference: 44.935255
