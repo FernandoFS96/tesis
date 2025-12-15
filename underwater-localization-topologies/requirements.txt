@@ -1,0 +1,13 @@
+# General dependencies
+numpy
+scipy
+matplotlib
+seaborn
+tqdm
+scikit-learn
+
+# PyTorch with CUDA 
+torch
+torchvision
+torchaudio
+-f https://download.pytorch.org/whl/cu121
