@@ -1,0 +1,8 @@
+ANP Training Summary - Topology: random
+==================================================
+Training samples: 630 trajectories
+Validation samples: 180 trajectories
+Best validation MAE: 7.094515
+Final epoch: 3349
+Early stopping counter: 1000/1000
+Training time: 211.42 minutes

@@ -1,0 +1,8 @@
+ANP Training Summary - Topology: ellipsoidal
+==================================================
+Training samples: 630 trajectories
+Validation samples: 180 trajectories
+Best validation MAE: 7.460449
+Final epoch: 3074
+Early stopping counter: 1000/1000
+Training time: 181.82 minutes
