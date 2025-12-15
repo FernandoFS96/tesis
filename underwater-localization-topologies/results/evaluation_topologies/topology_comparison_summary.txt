@@ -1,0 +1,36 @@
+Topology Comparison Summary
+==========================================================================================
+
+
+Topology: ELLIPSOIDAL
+--------------------------------------------------
+Best overall model: ANP (Mean MAE: 7.9506)
+
+ANP MAE: 7.9506
+MLP(all_θ) MAE: 11.1066
+ANP improvement over general MLP: 28.42%
+
+Best specialist MAE: 16.4805
+ANP improvement over best specialist: 51.76%
+
+Topology: RANDOM
+--------------------------------------------------
+Best overall model: ANP (Mean MAE: 7.9309)
+
+ANP MAE: 7.9309
+MLP(all_θ) MAE: 10.7636
+ANP improvement over general MLP: 26.32%
+
+Best specialist MAE: 16.8889
+ANP improvement over best specialist: 53.04%
+
+Topology: ALIGNED
+--------------------------------------------------
+Best overall model: ANP (Mean MAE: 8.6656)
+
+ANP MAE: 8.6656
+MLP(all_θ) MAE: 60.8230
+ANP improvement over general MLP: 85.75%
+
+Best specialist MAE: 61.8704
+ANP improvement over best specialist: 85.99%
