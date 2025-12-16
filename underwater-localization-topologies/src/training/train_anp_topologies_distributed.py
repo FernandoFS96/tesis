@@ -1,6 +1,7 @@
 import sys
 import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# Ensure we import the local src package instead of similarly named siblings
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import time
 import pickle
 import argparse
@@ -11,18 +12,18 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 
-from src.models.anp import LatentModel
+from src.models.anp import LatentModel, DistributedLatentModel
 from src.utils.nav_dataset import NavigationTrajectoryDataset
 from src.utils.plots import plot_training_metrics
 
 '''
 Use:
 # Train one ANP per topology using all theta values
-python train_anp_topologies.py \
+python train_anp_topologies_distributed.py \
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
     --batch-size 8 \
-    --epochs 5000 \
-    --patience 300
+    --epochs 10000 \
+    --patience 1000
 '''
 
 def load_topology_data(data_dir, topology):
@@ -46,6 +47,17 @@ def load_topology_data(data_dir, topology):
     
     with open(metadata_path, 'rb') as f:
         metadata = pickle.load(f)
+    
+    # Basic consistency checks
+    assert len(train_data) > 0, f"Empty train_data for topology {topology}"
+    assert len(val_data) > 0, f"Empty val_data for topology {topology}"
+
+    # Check one example to infer shapes
+    x0, y0 = train_data[0]
+    assert x0.ndim == 2 and y0.ndim == 2, \
+        f"Expected X and Y to be 2D (T, D), got {x0.ndim}D and {y0.ndim}D"
+    assert x0.shape[0] == y0.shape[0], \
+        f"Time dimension mismatch between X and Y: {x0.shape[0]} vs {y0.shape[0]}"
     
     return train_data, val_data, metadata
 
@@ -77,12 +89,30 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
     input_dim = x0.shape[-1]     # e.g., 10 sensors * features
     output_dim = y0.shape[-1]    # e.g., 3 coordinates (x,y,z)
 
+    # Sanity checks for distributed setup
+    expected_input_dim = args.n_sensors * args.sensor_feature_dim
+    assert input_dim == expected_input_dim, (
+        f"Expected input_dim={expected_input_dim} "
+        f"(n_sensors={args.n_sensors} * sensor_feature_dim={args.sensor_feature_dim}), "
+        f"but got {input_dim}. Check your n_sensors / sensor_feature_dim."
+    )
+    assert output_dim == 3, f"Expected output_dim=3 (x,y,z), got {output_dim}"
+
+    assert args.sensor_emb_dim > 0, "sensor_emb_dim must be > 0"
+
     # Create datasets
     train_dataset = NavigationTrajectoryDataset(train_data)
     val_dataset = NavigationTrajectoryDataset(val_data)
 
     # Initialize model
-    model = LatentModel(num_hidden=128, input_dim=input_dim, output_dim=output_dim).to(device)
+    base_anp  = LatentModel(num_hidden=128, input_dim=args.sensor_emb_dim, output_dim=output_dim).to(device)
+    model = DistributedLatentModel(base_anp=base_anp,
+                                   n_sensors=args.n_sensors,
+                                   in_dim_per_sensor=args.sensor_feature_dim,
+                                   emb_dim=args.sensor_emb_dim,
+                                   fusion="mean",   # or "max"
+                                   ).to(device)
+
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
@@ -105,6 +135,19 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
         train_loss, train_mae = 0.0, 0.0
         for x_batch, y_batch in train_loader:
             x_batch, y_batch = x_batch.to(device), y_batch.to(device)
+
+            # Shape checks
+            assert x_batch.ndim == 3, f"x_batch should be (B, T, D), got shape {x_batch.shape}"
+            assert y_batch.ndim == 3, f"y_batch should be (B, T, D_y), got shape {y_batch.shape}"
+            assert x_batch.size(1) == y_batch.size(1), (
+                f"Time dimension mismatch in batch: {x_batch.size(1)} vs {y_batch.size(1)}"
+            )
+            assert x_batch.size(2) == input_dim, (
+                f"Input feature dim mismatch: expected {input_dim}, got {x_batch.size(2)}"
+            )
+            assert y_batch.size(2) == output_dim, (
+                f"Output feature dim mismatch: expected {output_dim}, got {y_batch.size(2)}"
+            )
 
             # Dynamic context size (5% to 95% of points)
             total_points = x_batch.size(1)
@@ -344,36 +387,29 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train one ANP model per sensor topology")
-    parser.add_argument(
-        '--data-dir', 
-        type=str, 
-        required=True, 
-        help="Path to processed data directory (e.g., data/data_processed_topologies_low_variance)"
-    )
-    parser.add_argument(
-        '--result-dir', 
-        type=str, 
-        default='./results/ANP_topologies/low_variance', 
-        help="Path to save results"
-    )
-    parser.add_argument(
-        '--batch-size', 
-        type=int, 
-        default=8, 
-        help="Batch size for training"
-    )
-    parser.add_argument(
-        '--epochs', 
-        type=int, 
-        default=5000, 
-        help="Number of training epochs"
-    )
-    parser.add_argument(
-        '--patience', 
-        type=int, 
-        default=200, 
-        help="Early stopping patience"
-    )
-    
+    parser.add_argument('--data-dir',type=str, required=True,
+                        help="Path to processed data directory (e.g., data/data_processed_topologies_low_variance)")
+    parser.add_argument('--result-dir',type=str, 
+                        default='./results/ANP_topologies_distributed/low_variance',
+                        help="Path to save results")
+    parser.add_argument('--batch-size',type=int,
+                        default=8,
+                        help="Batch size for training")
+    parser.add_argument('--epochs',type=int,
+                        default=5000,
+                        help="Number of training epochs")
+    parser.add_argument('--patience',type=int,
+                        default=200,
+                        help="Early stopping patience")
+    parser.add_argument("--sensor_emb_dim", type=int, 
+                        default=64,
+                        help="Dimensionality of the per-time-step fused sensor embedding sent to the ANP.")
+    parser.add_argument("--n_sensors", type=int, 
+                        default=10,
+                        help="Number of sensors (used to reshape 4010 → 10x401).")
+    parser.add_argument("--sensor_feature_dim", type=int, 
+                        default=401,
+                        help="Feature dimension per sensor.")
+
     args = parser.parse_args()
     main(args)

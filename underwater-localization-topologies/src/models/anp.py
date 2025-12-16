@@ -144,6 +144,30 @@ class Attention(nn.Module):
         result = self.layer_norm(result)
         return result, attns
 
+class LocalSensorEncoder(nn.Module):
+    """
+    Encodes the 1D feature vector of a single sensor into a low-dimensional embedding.
+    """
+    def __init__(self, in_dim: int = 401, emb_dim: int = 64):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(in_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, emb_dim),
+            nn.ReLU(),
+        )
+
+    def forward(self, x: t.Tensor) -> t.Tensor:
+        """
+        x: (B, T, S, in_dim)
+        returns: (B, T, S, emb_dim)
+        """
+        B, T, S, D = x.shape
+        x = x.view(B * T * S, D)
+        e = self.net(x)               # (B*T*S, emb_dim)
+        return e.view(B, T, S, -1)    # (B, T, S, emb_dim)
+
+
 # LatentModel: Define in src/models/anp.py
 
 class LatentModel(nn.Module):
@@ -191,3 +215,78 @@ class LatentModel(nn.Module):
         kl_div = (t.exp(posterior_var) + (posterior_mu - prior_mu) ** 2) / t.exp(prior_var) - 1. + (prior_var - posterior_var)
         kl_div = 0.5 * kl_div.sum()
         return kl_div
+
+class DistributedLatentModel(nn.Module):
+    """
+    Wraps a LatentModel with a per-sensor encoder + sensor fusion.
+    Expects *flat* inputs of shape (B, T, n_sensors * in_dim_per_sensor).
+    """
+    def __init__(
+        self,
+        base_anp: LatentModel,
+        n_sensors: int = 10,
+        in_dim_per_sensor: int = 401,
+        emb_dim: int = 64,
+        fusion: str = "mean",
+    ):
+        super().__init__()
+        self.base_anp = base_anp
+        self.n_sensors = n_sensors
+        self.in_dim_per_sensor = in_dim_per_sensor
+        self.emb_dim = emb_dim
+        self.fusion = fusion
+
+        self.local_encoder = LocalSensorEncoder(
+            in_dim=in_dim_per_sensor,
+            emb_dim=emb_dim,
+        )
+
+    def _fuse(self, x_flat: t.Tensor) -> t.Tensor:
+        """
+        x_flat: (B, T, n_sensors * in_dim_per_sensor)
+        returns fused: (B, T, emb_dim)
+        """
+        B, T, D = x_flat.shape
+        expected_D = self.n_sensors * self.in_dim_per_sensor
+        if D != expected_D:
+            raise ValueError(f"Expected input_dim={expected_D}, got {D}")
+
+        # (B, T, S, in_dim_per_sensor)
+        x = x_flat.view(B, T, self.n_sensors, self.in_dim_per_sensor)
+
+        # local encodings: (B, T, S, emb_dim)
+        e = self.local_encoder(x)
+
+        # fuse across sensors
+        if self.fusion == "mean":
+            fused = e.mean(dim=2)            # (B, T, emb_dim)
+        elif self.fusion == "max":
+            fused, _ = e.max(dim=2)         # (B, T, emb_dim)
+        else:
+            raise ValueError(f"Unknown fusion type: {self.fusion}")
+
+        return fused
+
+    def forward(
+        self,
+        context_x: t.Tensor,
+        context_y: t.Tensor,
+        target_x: t.Tensor,
+        target_y: t.Tensor = None,
+    ):
+        """
+        context_x: (B, N_ctx, n_sensors * in_dim_per_sensor)
+        context_y: (B, N_ctx, output_dim)
+        target_x:  (B, N_tar, n_sensors * in_dim_per_sensor)
+        target_y:  (B, N_tar, output_dim) or None
+        """
+        # Fuse context and target sensor data separately
+        fused_context_x = self._fuse(context_x)   # (B, N_ctx, emb_dim)
+        fused_target_x  = self._fuse(target_x)    # (B, N_tar, emb_dim)
+
+        return self.base_anp(
+            fused_context_x,
+            context_y,
+            fused_target_x,
+            target_y,
+        )
