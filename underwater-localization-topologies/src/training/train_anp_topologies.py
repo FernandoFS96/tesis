@@ -19,11 +19,10 @@ from src.utils.plots import plot_training_metrics
 Use:
 # Train one ANP per topology using all theta values
 python train_anp_topologies.py \
-    --data-dir /home/fernando/tesis/underwater-localization/data/data/data_processed_topologies_low_variance \
-    --result-dir /home/fernando/tesis/underwater-localization/results/ANP_topologies/low_variance \
+    --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
     --batch-size 8 \
-    --epochs 15000 \
-    --patience 1000
+    --epochs 5000 \
+    --patience 300
 '''
 
 def load_topology_data(data_dir, topology):

@@ -45,7 +45,7 @@ underwater-localization/
 ├── requirements.txt       # Python dependencies
 ```
 ## Prepend the project root to the PYTHONPATH environment variable so that dhe dependancies is automatically found
-- `export PYTHONPATH="$HOME/tesis/underwater-localization:$PYTHONPATH"`
+- `export PYTHONPATH="$HOME/tesis/underwater-localization-topologies:$PYTHONPATH"`
 
 ## Install dependencies:
    ```bash
