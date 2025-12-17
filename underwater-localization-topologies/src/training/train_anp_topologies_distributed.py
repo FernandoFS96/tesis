@@ -115,8 +115,8 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
 
     best_val_mae = float('inf')
     early_stop_counter = 0
@@ -330,7 +330,7 @@ def main(args):
     print(f"Device: {device}")
     
     # Define topologies to train
-    topologies = ['ellipsoidal','random','aligned']
+    topologies = ['aligned']#['ellipsoidal','random','aligned']
     
     # Store results for comparison
     results = {}
@@ -399,7 +399,7 @@ if __name__ == "__main__":
                         default=5000,
                         help="Number of training epochs")
     parser.add_argument('--patience',type=int,
-                        default=200,
+                        default=500,
                         help="Early stopping patience")
     parser.add_argument("--sensor_emb_dim", type=int, 
                         default=64,
