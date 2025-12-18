@@ -1,0 +1,8 @@
+ANP Training Summary - Topology: aligned
+==================================================
+Training samples: 630 trajectories
+Validation samples: 180 trajectories
+Best validation MAE: 12.068005
+Final epoch: 6592
+Early stopping counter: 1000/1000
+Training time: 330.53 minutes

@@ -1,0 +1,11 @@
+ANP Performance Comparison Across Topologies
+============================================================
+
+Validation MAE Results:
+------------------------------
+1. aligned        : 12.068005
+
+------------------------------
+Best topology: aligned (MAE: 12.068005)
+Performance difference: 0.000000
+Relative improvement: 0.00%
