@@ -1,7 +1,7 @@
 import math
 import torch as t
 import torch.nn as nn
-
+import torch.nn.functional as F
 # src/models/anp.py: Define ANP components
 
 class Linear(nn.Module):
@@ -36,7 +36,7 @@ class LatentEncoder(nn.Module):
         hidden = t.relu(self.penultimate_layer(hidden))
         mu = self.mu(hidden)
         log_sigma = self.log_sigma(hidden)
-        log_sigma = 1 * t.tanh(log_sigma)
+        log_sigma = 3 * t.tanh(log_sigma)
 
         std = t.exp(0.5 * log_sigma)
         std = t.clamp(std, min=1e-6, max=1e6)
@@ -90,19 +90,46 @@ class Decoder(nn.Module):
         var = 10000 * t.sigmoid(self.log_var_projection(hidden))
         return mean, var
 
+#class MultiheadAttention(nn.Module):
+#    def __init__(self, num_hidden_k):
+#        super(MultiheadAttention, self).__init__()
+#        self.num_hidden_k = num_hidden_k
+#        self.attn_dropout = nn.Dropout(p=0.1)
+#
+#    def forward(self, key, value, query):
+#        attn = t.bmm(query, key.transpose(1, 2))
+#        attn = attn / math.sqrt(self.num_hidden_k)
+#        attn = t.softmax(attn, dim=-1)
+#        attn = self.attn_dropout(attn)
+#        result = t.bmm(attn, value)
+#        return result, attn
+
 class MultiheadAttention(nn.Module):
     def __init__(self, num_hidden_k):
-        super(MultiheadAttention, self).__init__()
+        super().__init__()
         self.num_hidden_k = num_hidden_k
         self.attn_dropout = nn.Dropout(p=0.1)
 
     def forward(self, key, value, query):
-        attn = t.bmm(query, key.transpose(1, 2))
-        attn = attn / math.sqrt(self.num_hidden_k)
-        attn = t.softmax(attn, dim=-1)
-        attn = self.attn_dropout(attn)
-        result = t.bmm(attn, value)
-        return result, attn
+        """
+        key, value: (B', Lk, d)
+        query:      (B', Lq, d)
+        """
+        # SDPA apply scale 1/sqrt(d) internally and can use optimized kernels
+        dropout_p = self.attn_dropout.p if self.training else 0.0
+
+        # Note: scaled_dot_product_attention expects (query, key, value)
+        out = F.scaled_dot_product_attention(
+            query, key, value,
+            attn_mask=None,
+            dropout_p=dropout_p,
+            is_causal=False
+        )
+
+        # For maximum performance, SDPA does not return attention weights.
+        attn_weights = None
+        return out, attn_weights
+
 
 class Attention(nn.Module):
     def __init__(self, num_hidden, h=4):

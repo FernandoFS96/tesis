@@ -584,7 +584,7 @@ def generate_params(options=None):
                     'cut': 50.000000,  # minimum_relative_path_strength
                     'fmin': 10000.000000,  # minimum_frequency_[Hz]
                     'B': 10000.000000,  # bandwidth_[Hz]
-                    'df': 25.000000,  # frequency_resolution_[Hz]
+                    'df': 50, #25.000000,  # frequency_resolution_[Hz]
                     'dt': 6.045000,  # time_resolution_[seconds]
                     'T_SS': 6.000000,  # coherence_time_of_the_small - scale_variations_[seconds]
                     'sig2s': 1.125000,  # variance_of_S_S_surface_variations_[m ^ 2]
