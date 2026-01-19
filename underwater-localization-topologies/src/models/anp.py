@@ -87,7 +87,8 @@ class Decoder(nn.Module):
         for linear in self.linears:
             hidden = t.relu(linear(hidden))
         mean = self.mean_projection(hidden)
-        var = 10000 * t.sigmoid(self.log_var_projection(hidden))
+        #var = 10000 * t.sigmoid(self.log_var_projection(hidden))
+        var = 1e-6 + F.softplus(self.log_var_projection(hidden))
         return mean, var
 
 #class MultiheadAttention(nn.Module):
@@ -211,7 +212,7 @@ class LatentModel(nn.Module):
                                input_dim=input_dim,
                                output_dim=output_dim)
 
-    def forward(self, context_x, context_y, target_x, target_y=None):
+    def forward(self, context_x, context_y, target_x, target_y=None, beta: float = 1.0):
         num_targets = target_x.size(1)
         prior_mu, prior_var, prior = self.latent_encoder(context_x, context_y)
 
@@ -230,7 +231,7 @@ class LatentModel(nn.Module):
             nll = 0.5 * t.log(2 * t.pi * y_pred_var) + 0.5 * ((target_y - y_pred_mean) ** 2) / y_pred_var
             nll = nll.mean()
             kl = self.kl_div(prior_mu, prior_var, posterior_mu, posterior_var)
-            loss = nll + kl
+            loss = nll + beta * kl
         else:
             kl = None
             loss = None
@@ -238,10 +239,17 @@ class LatentModel(nn.Module):
 
         return y_pred_mean, y_pred_var, loss, kl, nll
 
+    #def kl_div(self, prior_mu, prior_var, posterior_mu, posterior_var):
+    #    kl_div = (t.exp(posterior_var) + (posterior_mu - prior_mu) ** 2) / t.exp(prior_var) - 1. + (prior_var - posterior_var)
+    #    kl_div = 0.5 * kl_div.sum()
+    #    return kl_div
+    
     def kl_div(self, prior_mu, prior_var, posterior_mu, posterior_var):
-        kl_div = (t.exp(posterior_var) + (posterior_mu - prior_mu) ** 2) / t.exp(prior_var) - 1. + (prior_var - posterior_var)
-        kl_div = 0.5 * kl_div.sum()
-        return kl_div
+        # prior_var / posterior_var are log-variances
+        kl = (t.exp(posterior_var) + (posterior_mu - prior_mu) ** 2) / t.exp(prior_var) - 1.0 \
+             + (prior_var - posterior_var) # (B, latent_dim)
+        kl = 0.5 * kl.sum(dim=-1) # (B,)
+        return kl.mean() # scalar, stable vs batch size
 
 class DistributedLatentModel(nn.Module):
     """
