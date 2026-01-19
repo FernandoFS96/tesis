@@ -1,3 +1,4 @@
+import csv
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -62,17 +63,89 @@ def load_topology_data(data_dir, topology):
     return train_data, val_data, metadata
 
 
-def save_all_metrics(train_loss, val_loss, train_mae, val_mae, experiment_dir):
+def save_all_metrics(train_loss, val_loss, train_mae, val_mae,
+                     experiment_dir,
+                     train_nll=None, val_nll=None,
+                     train_kl=None,  val_kl=None,
+                     train_beta=None,
+                     train_var_min=None, train_var_mean=None, train_var_max=None,
+                     val_var_min=None,   val_var_mean=None,   val_var_max=None,
+                     train_nll_nonctx=None, val_nll_nonctx=None):
     """Save all training and validation metrics for later analysis."""
     metrics = {
         'train_loss': train_loss,
         'val_loss': val_loss,
         'train_mae': train_mae,
         'val_mae': val_mae,
+
+        # diagnostics (optional)
+        'train_nll': train_nll,
+        'val_nll': val_nll,
+        'train_kl': train_kl,
+        'val_kl': val_kl,
+        'train_beta': train_beta,
+
+        'train_var_min': train_var_min,
+        'train_var_mean': train_var_mean,
+        'train_var_max': train_var_max,
+        'val_var_min': val_var_min,
+        'val_var_mean': val_var_mean,
+        'val_var_max': val_var_max,
+
+        'train_nll_nonctx': train_nll_nonctx,
+        'val_nll_nonctx': val_nll_nonctx,
     }
     with open(os.path.join(experiment_dir, 'metrics.pkl'), 'wb') as f:
         pickle.dump(metrics, f)
 
+def plot_anp_diagnostics(save_dir,
+                         train_nll, val_nll,
+                         train_kl, val_kl,
+                         betas,
+                         train_var_mean, val_var_mean,
+                         train_var_min=None, train_var_max=None,
+                         val_var_min=None,   val_var_max=None,
+                         train_nll_nonctx=None, val_nll_nonctx=None):
+
+    epochs = np.arange(1, len(train_nll) + 1)
+
+    # 1) NLL / KL / beta
+    plt.figure(figsize=(10, 6))
+    plt.plot(epochs, train_nll, label="train NLL")
+    plt.plot(epochs, val_nll,   label="val NLL")
+    if train_nll_nonctx is not None and val_nll_nonctx is not None:
+        plt.plot(epochs, train_nll_nonctx, label="train NLL (non-ctx)", linestyle="--")
+        plt.plot(epochs, val_nll_nonctx,   label="val NLL (non-ctx)",   linestyle="--")
+    plt.plot(epochs, train_kl,  label="train KL")
+    plt.plot(epochs, val_kl,    label="val KL")
+    plt.plot(epochs, betas,     label="beta", linewidth=2)
+    plt.xlabel("Epoch")
+    plt.ylabel("Value")
+    plt.title("ANP diagnostics: NLL / KL / beta")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, "training_diagnostics_nll_kl_beta.png"), dpi=150)
+    plt.close()
+
+    # 2) Var stats
+    plt.figure(figsize=(10, 6))
+    plt.plot(epochs, train_var_mean, label="train var mean")
+    plt.plot(epochs, val_var_mean,   label="val var mean")
+    if train_var_min is not None and train_var_max is not None:
+        plt.plot(epochs, train_var_min, label="train var min", linestyle="--")
+        plt.plot(epochs, train_var_max, label="train var max", linestyle="--")
+    if val_var_min is not None and val_var_max is not None:
+        plt.plot(epochs, val_var_min, label="val var min", linestyle=":")
+        plt.plot(epochs, val_var_max, label="val var max", linestyle=":")
+    plt.xlabel("Epoch")
+    plt.ylabel("Variance (normalized space)")
+    plt.title("ANP diagnostics: predicted variance stats")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, "training_diagnostics_variance.png"), dpi=150)
+    plt.close()
 
 def train_anp_topology(train_data, val_data, save_dir, topology_name, 
                        batch_size=8, epochs=5000, patience=200, device='cuda'):
@@ -107,6 +180,16 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
     # Lists to store metrics
     train_loss_list, val_loss_list = [], []
     train_mae_list, val_mae_list = [], []
+    
+    # Optional diagnostic metrics
+    train_nll_list, val_nll_list = [], []
+    train_kl_list,  val_kl_list  = [], []
+    train_beta_list = []
+    train_var_min_list, train_var_mean_list, train_var_max_list = [], [], []
+    val_var_min_list,   val_var_mean_list,   val_var_max_list   = [], [], []
+    # Optional: NLL only outside the context (to see "real prediction")
+    train_nll_nonctx_list, val_nll_nonctx_list = [], []
+
     # Time tracking
     t_init = time.time()
 
@@ -119,12 +202,16 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
     val_fracs = [0.1, 0.3, 0.5]
 
     # Training loop with progress bar
-    pbar = tqdm(range(epochs), desc=f"[ANP-{topology_name}]", unit="epoch", ncols=150)
+    pbar = tqdm(range(epochs), desc=f"[ANP-{topology_name}]", unit="epoch", ncols=200)
     
     for epoch in pbar:
         # Training phase
         model.train()
         train_loss, train_mae = 0.0, 0.0
+        train_nll, train_kl = 0.0, 0.0
+        train_var_min, train_var_mean, train_var_max = 0.0, 0.0, 0.0
+        train_nll_nonctx = 0.0
+        # Iterate over training batches
         for x_batch, y_batch in train_loader:
             x_batch, y_batch = x_batch.to(device), y_batch.to(device)
             # KL beta for this epoch
@@ -162,14 +249,33 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
 
             # Forward pass
             #y_pred_mean, _, loss, kl, nll = model(context_x, context_y, target_x, target_y)
-            y_pred_mean_norm, _, loss, kl, nll = model(context_x, context_y, target_x, target_y, beta=beta)
+            y_pred_mean_norm, y_pred_var_norm, loss, kl, nll = model(context_x, context_y, target_x, target_y, beta=beta)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            # --- MAE en escala original, SOLO en puntos NO-contexto ---
-            non_ctx_mask = torch.ones(total_points, dtype=torch.bool, device=device)
-            non_ctx_mask[context_indices] = False
+            # diagnostics
+            with torch.no_grad():
+                # var stats (normalized)
+                train_var_min  += y_pred_var_norm.min().item()
+                train_var_mean += y_pred_var_norm.mean().item()
+                train_var_max  += y_pred_var_norm.max().item()
+
+                # nll and kl (scalars already averaged in the model)
+                train_nll += nll.item()
+                train_kl  += kl.item()
+
+                # NLL outside the context only (optional)
+                non_ctx_mask = torch.ones(total_points, dtype=torch.bool, device=device)
+                non_ctx_mask[context_indices] = False
+
+                nll_pointwise = 0.5 * torch.log(2 * torch.pi * y_pred_var_norm) \
+                                + 0.5 * ((target_y - y_pred_mean_norm) ** 2) / y_pred_var_norm
+                train_nll_nonctx += nll_pointwise[:, non_ctx_mask, :].mean().item()
+
+            # MAE in original scale, ONLY on non-context points
+            #non_ctx_mask = torch.ones(total_points, dtype=torch.bool, device=device)
+            #non_ctx_mask[context_indices] = False
 
             #mae = F.l1_loss(y_pred_mean, target_y, reduction='mean').item()
             y_pred_mean = y_pred_mean_norm * y_std + y_mean
@@ -177,17 +283,35 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
 
             train_loss += loss.item()
             train_mae += mae
-
+        # Average over batches
         train_loss /= len(train_loader)
         train_mae /= len(train_loader)
         train_loss_list.append(train_loss)
         train_mae_list.append(train_mae)
+
+        # Average diagnostics
+        train_nll /= len(train_loader)
+        train_kl  /= len(train_loader)
+        train_var_min  /= len(train_loader)
+        train_var_mean /= len(train_loader)
+        train_var_max  /= len(train_loader)
+        train_nll_nonctx /= len(train_loader)
+        train_nll_list.append(train_nll)
+        train_kl_list.append(train_kl)
+        train_var_min_list.append(train_var_min)
+        train_var_mean_list.append(train_var_mean)
+        train_var_max_list.append(train_var_max)
+        train_nll_nonctx_list.append(train_nll_nonctx)
+        train_beta_list.append(beta)
 
         # Validation phase
         g = torch.Generator(device=device) # deterministic context selection (same aleatory numbers each epoch -> stable val)
         g.manual_seed(0)
         model.eval()
         val_loss, val_mae = 0.0, 0.0
+        val_nll, val_kl = 0.0, 0.0
+        val_var_min, val_var_mean, val_var_max = 0.0, 0.0, 0.0
+        val_nll_nonctx = 0.0
         with torch.no_grad():
             for x_batch, y_batch in val_loader:
                 x_batch, y_batch = x_batch.to(device), y_batch.to(device)
@@ -226,7 +350,7 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
                     target_x  = x_batch[:, tar_idx, :]
                     target_y  = y_batch_norm[:, tar_idx, :]
                     # Forward pass
-                    y_pred_mean_norm, _, loss, _, _ = model(context_x, context_y, target_x, target_y, beta=1.0)
+                    y_pred_mean_norm, y_pred_var_norm, loss, kl, nll = model(context_x, context_y, target_x, target_y, beta=1.0)
                     # Non-context MAE in meters
                     non_ctx_mask = torch.ones(total_points, dtype=torch.bool, device=device)
                     non_ctx_mask[ctx_idx] = False
@@ -235,6 +359,15 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
                     # Accumulate
                     batch_loss += loss.item()
                     batch_mae  += mae
+                    # diagnostics
+                    val_nll += nll.item()
+                    val_kl  += kl.item()
+                    val_var_min  += y_pred_var_norm.min().item()
+                    val_var_mean += y_pred_var_norm.mean().item()
+                    val_var_max  += y_pred_var_norm.max().item()
+                    nll_pointwise = 0.5 * torch.log(2 * torch.pi * y_pred_var_norm) \
+                                    + 0.5 * ((target_y - y_pred_mean_norm) ** 2) / y_pred_var_norm
+                    val_nll_nonctx += nll_pointwise[:, non_ctx_mask, :].mean().item()
 
 
                 #y_pred_mean, _, loss, _, _ = model(context_x, context_y, target_x, target_y)
@@ -248,6 +381,21 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
         val_mae /= len(val_loader)
         val_loss_list.append(val_loss)
         val_mae_list.append(val_mae)
+
+        den = len(val_loader) * len(val_fracs)
+        val_nll /= den
+        val_kl  /= den
+        val_var_min  /= den
+        val_var_mean /= den
+        val_var_max  /= den
+        val_nll_nonctx /= den
+
+        val_nll_list.append(val_nll)
+        val_kl_list.append(val_kl)
+        val_var_min_list.append(val_var_min)
+        val_var_mean_list.append(val_var_mean)
+        val_var_max_list.append(val_var_max)
+        val_nll_nonctx_list.append(val_nll_nonctx)
 
         # Early stopping
         if val_mae < best_val_mae:
@@ -264,18 +412,47 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
         
         # Update progress bar
         pbar.set_postfix({
-            'Loss': f"{train_loss:.4f}",
-            'MAE': f"{train_mae:.4f}",
-            'Val MAE': f"{val_mae:.4f}",
-            'Best': f"{best_val_mae:.4f}",
+            'Loss': f"{train_loss:.2f}",
+            'NLL': f"{train_nll:.2f}",
+            'KL': f"{train_kl:.2f}",
+            'β': f"{beta:.2f}",
+            'varμ': f"{train_var_mean:.2e}",
+            'varmin': f"{train_var_min:.2e}",
+            'MAE': f"{train_mae:.2f}",
+            'Val MAE': f"{val_mae:.2f}",
+            'Best': f"{best_val_mae:.2f}",
             'ES': f"{early_stop_counter}"
         })
 
     # Save final model and metrics
     torch.save({'model': model.state_dict(), 'optimizer': optimizer.state_dict()},
            os.path.join(save_dir, 'last_checkpoint.pth.tar'))
-    save_all_metrics(train_loss_list, val_loss_list, train_mae_list, val_mae_list, save_dir)
+    #save_all_metrics(train_loss_list, val_loss_list, train_mae_list, val_mae_list, save_dir)
+    save_all_metrics(train_loss_list, val_loss_list, train_mae_list, val_mae_list, save_dir, train_nll=train_nll_list, val_nll=val_nll_list,
+                     train_kl=train_kl_list, val_kl=val_kl_list, train_beta=train_beta_list, train_var_min=train_var_min_list, train_var_mean=train_var_mean_list, 
+                     train_var_max=train_var_max_list, val_var_min=val_var_min_list, val_var_mean=val_var_mean_list, val_var_max=val_var_max_list, 
+                     train_nll_nonctx=train_nll_nonctx_list, val_nll_nonctx=val_nll_nonctx_list)
+    plot_anp_diagnostics(save_dir,train_nll_list, val_nll_list,train_kl_list,val_kl_list,train_beta_list,train_var_mean_list, val_var_mean_list,
+                         train_var_min=train_var_min_list, train_var_max=train_var_max_list,val_var_min=val_var_min_list,val_var_max=val_var_max_list,
+                         train_nll_nonctx=train_nll_nonctx_list, val_nll_nonctx=val_nll_nonctx_list)
 
+    # Save CSV log
+    csv_path = os.path.join(save_dir, "training_log.csv")
+    with open(csv_path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow([
+            "epoch",
+            "train_loss","train_nll","train_nll_nonctx","train_kl","beta","train_var_min","train_var_mean","train_var_max","train_mae",
+            "val_loss","val_nll","val_nll_nonctx","val_kl","val_var_min","val_var_mean","val_var_max","val_mae"
+        ])
+        for e in range(len(train_loss_list)):
+            w.writerow([
+                e+1,
+                train_loss_list[e], train_nll_list[e], train_nll_nonctx_list[e], train_kl_list[e], train_beta_list[e],
+                train_var_min_list[e], train_var_mean_list[e], train_var_max_list[e], train_mae_list[e],
+                val_loss_list[e], val_nll_list[e], val_nll_nonctx_list[e], val_kl_list[e],
+                val_var_min_list[e], val_var_mean_list[e], val_var_max_list[e], val_mae_list[e],
+            ])
     # Plot training metrics
     metrics_file = os.path.join(save_dir, 'metrics.pkl')
     output_plot = os.path.join(save_dir, 'training_curves.png')
@@ -291,6 +468,19 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
         f.write(f"Final epoch: {min(epoch+1, epochs)}\n")
         f.write(f"Early stopping counter: {early_stop_counter}/{patience}\n")
         f.write(f"Training time: {(time.time() - t_init)/60:.2f} minutes\n")
+
+        f.write("\nDiagnostics (last epoch):\n")
+        f.write(f"  Train NLL: {train_nll_list[-1]:.6f}\n")
+        f.write(f"  Train NLL (non-ctx): {train_nll_nonctx_list[-1]:.6f}\n")
+        f.write(f"  Train KL: {train_kl_list[-1]:.6f}\n")
+        f.write(f"  Beta: {train_beta_list[-1]:.3f}\n")
+        f.write(f"  Pred var (norm) min/mean/max: {train_var_min_list[-1]:.3e} / {train_var_mean_list[-1]:.3e} / {train_var_max_list[-1]:.3e}\n")
+
+        f.write("\nDiagnostics (best/typical):\n")
+        f.write(f"  Min train var_mean: {min(train_var_mean_list):.3e}\n")
+        f.write(f"  Max train var_mean: {max(train_var_mean_list):.3e}\n")
+        f.write(f"  Min val var_mean:   {min(val_var_mean_list):.3e}\n")
+        f.write(f"  Max val var_mean:   {max(val_var_mean_list):.3e}\n")
     
     print(f"  Best validation MAE: {best_val_mae:.6f}")
     
