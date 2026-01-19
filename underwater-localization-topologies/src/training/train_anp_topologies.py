@@ -25,6 +25,18 @@ python train_anp_topologies.py \
     --patience 300
 '''
 
+def compute_y_stats(train_data):
+    # train_data: list of (X: (T,D), Y: (T,3))
+    Y = np.concatenate([y for _, y in train_data], axis=0) # (N*T, 3)
+    y_mean = torch.tensor(Y.mean(axis=0), dtype=torch.float32)
+    y_std  = torch.tensor(Y.std(axis=0) + 1e-6, dtype=torch.float32)
+    return y_mean, y_std
+
+def kl_beta(epoch, warmup_epochs=300):
+    # goes linearly from 0 to 1 in warmup_epochs
+    return min(1.0, float(epoch) / float(max(1, warmup_epochs)))
+
+
 def load_topology_data(data_dir, topology):
     """Load all processed data for a specific topology"""
     topology_dir = os.path.join(data_dir, f'topology_{topology}')
@@ -85,16 +97,26 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
     model = LatentModel(num_hidden=128, input_dim=input_dim, output_dim=output_dim).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
 
+    # Data loaders
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
 
+    # Training variables
     best_val_mae = float('inf')
     early_stop_counter = 0
-
+    # Lists to store metrics
     train_loss_list, val_loss_list = [], []
     train_mae_list, val_mae_list = [], []
-
+    # Time tracking
     t_init = time.time()
+
+    # Compute Y statistics for normalization
+    y_mean, y_std = compute_y_stats(train_data)
+    y_mean = y_mean.to(device)
+    y_std  = y_std.to(device)
+
+    # fixed context sizes for validation
+    val_fracs = [0.1, 0.3, 0.5]
 
     # Training loop with progress bar
     pbar = tqdm(range(epochs), desc=f"[ANP-{topology_name}]", unit="epoch", ncols=150)
@@ -105,32 +127,54 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
         train_loss, train_mae = 0.0, 0.0
         for x_batch, y_batch in train_loader:
             x_batch, y_batch = x_batch.to(device), y_batch.to(device)
-
-            # Dynamic context size (5% to 95% of points)
+            # KL beta for this epoch
+            beta = kl_beta(epoch, warmup_epochs=300)
+            # Dynamic context size selection
             total_points = x_batch.size(1)
             min_context = max(1, int(0.05 * total_points))
             max_context = min(int(0.95 * total_points), total_points - 1)
             
-            if max_context > min_context:
-                context_size = torch.randint(min_context, max_context, (1,)).item()
-            else:
-                context_size = min_context
+            context_size = torch.randint(min_context, max_context + 1, (1,), device=device).item() \
+                if max_context > min_context else min_context
             
-            context_indices = torch.arange(context_size)
-            target_indices = torch.arange(total_points)
+            #context_indices = torch.arange(context_size)
+            #target_indices = torch.arange(total_points)
 
+            # random indexes (same subset for whole batch+)
+            perm = torch.randperm(total_points, device=device)
+            context_indices = perm[:context_size].sort().values
+            target_indices  = torch.arange(total_points, device=device)
+            
+            # Normalize Y, keep raw for loss calculation
+            y_batch_raw = y_batch
+            y_batch_norm = (y_batch - y_mean) / y_std
+
+            #context_x = x_batch[:, context_indices, :]
+            #context_y = y_batch[:, context_indices, :]
+            #target_x = x_batch[:, target_indices, :]
+            #target_y = y_batch[:, target_indices, :]
+            
+            # Prepare context and target sets
             context_x = x_batch[:, context_indices, :]
-            context_y = y_batch[:, context_indices, :]
-            target_x = x_batch[:, target_indices, :]
-            target_y = y_batch[:, target_indices, :]
+            context_y = y_batch_norm[:, context_indices, :]
+            target_x  = x_batch[:, target_indices, :]
+            target_y  = y_batch_norm[:, target_indices, :]
 
             # Forward pass
-            y_pred_mean, _, loss, kl, nll = model(context_x, context_y, target_x, target_y)
+            #y_pred_mean, _, loss, kl, nll = model(context_x, context_y, target_x, target_y)
+            y_pred_mean_norm, _, loss, kl, nll = model(context_x, context_y, target_x, target_y, beta=beta)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            mae = F.l1_loss(y_pred_mean, target_y, reduction='mean').item()
+            # --- MAE en escala original, SOLO en puntos NO-contexto ---
+            non_ctx_mask = torch.ones(total_points, dtype=torch.bool, device=device)
+            non_ctx_mask[context_indices] = False
+
+            #mae = F.l1_loss(y_pred_mean, target_y, reduction='mean').item()
+            y_pred_mean = y_pred_mean_norm * y_std + y_mean
+            mae = F.l1_loss(y_pred_mean[:, non_ctx_mask, :], y_batch_raw[:, non_ctx_mask, :], reduction='mean').item()
+
             train_loss += loss.item()
             train_mae += mae
 
@@ -140,6 +184,8 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
         train_mae_list.append(train_mae)
 
         # Validation phase
+        g = torch.Generator(device=device) # deterministic context selection (same aleatory numbers each epoch -> stable val)
+        g.manual_seed(0)
         model.eval()
         val_loss, val_mae = 0.0, 0.0
         with torch.no_grad():
@@ -147,26 +193,56 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
                 x_batch, y_batch = x_batch.to(device), y_batch.to(device)
 
                 total_points = x_batch.size(1)
-                min_context = max(1, int(0.05 * total_points))
-                max_context = min(int(0.90 * total_points), total_points - 1)
-                
-                if max_context > min_context:
-                    context_size = torch.randint(min_context, max_context, (1,)).item()
-                else:
-                    context_size = min_context
-                
-                context_indices = torch.arange(context_size)
-                target_indices = torch.arange(x_batch.size(1))
+                y_batch_raw = y_batch
+                y_batch_norm = (y_batch - y_mean) / y_std
 
-                context_x = x_batch[:, context_indices, :]
-                context_y = y_batch[:, context_indices, :]
-                target_x = x_batch[:, target_indices, :]
-                target_y = y_batch[:, target_indices, :]
+                #min_context = max(1, int(0.05 * total_points))
+                #max_context = min(int(0.90 * total_points), total_points - 1)
+                #if max_context > min_context:
+                #    context_size = torch.randint(min_context, max_context, (1,)).item()
+                #else:
+                #    context_size = min_context
 
-                y_pred_mean, _, loss, _, _ = model(context_x, context_y, target_x, target_y)
-                mae = F.l1_loss(y_pred_mean, target_y, reduction='mean').item()
-                val_loss += loss.item()
-                val_mae += mae
+                #context_indices = torch.arange(context_size)
+                #target_indices = torch.arange(x_batch.size(1))
+
+                #context_x = x_batch[:, context_indices, :]
+                #context_y = y_batch[:, context_indices, :]
+                #target_x = x_batch[:, target_indices, :]
+                #target_y = y_batch[:, target_indices, :]
+
+                batch_loss = 0.0
+                batch_mae  = 0.0
+
+                for frac in val_fracs:
+                    context_size = max(1, min(total_points - 1, int(round(frac * total_points))))
+                    # random indexes (same subset for whole batch)
+                    perm = torch.randperm(total_points, generator=g, device=device)
+                    ctx_idx = perm[:context_size].sort().values
+                    tar_idx = torch.arange(total_points, device=device)
+                    # Prepare context and target sets
+                    context_x = x_batch[:, ctx_idx, :]
+                    context_y = y_batch_norm[:, ctx_idx, :]
+                    target_x  = x_batch[:, tar_idx, :]
+                    target_y  = y_batch_norm[:, tar_idx, :]
+                    # Forward pass
+                    y_pred_mean_norm, _, loss, _, _ = model(context_x, context_y, target_x, target_y, beta=1.0)
+                    # Non-context MAE in meters
+                    non_ctx_mask = torch.ones(total_points, dtype=torch.bool, device=device)
+                    non_ctx_mask[ctx_idx] = False
+                    y_pred_mean = y_pred_mean_norm * y_std + y_mean
+                    mae = F.l1_loss(y_pred_mean[:, non_ctx_mask, :], y_batch_raw[:, non_ctx_mask, :], reduction='mean').item()
+                    # Accumulate
+                    batch_loss += loss.item()
+                    batch_mae  += mae
+
+
+                #y_pred_mean, _, loss, _, _ = model(context_x, context_y, target_x, target_y)
+                #mae = F.l1_loss(y_pred_mean, target_y, reduction='mean').item()
+                #val_loss += loss.item()
+                #val_mae += mae
+                val_loss += (batch_loss / len(val_fracs))
+                val_mae  += (batch_mae  / len(val_fracs))
 
         val_loss /= len(val_loader)
         val_mae /= len(val_loader)
