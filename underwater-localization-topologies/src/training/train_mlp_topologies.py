@@ -1,5 +1,6 @@
 import sys
 import os
+from xml.parsers.expat import model
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import time
 import pickle
@@ -19,8 +20,8 @@ from src.utils.plots import plot_training_metrics
 Use:
 # Train MLP specialists per theta and topology
 python train_mlp_topologies.py \
-    --data-dir /home/fernando/tesis/underwater-localization/data/data/data_processed_topologies_low_variance \
-    --result-dir /home/fernando/tesis/underwater-localization/results/MLP_topologies/low_variance \
+    --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+    --result-dir /home/fernando/tesis/underwater-localization-topologies/src/training/results/MLP_topologies/low_variance \
     --batch-size 128 \
     --epochs 10000 \
     --patience 250
@@ -155,6 +156,11 @@ def train_mlp_specialist(train_data, val_data, save_dir, topology_name, theta_va
     x0, y0 = train_data[0]
     input_dim = x0.shape[-1]
     output_dim = y0.shape[-1]
+
+    # --- compute y stats from TRAIN only ---
+    Y = np.concatenate([y for _, y in train_data], axis=0)  # (N*T, 3)
+    y_mean = torch.tensor(Y.mean(axis=0), dtype=torch.float32, device=device)
+    y_std  = torch.tensor(Y.std(axis=0) + 1e-6, dtype=torch.float32, device=device)
     
     # Create datasets
     train_dataset = NavigationTrajectoryDataset(train_data)
@@ -164,8 +170,8 @@ def train_mlp_specialist(train_data, val_data, save_dir, topology_name, theta_va
     model = MLPSpecialist(input_dim=input_dim, output_dim=output_dim).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=5e-3, weight_decay=1e-4)
     
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
     
     best_val_mae = float('inf')
     early_stop_counter = 0
@@ -185,16 +191,25 @@ def train_mlp_specialist(train_data, val_data, save_dir, topology_name, theta_va
         
         for x_batch, y_batch in train_loader:
             x_batch, y_batch = x_batch.to(device), y_batch.to(device)
+
+            y_batch_norm = (y_batch - y_mean.view(1,1,-1)) / y_std.view(1,1,-1)
+
+            y_pred_norm = model(x_batch)
+            loss = F.mse_loss(y_pred_norm, y_batch_norm, reduction='mean')
+
+             # métricas en METROS (desnormaliza)
+            y_pred = y_pred_norm * y_std.view(1,1,-1) + y_mean.view(1,1,-1)
+            mae = F.l1_loss(y_pred, y_batch, reduction='mean').item()
             
             # Forward pass
-            y_pred = model(x_batch)
-            loss = F.mse_loss(y_pred, y_batch, reduction='mean')
+            #y_pred = model(x_batch)
+            #loss = F.mse_loss(y_pred, y_batch, reduction='mean')
             
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             
-            mae = F.l1_loss(y_pred, y_batch, reduction='mean').item()
+            #mae = F.l1_loss(y_pred, y_batch, reduction='mean').item()
             train_loss += loss.item()
             train_mae += mae
         
@@ -206,20 +221,27 @@ def train_mlp_specialist(train_data, val_data, save_dir, topology_name, theta_va
         # Validation phase
         model.eval()
         val_loss, val_mae = 0.0, 0.0
-        
+
         with torch.no_grad():
             for x_batch, y_batch in val_loader:
                 x_batch, y_batch = x_batch.to(device), y_batch.to(device)
-                
-                y_pred = model(x_batch)
-                loss = F.mse_loss(y_pred, y_batch, reduction='mean')
+                # Normaliza Y igual que en training
+                y_batch_norm = (y_batch - y_mean.view(1, 1, -1)) / y_std.view(1, 1, -1)
+
+                # El modelo predice en espacio normalizado
+                y_pred_norm = model(x_batch)
+                # Loss consistente (en espacio normalizado)
+                loss = F.mse_loss(y_pred_norm, y_batch_norm, reduction='mean')
+
+                # Métrica en metros (desnormaliza)
+                y_pred = y_pred_norm * y_std.view(1, 1, -1) + y_mean.view(1, 1, -1)
                 mae = F.l1_loss(y_pred, y_batch, reduction='mean').item()
-                
+
                 val_loss += loss.item()
                 val_mae += mae
-        
+
         val_loss /= len(val_loader)
-        val_mae /= len(val_loader)
+        val_mae  /= len(val_loader)
         val_loss_list.append(val_loss)
         val_mae_list.append(val_mae)
         
@@ -231,7 +253,9 @@ def train_mlp_specialist(train_data, val_data, save_dir, topology_name, theta_va
                 'model': model.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'epoch': epoch,
-                'best_val_mae': best_val_mae
+                'best_val_mae': best_val_mae,
+                'y_mean': y_mean.detach().cpu(),
+                'y_std':  y_std.detach().cpu(),
             }, os.path.join(save_dir, 'best_checkpoint.pth.tar'))
         else:
             early_stop_counter += 1
@@ -254,8 +278,10 @@ def train_mlp_specialist(train_data, val_data, save_dir, topology_name, theta_va
         'model': model.state_dict(),
         'optimizer': optimizer.state_dict(),
         'epoch': epoch,
-        'final_val_mae': val_mae
-    }, os.path.join(save_dir, 'last_checkpoint.pth.tar'))
+        'best_val_mae': best_val_mae,
+        'y_mean': y_mean.detach().cpu(),
+        'y_std':  y_std.detach().cpu(),
+    }, os.path.join(save_dir, 'final_checkpoint.pth.tar'))
     
     # Save metrics
     metrics = {
