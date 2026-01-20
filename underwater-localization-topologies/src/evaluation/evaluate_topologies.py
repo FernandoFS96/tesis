@@ -22,9 +22,9 @@ Use example:
 
 python evaluate_topologies.py \
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-    --mlp-dir /home/fernando/tesis/underwater-localization-topologies/results/MLP_topologies/low_variance \
-    --anp-dir /home/fernando/tesis/underwater-localization-topologies/results/ANP_topologies/low_variance \
-    --output-dir /home/fernando/tesis/underwater-localization-topologies/results/evaluation_topologies \
+    --mlp-dir /home/fernando/tesis/underwater-localization-topologies/src/training/results/MLP_topologies/low_variance \
+    --anp-dir /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies/low_variance \
+    --output-dir /home/fernando/tesis/underwater-localization-topologies/results_2/evaluation_topologies \
     --context 30
 '''
 
@@ -256,7 +256,7 @@ class TopologyEvaluator:
     ) -> Tuple[np.ndarray, List[str]]:
         """Compute MAE for all models on all theta groups"""
         g = torch.Generator(device=self.device)
-        g.manual_seed(torch.seed)
+        g.manual_seed(seed)
         
         # Model names for rows
         model_names = (
@@ -432,12 +432,18 @@ class TopologyEvaluator:
                 n_context = int((self.context_percent / 100) * total_points)
                 n_context = max(1, min(n_context, total_points - 1))
 
-                cx = x[:, :n_context, :]
-                cy = y[:, :n_context, :]
-                tx = x
+                y_mean, y_std = self.get_y_stats(topology)
+                g = torch.Generator(device=self.device); g.manual_seed(self.eval_seed)
 
-                anp_pred, *_ = anp_model(cx, cy, tx)
-                anp_traj = anp_pred.squeeze().cpu().numpy()[:, :2]
+                context_idx = self.sample_context_indices(total_points, n_context, g)
+                cx = x[:, context_idx, :]
+
+                y_norm = self.normalize_y(y, y_mean, y_std)
+                cy = y_norm[:, context_idx, :]
+
+                pred_norm, _, *_ = anp_model(cx, cy, x)
+                pred = self.denormalize_y(pred_norm, y_mean, y_std)
+                anp_traj = pred.squeeze().cpu().numpy()[:, :2]
 
             # Plot trajectory
             ax.plot(gt_traj[:, 0], gt_traj[:, 1], color='blue', linestyle='--', 
@@ -550,18 +556,23 @@ class TopologyEvaluator:
                 # Context selection
                 n_ctx = max(1, int(context_frac * size))
                 n_ctx = min(n_ctx, size)  # just to be safe
-    
-                cx = x[:, :n_ctx, :]
-                cy = y[:, :n_ctx, :]
-                tx = x
-    
-                # ANP prediction: mean and variance (or std)
+                # Get normalization stats
+                y_mean, y_std = self.get_y_stats(topology)
+                g = torch.Generator(device=self.device); g.manual_seed(self.eval_seed)
+                ctx_idx = self.sample_context_indices(size, n_ctx, g)
+                cx = x[:, ctx_idx, :]
+                y_norm = self.normalize_y(y, y_mean, y_std)
+                cy = y_norm[:, ctx_idx, :]
+                # ANP prediction
                 with torch.no_grad():
-                    # Your ANP forward signature: (mean, var, *rest)
-                    y_mean, y_var, *_ = anp_model(cx, cy, tx)
-                
-                y_mean_np = y_mean.squeeze(0).cpu().numpy()              # (T, output_dim)
-                y_std_np  = torch.sqrt(y_var).squeeze(0).cpu().numpy()   # (T, output_dim)
+                    y_mean_norm, y_var_norm, *_ = anp_model(cx, cy, x)
+                # Denormalize
+                y_mean = self.denormalize_y(y_mean_norm, y_mean, y_std)  # (1,T,3) en metros
+                # std_real = sqrt(var_norm) * y_std
+                y_std_real = torch.sqrt(y_var_norm) * y_std.view(1, 1, -1)
+                # Convert to numpy
+                y_mean_np = y_mean.squeeze(0).cpu().numpy()
+                y_std_np  = y_std_real.squeeze(0).cpu().numpy()
     
                 # DR-MLP prediction (general MLP)
                 if dr_mlp is not None:
