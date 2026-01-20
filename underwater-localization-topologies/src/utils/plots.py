@@ -25,12 +25,12 @@ def plot_training_metrics(metrics_path, output_path=None):
     # Create 2x1 subplot grid
     fig, axes = plt.subplots(2, 1, figsize=(8, 10))
 
-    # Plot Loss (MSE) if available
-    axes[0].plot(epochs, train_loss, label='Train Loss (MSE)')
-    axes[0].plot(epochs, val_loss,   label='Val Loss (MSE)')
+    # Plot Loss if available
+    axes[0].plot(epochs, train_loss, label='Train Loss')
+    axes[0].plot(epochs, val_loss,   label='Val Loss')
     axes[0].set_title('Training and Validation Loss')
     axes[0].set_xlabel('Epoch')
-    axes[0].set_ylabel('Loss (MSE)')
+    axes[0].set_ylabel('Loss')
     axes[0].legend()
     axes[0].grid(True)
 

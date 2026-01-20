@@ -90,12 +90,16 @@ class TopologyEvaluator:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.context_percent = context_percent
+
+        self._y_stats_cache = {} # topology -> (y_mean, y_std) en device
+        self.eval_seed = 0 # seed determinista para muestrear contextos en evaluación
+        self.mc_samples = 1 # >1 si quieres promediar varias muestras del latente
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using device: {self.device}")
         
         # Set random seed for reproducibility
-        self.seed = 42
+        self.seed = 18
         random.seed(self.seed)
         np.random.seed(self.seed)
         torch.manual_seed(self.seed)
@@ -127,6 +131,46 @@ class TopologyEvaluator:
         theta_values = sorted(theta_groups.keys())
         
         return theta_groups, theta_values
+    
+    def get_y_stats(self, topology: str) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Devuelve (y_mean, y_std) calculados sobre train_data.pkl para la topología,
+        y los cachea. Esto garantiza que la normalización en evaluación coincide con training.
+        """
+        if topology in self._y_stats_cache:
+            return self._y_stats_cache[topology]
+
+        topology_dir = self.data_dir / f"topology_{topology}"
+        train_path = topology_dir / "train_data.pkl"
+        if not train_path.exists():
+            raise FileNotFoundError(f"train_data.pkl no encontrado: {train_path}")
+
+        with open(train_path, "rb") as f:
+            train_data = pickle.load(f)  # list of (X(T,D), Y(T,3))
+
+        Y = np.concatenate([y for _, y in train_data], axis=0)  # (N*T, 3)
+        y_mean = torch.tensor(Y.mean(axis=0), dtype=torch.float32, device=self.device)
+        y_std  = torch.tensor(Y.std(axis=0) + 1e-6, dtype=torch.float32, device=self.device)
+
+        self._y_stats_cache[topology] = (y_mean, y_std)
+        return y_mean, y_std
+
+
+    def normalize_y(self, y: torch.Tensor, y_mean: torch.Tensor, y_std: torch.Tensor) -> torch.Tensor:
+        return (y - y_mean.view(1, 1, -1)) / y_std.view(1, 1, -1)
+
+
+    def denormalize_y(self, y_norm: torch.Tensor, y_mean: torch.Tensor, y_std: torch.Tensor) -> torch.Tensor:
+        return y_norm * y_std.view(1, 1, -1) + y_mean.view(1, 1, -1)
+
+
+    def sample_context_indices(self, total_points: int, n_context: int, g: torch.Generator) -> torch.Tensor:
+        """
+        Subconjunto aleatorio determinista (por generator) y ordenado para indexar.
+        """
+        perm = torch.randperm(total_points, generator=g, device=self.device)
+        return perm[:n_context].sort().values
+
     
     def load_mlp_models(
         self, 
@@ -172,23 +216,26 @@ class TopologyEvaluator:
         
         return models
     
-    def load_anp_model(self, topology: str, input_dim: int, output_dim: int) -> torch.nn.Module:
+    def load_anp_model(self, topology: str, input_dim: int, output_dim: int, distributed = False) -> torch.nn.Module:
         """Load ANP model for a topology"""
         anp_path = self.anp_result_dir / f'ANP_{topology}' / 'best_checkpoint.pth.tar'
         
         if not anp_path.exists():
             raise FileNotFoundError(f"ANP checkpoint not found: {anp_path}")
         
-        sensor_emb_dim = 64       # MUST match the value used during training
+        sensor_emb_dim = 64 # MUST match the value used during training
         n_sensors = 10
         sensor_feature_dim = 401
         
-        base_anp  = LatentModel(num_hidden=128, input_dim=sensor_emb_dim, output_dim=output_dim)
-        anp_model = DistributedLatentModel(base_anp=base_anp,
-                                           n_sensors=n_sensors,
-                                           in_dim_per_sensor=sensor_feature_dim,
-                                           emb_dim=sensor_emb_dim,
-                                           fusion="mean",)
+        if distributed:
+            base_anp = LatentModel(num_hidden=128, input_dim=sensor_emb_dim, output_dim=output_dim)
+            anp_model = DistributedLatentModel(base_anp=base_anp,
+                                               n_sensors=n_sensors,
+                                               in_dim_per_sensor=sensor_feature_dim,
+                                               emb_dim=sensor_emb_dim,
+                                               fusion="mean",)
+        else:
+            anp_model = LatentModel(num_hidden=128, input_dim=input_dim, output_dim=output_dim)
         checkpoint = torch.load(anp_path, map_location=self.device)
         anp_model.load_state_dict(checkpoint['model'])
         model = anp_model.to(self.device).eval()
@@ -197,13 +244,19 @@ class TopologyEvaluator:
         return model
     
     def compute_mae_matrix(
-        self, 
+        self,
         theta_groups: Dict[float, List],
         theta_values: List[float],
         mlp_models: Dict[str, torch.nn.Module],
-        anp_model: torch.nn.Module
+        anp_model: torch.nn.Module,
+        y_mean: torch.Tensor,
+        y_std: torch.Tensor,
+        seed: int = 0,
+        mc_samples: int = 1
     ) -> Tuple[np.ndarray, List[str]]:
         """Compute MAE for all models on all theta groups"""
+        g = torch.Generator(device=self.device)
+        g.manual_seed(torch.seed)
         
         # Model names for rows
         model_names = (
@@ -225,29 +278,41 @@ class TopologyEvaluator:
             with torch.no_grad():
                 for x, y in loader:
                     x, y = x.to(self.device), y.to(self.device)
-                    
-                    # Evaluate MLPs
-                    for model_name, model in mlp_models.items():
-                        pred = model(x)
-                        mae = F.l1_loss(pred, y, reduction='none').mean(dim=[1, 2])
-                        model_errors[model_name].extend(mae.cpu().numpy())
-                    
-                    # Evaluate ANP
                     total_points = x.size(1)
                     n_context = int((self.context_percent / 100) * total_points)
                     n_context = max(1, min(n_context, total_points - 1))
-                    
-                    context_idx = torch.arange(n_context)
-                    target_idx = torch.arange(total_points)
-                    
+
+                    context_idx = self.sample_context_indices(total_points, n_context, g)
+                    non_ctx_mask = torch.ones(total_points, dtype=torch.bool, device=self.device)
+                    non_ctx_mask[context_idx] = False
+
+                    # ---------- MLPs: MAE en NO-contexto (misma máscara para ser “justos”) ----------
+                    for model_name, model in mlp_models.items():
+                        pred = model(x)  # (B,T,3) en metros (como tus MLPs)
+                        mae = F.l1_loss(pred[:, non_ctx_mask, :], y[:, non_ctx_mask, :], reduction="none").mean(dim=[1, 2])
+                        model_errors[model_name].extend(mae.cpu().numpy())
+
+                    # ---------- ANP: normaliza cy/ty, predice, desnormaliza y MAE en NO-contexto ----------
+                    target_idx = torch.arange(total_points, device=self.device)
                     cx = x[:, context_idx, :]
-                    cy = y[:, context_idx, :]
                     tx = x[:, target_idx, :]
-                    ty = y[:, target_idx, :]
-                    
-                    pred, *_ = anp_model(cx, cy, tx)
-                    mae = F.l1_loss(pred, ty, reduction='none').mean(dim=[1, 2])
-                    model_errors[f'ANP'].extend(mae.cpu().numpy())
+
+                    y_norm = self.normalize_y(y, y_mean, y_std)
+                    cy = y_norm[:, context_idx, :]
+
+                    # Predicción (sin target_y para no “filtrar” información)
+                    if mc_samples <= 1:
+                        pred_norm, _, *_ = anp_model(cx, cy, tx)  # (B,T,3) en espacio normalizado
+                    else:
+                        preds = []
+                        for _ in range(mc_samples):
+                            p_norm, _, *_ = anp_model(cx, cy, tx)
+                            preds.append(p_norm)
+                        pred_norm = torch.stack(preds, dim=0).mean(dim=0)
+
+                    pred = self.denormalize_y(pred_norm, y_mean, y_std)
+                    mae = F.l1_loss(pred[:, non_ctx_mask, :], y[:, non_ctx_mask, :], reduction="none").mean(dim=[1, 2])
+                    model_errors["ANP"].extend(mae.cpu().numpy())
             
             # Compute mean MAE for each model
             for i, model_name in enumerate(model_names):
@@ -575,12 +640,15 @@ class TopologyEvaluator:
         # Load models
         print("  Loading models...")
         mlp_models = self.load_mlp_models(topology, theta_values, input_dim, output_dim)
-        anp_model = self.load_anp_model(topology, input_dim, output_dim)
-        
+        anp_model = self.load_anp_model(topology, input_dim, output_dim, distributed = False)
+
+        # Get y normalization stats        
+        y_mean, y_std = self.get_y_stats(topology)
+
         # Compute MAE matrix
-        mae_matrix, model_names = self.compute_mae_matrix(
-            theta_groups, theta_values, mlp_models, anp_model
-        )
+        mae_matrix, model_names = self.compute_mae_matrix(theta_groups, theta_values, mlp_models, anp_model, y_mean=y_mean, y_std=y_std, 
+                                                          seed=self.eval_seed, mc_samples=self.mc_samples
+                                                          )
         
         # Save numerical results
         results_path = topology_output / 'mae_results.txt'
@@ -674,10 +742,15 @@ class TopologyEvaluator:
         first_sample = next(iter(theta_groups.values()))[0]
         input_dim = first_sample[0].shape[-1]
         output_dim = first_sample[1].shape[-1]
+
+        # Get y normalization stats
+        y_mean, y_std = self.get_y_stats(topology)
+        g = torch.Generator(device=self.device)
+        g.manual_seed(self.eval_seed)
         
         # Load ANP model
         print("  Loading ANP model...")
-        anp_model = self.load_anp_model(topology, input_dim, output_dim)
+        anp_model = self.load_anp_model(topology, input_dim, output_dim, distributed = False)
         
         # Define context percentages to test
         context_percentages = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 
@@ -709,16 +782,19 @@ class TopologyEvaluator:
                         n_context = int((ctx_pct / 100) * total_points)
                         n_context = max(1, min(n_context, total_points - 1))
                         
-                        context_idx = torch.arange(n_context)
-                        target_idx = torch.arange(total_points)
-                        
+                        context_idx = self.sample_context_indices(total_points, n_context, g)
+                        non_ctx_mask = torch.ones(total_points, dtype=torch.bool, device=self.device)
+                        non_ctx_mask[context_idx] = False
+
                         cx = x[:, context_idx, :]
-                        cy = y[:, context_idx, :]
-                        tx = x[:, target_idx, :]
-                        ty = y[:, target_idx, :]
-                        
-                        pred, *_ = anp_model(cx, cy, tx)
-                        mae = F.l1_loss(pred, ty, reduction='none').mean(dim=[1, 2])
+                        tx = x  # o x[:, target_idx, :]
+                        y_norm = self.normalize_y(y, y_mean, y_std)
+                        cy = y_norm[:, context_idx, :]
+
+                        pred_norm, _, *_ = anp_model(cx, cy, tx)
+                        pred = self.denormalize_y(pred_norm, y_mean, y_std)
+
+                        mae = F.l1_loss(pred[:, non_ctx_mask, :], y[:, non_ctx_mask, :], reduction="none").mean(dim=[1, 2])
                         theta_maes.extend(mae.cpu().numpy())
                 
                 # Store results

@@ -1,0 +1,21 @@
+ANP Training Summary - Topology: random
+==================================================
+Training samples: 420 trajectories
+Validation samples: 120 trajectories
+Best validation MAE: 5.304847
+Final epoch: 2000
+Early stopping counter: 90/200
+Training time: 61.77 minutes
+
+Diagnostics (last epoch):
+  Train NLL: -2.674340
+  Train NLL (non-ctx): -2.655963
+  Train KL: 0.000026
+  Beta: 1.000
+  Pred var (norm) min/mean/max: 1.491e-06 / 6.273e-04 / 1.506e-02
+
+Diagnostics (best/typical):
+  Min train var_mean: 5.091e-04
+  Max train var_mean: 2.932e+00
+  Min val var_mean:   5.747e-04
+  Max val var_mean:   3.432e+00
