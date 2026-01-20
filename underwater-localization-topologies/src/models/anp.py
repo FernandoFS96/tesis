@@ -88,7 +88,7 @@ class Decoder(nn.Module):
             hidden = t.relu(linear(hidden))
         mean = self.mean_projection(hidden)
         #var = 10000 * t.sigmoid(self.log_var_projection(hidden))
-        var = 1e-6 + F.softplus(self.log_var_projection(hidden))
+        var = 1e-3 + F.softplus(self.log_var_projection(hidden))
         return mean, var
 
 #class MultiheadAttention(nn.Module):

@@ -33,7 +33,7 @@ def compute_y_stats(train_data):
     y_std  = torch.tensor(Y.std(axis=0) + 1e-6, dtype=torch.float32)
     return y_mean, y_std
 
-def kl_beta(epoch, warmup_epochs=300):
+def kl_beta(epoch, warmup_epochs=500):
     # goes linearly from 0 to 1 in warmup_epochs
     return min(1.0, float(epoch) / float(max(1, warmup_epochs)))
 
@@ -215,7 +215,7 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
         for x_batch, y_batch in train_loader:
             x_batch, y_batch = x_batch.to(device), y_batch.to(device)
             # KL beta for this epoch
-            beta = kl_beta(epoch, warmup_epochs=300)
+            beta = kl_beta(epoch, warmup_epochs=500)
             # Dynamic context size selection
             total_points = x_batch.size(1)
             min_context = max(1, int(0.05 * total_points))
