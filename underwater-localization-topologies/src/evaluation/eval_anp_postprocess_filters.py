@@ -640,31 +640,6 @@ def main():
     print(f"Global mean raw : {float(np.mean(global_raw)):.4f}")
     print(f"Global mean filt: {float(np.mean(global_filt)):.4f}")
 
-    sigmas = [0.07,0.08,0.09,0.10,0.11,0.12,0.14,0.16]
-    best = (1e9, None)
-    for s in sigmas:
-            mae_raw, mae_f = eval_one_theta_group(
-                samples=samples,
-                anp_model=anp,
-                y_mean=y_mean,
-                y_std=y_std,
-                device=device,
-                topology=args.topology,
-                context_percent=args.context,
-                eval_seed=args.eval_seed,
-                filter_method=args.filter,
-                dt=args.dt,
-                use_gt_context_in_filter=args.use_gt_context,
-                context_R_eps=args.context_R_eps,
-                alpha = args.ab_alpha,
-                beta = args.ab_beta,
-                adaptive = args.ab_adaptive,
-                sigma_a = s,
-            )
-            if mae_f < best[0]:
-                best = (mae_f, s)
-    print("Best sigma_a:", best[1], "MAE:", best[0])
-
 
 if __name__ == "__main__":
     main()
