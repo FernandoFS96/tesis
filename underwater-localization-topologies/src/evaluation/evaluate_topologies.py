@@ -173,47 +173,53 @@ class TopologyEvaluator:
 
     
     def load_mlp_models(
-        self, 
-        topology: str, 
+        self,
+        topology: str,
         theta_values: List[float],
         input_dim: int,
         output_dim: int
-    ) -> Dict[str, torch.nn.Module]:
-        """Load all MLP models for a topology"""
+    ) -> Dict[str, Dict[str, Any]]:
+        """Load all MLP models for a topology (compatible con MLPs que predicen y normalizada)."""
         mlp_dir = self.mlp_result_dir / f'topology_{topology}'
-        models = {}
-        
-        # Load specialist MLPs
-        for theta in theta_values:
-            checkpoint_path = mlp_dir / f'MLP_theta_{theta:.1f}' / 'best_checkpoint.pth.tar'
-            if checkpoint_path.exists():
-                try:
-                    model = MLPSpecialist(input_dim=input_dim, output_dim=output_dim)
-                    checkpoint = torch.load(checkpoint_path, map_location=self.device)
-                    model.load_state_dict(checkpoint['model'])
-                    model = model.to(self.device).eval()
-                    models[f'MLP(θ={theta:.1f})'] = model
-                    print(f"Loaded MLP specialist for theta={theta:.1f}")
-                except Exception as e:
-                    print(f"Warning: Could not load MLP for theta={theta:.1f}: {e}")
-            else:
-                print(f"Warning: Checkpoint not found for theta={theta:.1f}")
-        
-        # Load general MLP (trained on all thetas)
-        general_path = mlp_dir / 'MLP_all_thetas' / 'best_checkpoint.pth.tar'
-        if general_path.exists():
+        models: Dict[str, Dict[str, Any]] = {}
+
+        def _load_one(checkpoint_path: Path, model_name: str):
+            if not checkpoint_path.exists():
+                print(f"Warning: Checkpoint not found: {checkpoint_path}")
+                return
+
             try:
                 model = MLPSpecialist(input_dim=input_dim, output_dim=output_dim)
-                checkpoint = torch.load(general_path, map_location=self.device)
-                model.load_state_dict(checkpoint['model'])
+                ckpt = torch.load(checkpoint_path, map_location=self.device)  # map_location recomendado :contentReference[oaicite:1]{index=1}
+                model.load_state_dict(ckpt["model"])
                 model = model.to(self.device).eval()
-                models['MLP(all_θ)'] = model
-                print(f"Loaded general MLP (all thetas)")
+
+                entry: Dict[str, Any] = {"model": model, "normalized": False}
+
+                # MLP nuevo: predice y normalizada y guarda stats
+                if "y_mean" in ckpt and "y_std" in ckpt:
+                    entry["y_mean"] = ckpt["y_mean"].to(self.device).float()
+                    entry["y_std"]  = ckpt["y_std"].to(self.device).float()
+                    entry["normalized"] = True
+                else:
+                    # Fallback para checkpoints antiguos (si existieran)
+                    entry["normalized"] = False
+
+                models[model_name] = entry
+                print(f"Loaded {model_name} ({'normalized' if entry['normalized'] else 'raw'})")
+
             except Exception as e:
-                print(f"Warning: Could not load general MLP: {e}")
-        else:
-            print(f"Warning: General MLP checkpoint not found")
-        
+                print(f"Warning: Could not load {model_name}: {e}")
+
+        # Specialists
+        for theta in theta_values:
+            ckpt_path = mlp_dir / f"MLP_theta_{theta:.1f}" / "best_checkpoint.pth.tar"
+            _load_one(ckpt_path, f"MLP(θ={theta:.1f})")
+
+        # General
+        general_path = mlp_dir / "MLP_all_thetas" / "best_checkpoint.pth.tar"
+        _load_one(general_path, "MLP(all_θ)")
+
         return models
     
     def load_anp_model(self, topology: str, input_dim: int, output_dim: int, distributed = False) -> torch.nn.Module:
@@ -287,9 +293,21 @@ class TopologyEvaluator:
                     non_ctx_mask[context_idx] = False
 
                     # ---------- MLPs: MAE en NO-contexto (misma máscara para ser “justos”) ----------
-                    for model_name, model in mlp_models.items():
-                        pred = model(x)  # (B,T,3) en metros (como tus MLPs)
-                        mae = F.l1_loss(pred[:, non_ctx_mask, :], y[:, non_ctx_mask, :], reduction="none").mean(dim=[1, 2])
+                    for model_name, entry in mlp_models.items():
+                        model = entry["model"]
+                        pred = model(x)  # puede ser y_norm si el MLP nuevo está normalizado
+
+                        if entry.get("normalized", False):
+                            y_mean_mlp = entry["y_mean"].view(1, 1, -1)
+                            y_std_mlp  = entry["y_std"].view(1, 1, -1)
+                            pred = pred * y_std_mlp + y_mean_mlp  # -> metros
+
+                        mae = F.l1_loss(
+                            pred[:, non_ctx_mask, :],
+                            y[:, non_ctx_mask, :],
+                            reduction="none"
+                        ).mean(dim=[1, 2])
+
                         model_errors[model_name].extend(mae.cpu().numpy())
 
                     # ---------- ANP: normaliza cy/ty, predice, desnormaliza y MAE en NO-contexto ----------
@@ -413,19 +431,26 @@ class TopologyEvaluator:
                 gt_traj = y.squeeze().cpu().numpy()[:, :2]  # Only x, y
 
                 # MLP specialist prediction
-                specialist_key = f'MLP(θ={target_theta:.1f})'
+                specialist_key = f"MLP(θ={target_theta:.1f})"
                 if specialist_key in mlp_models:
-                    mlp_spec_pred = mlp_models[specialist_key](x)
-                    mlp_spec_traj = mlp_spec_pred.squeeze().cpu().numpy()[:, :2]
+                    entry = mlp_models[specialist_key]
+                    pred = entry["model"](x)
+                    if entry.get("normalized", False):
+                        pred = pred * entry["y_std"].view(1, 1, -1) + entry["y_mean"].view(1, 1, -1)
+                    mlp_spec_traj = pred.squeeze().cpu().numpy()[:, :2]
                 else:
                     mlp_spec_traj = None
 
                 # MLP general prediction
-                if 'MLP(all_θ)' in mlp_models:
-                    mlp_gen_pred = mlp_models['MLP(all_θ)'](x)
-                    mlp_gen_traj = mlp_gen_pred.squeeze().cpu().numpy()[:, :2]
+                if "MLP(all_θ)" in mlp_models:
+                    entry = mlp_models["MLP(all_θ)"]
+                    pred = entry["model"](x)
+                    if entry.get("normalized", False):
+                        pred = pred * entry["y_std"].view(1, 1, -1) + entry["y_mean"].view(1, 1, -1)
+                    mlp_gen_traj = pred.squeeze().cpu().numpy()[:, :2]
                 else:
                     mlp_gen_traj = None
+
 
                 # ANP prediction
                 total_points = x.size(1)
@@ -544,8 +569,8 @@ class TopologyEvaluator:
             axes = np.atleast_2d(axes)
     
             # Try to get the "DR-MLP" / general MLP
-            dr_mlp = mlp_models.get('MLP(all_θ)', None)
-    
+            dr_entry = mlp_models.get("MLP(all_θ)", None)
+            
             for i, (x_np, y_np) in enumerate(samples):
                 # Convert to tensors and move to device
                 x = torch.FloatTensor(x_np).unsqueeze(0).to(self.device)  # (1, T, input_dim)
@@ -575,9 +600,12 @@ class TopologyEvaluator:
                 y_std_np  = y_std_real.squeeze(0).cpu().numpy()
     
                 # DR-MLP prediction (general MLP)
-                if dr_mlp is not None:
+                if dr_entry is not None:
                     with torch.no_grad():
-                        dr_pred = dr_mlp(x).squeeze(0).cpu().numpy()  # (T, output_dim)
+                        pred = dr_entry["model"](x)
+                        if dr_entry.get("normalized", False):
+                            pred = pred * dr_entry["y_std"].view(1, 1, -1) + dr_entry["y_mean"].view(1, 1, -1)
+                        dr_pred = pred.squeeze(0).cpu().numpy()
                 else:
                     dr_pred = None
     
