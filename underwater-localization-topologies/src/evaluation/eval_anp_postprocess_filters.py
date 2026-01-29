@@ -21,40 +21,42 @@ Uso:
       --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
       --anp-dir  /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies/low_variance \
       --topology random \
-      --context 40 \
+      --context 30 \
       --filter alpha_beta \
       --ab-alpha 0.85 --ab-beta 0.005
-
-    With alpha-beta adaptative filter:
-    python eval_anp_postprocess_filters.py \
-      --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-      --anp-dir  /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies/low_variance \
-      --topology random \
-      --context 40 \
-      --filter alpha_beta \
-      --ab-alpha 0.85 --ab-beta 0.005 \
-      --ab-adaptive
 
     - With Kalman CV filter:
     python eval_anp_postprocess_filters.py \
       --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
       --anp-dir  /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies/low_variance \
       --topology random \
-      --context 40 \
+      --context 30 \
       --filter kalman_cv \
-      --kf-sigma-a 1.0
+      --kf-sigma-a 0.1
 
     - With Kalman RTS smoother:      
     python eval_anp_postprocess_filters.py \
       --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
       --anp-dir  /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies/low_variance \
       --topology random \
-      --context 40 \
+      --context 30 \
       --filter kalman_rts \
-      --kf-sigma-a 1.0
+      --kf-sigma-a 0.1
+
+    - Comparison of all filters:
+    python eval_anp_postprocess_filters.py \
+        --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+        --anp-dir  /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies/low_variance \
+        --topology random \
+        --context 30 \
+        --dt 1.0 \
+        --filter compare \
+        --out-txt comparativa_postprocesado.txt
+
 """
 
 import argparse
+from html import parser
 import pickle
 import random
 from pathlib import Path
@@ -62,6 +64,8 @@ from typing import Dict, List, Tuple, Optional
 
 import numpy as np
 import torch
+import matplotlib.pyplot as plt
+from dataclasses import dataclass
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
@@ -157,7 +161,6 @@ def alpha_beta_filter_2d(
     beta: float = 0.005,
     x0: Optional[np.ndarray] = None,
     v0: Optional[np.ndarray] = None,
-    adaptive_from_R: bool = False,
     R_xy: Optional[np.ndarray] = None,
     min_w: float = 0.05,
 ) -> np.ndarray:
@@ -170,11 +173,6 @@ def alpha_beta_filter_2d(
       r      = z - x_pred
       x      = x_pred + alpha*r
       v      = v_pred + (beta/dt)*r
-
-    Si adaptive_from_R=True y R_xy está disponible (T,2,2),
-    se escala alpha/beta por un peso w_t en función de la fiabilidad de la medida:
-      w_t = 1 / (1 + tr(R_t)/tr_ref)
-    (medidas con mayor varianza => menor w_t => suaviza más).
     """
     assert z_xy.ndim == 2 and z_xy.shape[1] == 2, "z_xy debe ser (T,2)"
     T = z_xy.shape[0]
@@ -201,13 +199,6 @@ def alpha_beta_filter_2d(
     x_filt = np.zeros((T, 2), dtype=np.float64)
     x_filt[0] = x
 
-    # Referencia para adaptación con R
-    tr_ref = None
-    if adaptive_from_R and R_xy is not None:
-        # tr(R_t) típico (evita extremos)
-        traces = np.clip(np.trace(R_xy, axis1=1, axis2=2), 1e-12, np.inf)
-        tr_ref = float(np.median(traces))
-
     for t in range(1, T):
         # Predicción
         x_pred = x + v * dt
@@ -219,12 +210,6 @@ def alpha_beta_filter_2d(
         # (Opcional) escalado de ganancias usando R_t
         a_t = alpha
         b_t = beta
-        if adaptive_from_R and R_xy is not None and tr_ref is not None and tr_ref > 0:
-            tr = float(np.trace(R_xy[t]))
-            w = 1.0 / (1.0 + (tr / tr_ref))
-            w = float(np.clip(w, min_w, 1.0))
-            a_t = alpha * w
-            b_t = beta * w
 
         # Estabilidad típica: 0<alpha<1 y 0<beta<=2 (práctica común) :contentReference[oaicite:1]{index=1}
         a_t = float(np.clip(a_t, 1e-6, 0.999999))
@@ -422,17 +407,17 @@ def postprocess_filter(
     # ---- stubs ----
     if method == "alpha_beta":
         return alpha_beta_filter_2d(z_xy=z_xy,
-            dt=dt,alpha=alpha,beta=beta,adaptive_from_R=(R_xy is not None),R_xy=R_xy,
+            dt=dt,alpha=alpha,beta=beta,R_xy=None,
         )
     if method == "kalman_cv":
         x_filt, P_filt, x_pred, P_pred = kalman_filter_cv_2d(
-            z_xy=z_xy, R_xy=R_xy, dt=dt, sigma_a=sigma_a
+            z_xy=z_xy, R_xy=None, dt=dt, sigma_a=sigma_a
         )
         return x_filt[:, :2].astype(np.float32)
     
     if method == "kalman_rts":
         x_filt, P_filt, x_pred, P_pred = kalman_filter_cv_2d(
-            z_xy=z_xy, R_xy=R_xy, dt=dt, sigma_a=sigma_a
+            z_xy=z_xy, R_xy=None, dt=dt, sigma_a=sigma_a
         )
         x_sm, P_sm = rts_smoother(
             x_filt=x_filt, P_filt=P_filt, x_pred=x_pred, P_pred=P_pred, dt=dt, sigma_a=sigma_a
@@ -445,6 +430,116 @@ def postprocess_filter(
 # ---------------------------
 # Evaluación: ANP -> medidas z_t -> filtro -> MAE
 # ---------------------------
+
+from datetime import datetime
+
+@torch.no_grad()
+def eval_one_theta_group_multi(
+    samples: List,
+    anp_model: torch.nn.Module,
+    y_mean: torch.Tensor,
+    y_std: torch.Tensor,
+    device: torch.device,
+    topology: str,
+    context_percent: int,
+    eval_seed: int,
+    filter_methods: List[str],
+    dt: float,
+    use_gt_context_in_filter: bool,
+    context_R_eps: float,
+    alpha: float,
+    beta: float,
+    sigma_a: float,
+) -> Tuple[float, Dict[str, float]]:
+    """
+    Devuelve:
+      mae_raw (float),
+      mae_filt_dict: {method: mae_filtered}
+    MAE calculado SOLO en no-contexto.
+    """
+    ds = NavigationTrajectoryDataset(samples)
+    loader = DataLoader(ds, batch_size=8, shuffle=False)
+
+    g = torch.Generator(device=device)
+    g.manual_seed(eval_seed)
+
+    maes_raw: List[float] = []
+    maes_filt: Dict[str, List[float]] = {m: [] for m in filter_methods}
+
+    for x, y in loader:
+        x = x.to(device)  # (B,T,D)
+        y = y.to(device)  # (B,T,3)
+        B, T, _ = x.shape
+
+        n_context = int((context_percent / 100) * T)
+        n_context = max(1, min(n_context, T - 1))
+        ctx_idx = sample_context_indices(T, n_context, g, device=device)
+
+        non_ctx_mask = torch.ones(T, dtype=torch.bool, device=device)
+        non_ctx_mask[ctx_idx] = False
+
+        # ANP forward (una vez)
+        y_norm = normalize_y(y, y_mean, y_std)
+        cx = x[:, ctx_idx, :]
+        cy = y_norm[:, ctx_idx, :]
+
+        pred_mean_norm, pred_var_norm, *_ = anp_model(cx, cy, x)  # (B,T,3)
+        pred_mean = denormalize_y(pred_mean_norm, y_mean, y_std)  # (B,T,3)
+
+        # MAE raw (solo no-contexto), por batch
+        mae_raw_b = F.l1_loss(
+            pred_mean[:, non_ctx_mask, :],
+            y[:, non_ctx_mask, :],
+            reduction="none"
+        ).mean(dim=[1, 2])
+        maes_raw.extend(mae_raw_b.detach().cpu().numpy().tolist())
+
+        # Var real (metros^2)
+        pred_std_real = torch.sqrt(pred_var_norm) * y_std.view(1, 1, -1)
+        pred_var_real = pred_std_real ** 2
+
+        # por muestra (trayectoria)
+        ctx_idx_np = ctx_idx.detach().cpu().numpy()
+        non_ctx_mask_np = non_ctx_mask.detach().cpu().numpy()
+        ctx_set = set(ctx_idx_np.tolist())
+
+        for b in range(B):
+            y_true_np = y[b].detach().cpu().numpy()             # (T,3)
+            y_pred_np = pred_mean[b].detach().cpu().numpy()     # (T,3)
+            v_pred_np = pred_var_real[b].detach().cpu().numpy() # (T,3)
+
+            z_xy = y_pred_np[:, :2].copy()
+            if use_gt_context_in_filter:
+                z_xy[ctx_idx_np, :] = y_true_np[ctx_idx_np, :2]
+
+            # R_t (T,2,2)
+            R_xy = np.zeros((T, 2, 2), dtype=np.float32)
+            for t in range(T):
+                if t in ctx_set:
+                    R_xy[t] = np.diag([context_R_eps, context_R_eps])
+                else:
+                    R_xy[t] = np.diag([float(v_pred_np[t, 0]), float(v_pred_np[t, 1])])
+
+            # aplica todos los filtros
+            for method in filter_methods:
+                x_filt_xy = postprocess_filter(
+                    z_xy=z_xy,
+                    R_xy=R_xy,
+                    method=method,
+                    dt=dt,
+                    alpha=alpha,
+                    beta=beta,
+                    sigma_a=sigma_a,
+                )
+                y_filt = y_pred_np.copy()
+                y_filt[:, :2] = x_filt_xy
+
+                mae_f = np.mean(np.abs(y_filt[non_ctx_mask_np, :] - y_true_np[non_ctx_mask_np, :]))
+                maes_filt[method].append(float(mae_f))
+
+    mae_raw = float(np.mean(maes_raw))
+    mae_filt_dict = {m: float(np.mean(v)) for m, v in maes_filt.items()}
+    return mae_raw, mae_filt_dict
 
 @torch.no_grad()
 def eval_one_theta_group(
@@ -462,97 +557,31 @@ def eval_one_theta_group(
     context_R_eps: float,
     alpha: float,
     beta: float,
-    adaptive: bool,
     sigma_a: float,
 ) -> Tuple[float, float]:
     """
-    Devuelve (mae_raw, mae_filtered) promediado en el grupo.
-    MAE calculado SOLO en no-contexto (misma lógica de tu evaluador).
+    Outputs:
+      mae_raw (float),
+      mae_filt (float) for filter_method
     """
-    ds = NavigationTrajectoryDataset(samples)
-    loader = DataLoader(ds, batch_size=8, shuffle=False)
-
-    g = torch.Generator(device=device)
-    g.manual_seed(eval_seed)
-
-    maes_raw = []
-    maes_filt = []
-
-    for x, y in loader:
-        x = x.to(device)  # (B,T,D)
-        y = y.to(device)  # (B,T,3)
-        B, T, _ = x.shape
-
-        n_context = int((context_percent / 100) * T)
-        n_context = max(1, min(n_context, T - 1))
-        ctx_idx = sample_context_indices(T, n_context, g, device=device)
-
-        non_ctx_mask = torch.ones(T, dtype=torch.bool, device=device)
-        non_ctx_mask[ctx_idx] = False
-
-        # ANP: context_y en espacio normalizado
-        y_norm = normalize_y(y, y_mean, y_std)
-        cx = x[:, ctx_idx, :]
-        cy = y_norm[:, ctx_idx, :]
-
-        # Predicción ANP en todos los targets
-        pred_mean_norm, pred_var_norm, *_ = anp_model(cx, cy, x)  # (B,T,3) y var
-
-        # Denormaliza mean a metros
-        pred_mean = denormalize_y(pred_mean_norm, y_mean, y_std)  # (B,T,3)
-
-        # MAE raw (solo no-contexto)
-        mae_raw_b = F.l1_loss(pred_mean[:, non_ctx_mask, :], y[:, non_ctx_mask, :],
-                              reduction="none").mean(dim=[1, 2])
-        maes_raw.extend(mae_raw_b.detach().cpu().numpy().tolist())
-
-        # ---- Prepara medidas z_t y R_t para filtro (por batch, una a una) ----
-        # std_real = sqrt(var_norm) * y_std  (como tu plot_axiswise_ci)
-        pred_std_real = torch.sqrt(pred_var_norm) * y_std.view(1, 1, -1)  # (B,T,3)
-        pred_var_real = pred_std_real ** 2  # (B,T,3) en metros^2
-
-        for b in range(B):
-            y_true_np = y[b].detach().cpu().numpy()          # (T,3)
-            y_pred_np = pred_mean[b].detach().cpu().numpy()  # (T,3)
-            v_pred_np = pred_var_real[b].detach().cpu().numpy()  # (T,3)
-
-            # Nos centramos en XY
-            z_xy = y_pred_np[:, :2].copy()
-
-            # Si queremos, “clamp” del contexto a GT (observación disponible)
-            if use_gt_context_in_filter:
-                z_xy[ctx_idx.detach().cpu().numpy(), :] = y_true_np[ctx_idx.detach().cpu().numpy(), :2]
-
-            # Construye R_t (T,2,2): contexto pequeño; no-contexto desde var ANP
-            R_xy = np.zeros((T, 2, 2), dtype=np.float32)
-            for t in range(T):
-                if t in set(ctx_idx.detach().cpu().numpy().tolist()):
-                    R_xy[t] = np.diag([context_R_eps, context_R_eps])
-                else:
-                    R_xy[t] = np.diag([float(v_pred_np[t, 0]), float(v_pred_np[t, 1])])
-
-            # Filtra
-            x_filt_xy = postprocess_filter(
-                z_xy=z_xy,
-                R_xy=(R_xy if adaptive else None),
-                method=filter_method,
-                dt=dt,
-                alpha=alpha,
-                beta=beta,
-                sigma_a=sigma_a,
-            )
-
-            # Reconstruye (T,3) para comparar MAE como en tu código (incluye 3 dims)
-            y_filt = y_pred_np.copy()
-            y_filt[:, :2] = x_filt_xy
-
-            # MAE filtered (solo no-contexto)
-            mask_np = non_ctx_mask.detach().cpu().numpy()
-            mae_f = np.mean(np.abs(y_filt[mask_np, :] - y_true_np[mask_np, :]))
-            maes_filt.append(float(mae_f))
-
-    return float(np.mean(maes_raw)), float(np.mean(maes_filt))
-
+    mae_raw, d = eval_one_theta_group_multi(
+        samples=samples,
+        anp_model=anp_model,
+        y_mean=y_mean,
+        y_std=y_std,
+        device=device,
+        topology=topology,
+        context_percent=context_percent,
+        eval_seed=eval_seed,
+        filter_methods=[filter_method],
+        dt=dt,
+        use_gt_context_in_filter=use_gt_context_in_filter,
+        context_R_eps=context_R_eps,
+        alpha=alpha,
+        beta=beta,
+        sigma_a=sigma_a,
+    )
+    return mae_raw, d[filter_method]
 
 def main():
     parser = argparse.ArgumentParser()
@@ -561,8 +590,9 @@ def main():
     parser.add_argument("--topology", type=str, required=True, choices=["ellipsoidal", "random", "aligned"])
     parser.add_argument("--context", type=int, default=40)
     parser.add_argument("--eval-seed", type=int, default=0)
-    parser.add_argument("--filter", type=str, default="none", choices=["none", "alpha_beta", "kalman_cv", "kalman_rts"])
-    parser.add_argument("--dt", type=float, default=1.0, help="dt del filtro (si no lo sabes, deja 1.0 y tunearemos Q)")
+    parser.add_argument("--filter", type=str, default="none", choices=["none", "alpha_beta", "kalman_cv", "kalman_rts", "compare"])
+    parser.add_argument("--out-txt", type=str, default="postprocess_comparison.txt", help="(solo con --filter compare) archivo txt de comparativa")
+    parser.add_argument("--dt", type=float, default=1.0, help="dt del filtro")
     parser.add_argument("--use-gt-context", action="store_true", help="Usa GT en puntos de contexto como medidas del filtro")
     parser.add_argument("--context-R-eps", type=float, default=1e-4, help="Ruido de medida para puntos de contexto (si use-gt-context)")
     parser.add_argument("--distributed", action="store_true", help="Cargar ANP en modo DistributedLatentModel")
@@ -570,8 +600,7 @@ def main():
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"])
     parser.add_argument("--ab-alpha", type=float, default=0.85)
     parser.add_argument("--ab-beta", type=float, default=0.005)
-    parser.add_argument("--ab-adaptive", action="store_true", help="Escala alpha/beta con R_t (varianza ANP) para suavizar más cuando ANP es inseguro")
-    parser.add_argument("--kf-sigma-a", type=float, default=1.0, help="Std de aceleración (m/s^2 en unidades de dt) para Q")
+    parser.add_argument("--kf-sigma-a", type=float, default=0.11, help="Std de aceleración (m/s^2 en unidades de dt) para Q")
 
     args = parser.parse_args()
 
@@ -600,45 +629,119 @@ def main():
     anp = load_anp_model(Path(args.anp_dir), args.topology, input_dim, output_dim, device=device, distributed=args.distributed)
     print("Loaded ANP.")
 
-    # Eval por theta + global
-    rows = []
-    global_raw = []
-    global_filt = []
+        # Eval por theta + global
+    if args.filter != "compare":
+        global_raw = []
+        global_filt = []
 
-    for theta in theta_values:
-        samples = theta_groups[theta]
-        if args.max_per_theta > 0:
-            samples = samples[:args.max_per_theta]
+        for theta in theta_values:
+            samples = theta_groups[theta]
+            if args.max_per_theta > 0:
+                samples = samples[:args.max_per_theta]
 
-        mae_raw, mae_f = eval_one_theta_group(
-            samples=samples,
-            anp_model=anp,
-            y_mean=y_mean,
-            y_std=y_std,
-            device=device,
-            topology=args.topology,
-            context_percent=args.context,
-            eval_seed=args.eval_seed,
-            filter_method=args.filter,
-            dt=args.dt,
-            use_gt_context_in_filter=args.use_gt_context,
-            context_R_eps=args.context_R_eps,
-            alpha = args.ab_alpha,
-            beta = args.ab_beta,
-            adaptive = args.ab_adaptive,
-            sigma_a = args.kf_sigma_a,
-        )
-        rows.append((theta, mae_raw, mae_f))
-        global_raw.append(mae_raw)
-        global_filt.append(mae_f)
+            mae_raw, mae_f = eval_one_theta_group(
+                samples=samples,
+                anp_model=anp,
+                y_mean=y_mean,
+                y_std=y_std,
+                device=device,
+                topology=args.topology,
+                context_percent=args.context,
+                eval_seed=args.eval_seed,
+                filter_method=args.filter,
+                dt=args.dt,
+                use_gt_context_in_filter=args.use_gt_context,
+                context_R_eps=args.context_R_eps,
+                alpha=args.ab_alpha,
+                beta=args.ab_beta,
+                sigma_a=args.kf_sigma_a,
+            )
+            global_raw.append(mae_raw)
+            global_filt.append(mae_f)
+            print(f"[θ={theta:.1f}] MAE raw={mae_raw:.4f} | MAE filt={mae_f:.4f}")
 
-        print(f"[θ={theta:.1f}] MAE raw={mae_raw:.4f} | MAE filt={mae_f:.4f}")
+        print("\n=== Summary ===")
+        print(f"Topology={args.topology} | context={args.context}% | filter={args.filter} | dt={args.dt}")
+        print(f"Global mean raw : {float(np.mean(global_raw)):.4f}")
+        print(f"Global mean filt: {float(np.mean(global_filt)):.4f}")
 
+    else:
+        methods = ["alpha_beta", "kalman_cv", "kalman_rts"]
 
-    print("\n=== Summary ===")
-    print(f"Topology={args.topology} | context={args.context}% | filter={args.filter} | dt={args.dt}")
-    print(f"Global mean raw : {float(np.mean(global_raw)):.4f}")
-    print(f"Global mean filt: {float(np.mean(global_filt)):.4f}")
+        per_theta = {m: [] for m in methods}   # list of (theta, raw, filt)
+        global_raw = []
+        global_filt = {m: [] for m in methods}
+
+        for theta in theta_values:
+            samples = theta_groups[theta]
+            if args.max_per_theta > 0:
+                samples = samples[:args.max_per_theta]
+
+            mae_raw, filt_dict = eval_one_theta_group_multi(
+                samples=samples,
+                anp_model=anp,
+                y_mean=y_mean,
+                y_std=y_std,
+                device=device,
+                topology=args.topology,
+                context_percent=args.context,
+                eval_seed=args.eval_seed,
+                filter_methods=methods,
+                dt=args.dt,
+                use_gt_context_in_filter=args.use_gt_context,
+                context_R_eps=args.context_R_eps,
+                alpha=args.ab_alpha,
+                beta=args.ab_beta,
+                sigma_a=args.kf_sigma_a,
+            )
+
+            global_raw.append(mae_raw)
+            print(f"[θ={theta:.1f}] MAE raw={mae_raw:.4f}")
+
+            for m in methods:
+                mae_f = filt_dict[m]
+                per_theta[m].append((theta, mae_raw, mae_f))
+                global_filt[m].append(mae_f)
+                print(f"    - {m:10s} MAE filt={mae_f:.4f} | improv={mae_raw - mae_f:+.4f}")
+
+        # ---- escribir TXT ----
+        out_path = Path(args.out_txt)
+        lines = []
+        lines.append("Postprocess comparison report")
+        lines.append(f"Generated: {datetime.now().isoformat(timespec='seconds')}")
+        lines.append(f"Topology={args.topology} | context={args.context}% | dt={args.dt} | eval_seed={args.eval_seed} | device={args.device}")
+        lines.append(f"use_gt_context={args.use_gt_context} | distributed={args.distributed} | context_R_eps={args.context_R_eps}")
+        lines.append(f"alpha_beta: alpha={args.ab_alpha} beta={args.ab_beta} | kalman: sigma_a={args.kf_sigma_a}")
+        lines.append("")
+
+        graw = float(np.mean(global_raw))
+        lines.append("=== Global means (NO-context MAE) ===")
+        lines.append(f"Global mean raw : {graw:.4f}")
+        for m in methods:
+            gf = float(np.mean(global_filt[m]))
+            lines.append(f"Global mean {m:<10s}: {gf:.4f} | improv={graw - gf:+.4f} | improv%={(100.0*(graw-gf)/graw):+.2f}%")
+        lines.append("")
+
+        # Tabla por theta
+        lines.append("=== Per-theta ===")
+        header = f"{'theta':>6} {'raw':>10} " + " ".join([f"{m+'_filt':>12}" for m in methods]) + " " + " ".join([f"{m+'_impr':>12}" for m in methods])
+        lines.append(header)
+
+        # asumimos mismo raw por theta (viene del mismo ANP); tomamos el de alpha_beta
+        for i, theta in enumerate(theta_values):
+            raw_i = per_theta[methods[0]][i][1]
+            row = f"{theta:6.1f} {raw_i:10.4f} "
+            for m in methods:
+                filt_i = per_theta[m][i][2]
+                row += f"{filt_i:12.4f} "
+            for m in methods:
+                filt_i = per_theta[m][i][2]
+                row += f"{(raw_i - filt_i):12.4f} "
+            lines.append(row)
+
+        out_path.write_text("\n".join(lines), encoding="utf-8")
+        print(f"\n[OK] Guardado comparativa en: {out_path.resolve()}")
+
 
 
 if __name__ == "__main__":
