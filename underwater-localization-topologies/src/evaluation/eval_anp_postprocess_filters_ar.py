@@ -16,7 +16,7 @@ Notas:
   Véase: Bruinsma et al., "Autoregressive Conditional Neural Processes" (2023). (solo referencia conceptual)
 
 Ejemplo (8 métodos en compare + txt + boxplot):
-python eval_anp_postprocess_filters_ar8.py \
+python eval_anp_postprocess_filters_ar.py \
   --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
   --anp-dir  /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies/low_variance \
   --topology random \
@@ -32,16 +32,19 @@ python eval_anp_postprocess_filters_ar8.py \
 from __future__ import annotations
 
 import argparse
+from os import times
 import pickle
 import random
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from matplotlib import lines
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
+import time
 
 # Ajusta imports si repo usa otra ruta
 from src.models.anp import LatentModel, DistributedLatentModel
@@ -56,6 +59,20 @@ def set_all_seeds(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+
+def _sync_if_cuda(device: torch.device):
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+
+def timed_block(device: torch.device):
+    """
+    Uso:
+      t0 = timed_block(device)   # start
+      ... code ...
+      dt = timed_block(device) - t0   # elapsed seconds
+    """
+    _sync_if_cuda(device)
+    return time.perf_counter()
 
 
 def load_topology_test_grouped(data_dir: Path, topology: str) -> Tuple[Dict[float, List], List[float]]:
@@ -658,14 +675,16 @@ def eval_one_theta_group_compare(
     ar_max_added: int,
     ar_gate_debug: bool,
     return_per_sample: bool = True,
-) -> Tuple[Dict[str, float], Dict[str, List[float]]]:
+) -> Tuple[Dict[str, float], Dict[str, List[float]], Dict[str, List[float]]]:
     """
     Devuelve:
       maes_mean: Dict[key, float]
       maes_lists: Dict[key, List[float]]  (por trayectoria)
+      times: Dict[key, List[float]] (tiempos por trayectoria)
     """
     keys = COMPARE_KEYS_8 if include_ar else COMPARE_KEYS_4
     maes: Dict[str, List[float]] = {k: [] for k in keys}
+    times: Dict[str, List[float]] = {k: [] for k in keys}  # seconds per trajectory
 
     ds = NavigationTrajectoryDataset(samples)
     loader = DataLoader(ds, batch_size=8, shuffle=False)
@@ -690,12 +709,19 @@ def eval_one_theta_group_compare(
         y_norm = normalize_y(y, y_mean, y_std)
         cx = x[:, ctx_idx, :]
         cy = y_norm[:, ctx_idx, :]
+        t0 = timed_block(device)
         pred_mean_norm, pred_var_norm, *_ = anp_model(cx, cy, x)
+        t1 = timed_block(device)
+        batch_forward_s = t1 - t0
+        per_sample_forward_s = batch_forward_s / float(B)
+
         pred_mean = denormalize_y(pred_mean_norm, y_mean, y_std)
 
         for b in range(B):
             y_true_np = y[b].detach().cpu().numpy()
             y_pred_np = pred_mean[b].detach().cpu().numpy()
+
+            times["raw"].append(per_sample_forward_s)
 
             # ---- stream RAW ----
             maes["raw"].append(float(np.mean(np.abs(y_pred_np[non_ctx_mask_np, :] - y_true_np[non_ctx_mask_np, :]))))
@@ -706,9 +732,13 @@ def eval_one_theta_group_compare(
 
             # alpha_beta / kalman_cv / kalman_rts sobre RAW
             for m in ["alpha_beta", "kalman_cv", "kalman_rts"]:
+                t0 = time.perf_counter()
+
                 x_filt_xy = postprocess_filter(
                     z_xy=z_xy, R_xy=None, method=m, dt=dt, alpha=alpha, beta=beta, sigma_a=sigma_a
                 )
+                dt_filter = time.perf_counter() - t0
+                times[m].append(per_sample_forward_s + dt_filter)
                 y_filt = y_pred_np.copy()
                 y_filt[:, :2] = x_filt_xy
                 maes[m].append(float(np.mean(np.abs(y_filt[non_ctx_mask_np, :] - y_true_np[non_ctx_mask_np, :]))))
@@ -717,6 +747,7 @@ def eval_one_theta_group_compare(
             if include_ar:
                 # predicción AR (por trayectoria)
                 order_seed = ar_order_seed + sample_counter
+                t0 = timed_block(device)
                 y_ar = anp_ar_rollout_one(
                     model=anp_model,
                     x=x[b:b+1],
@@ -733,6 +764,9 @@ def eval_one_theta_group_compare(
                     max_added=ar_max_added,
                     gate_debug=ar_gate_debug,
                 )
+                t1 = timed_block(device)
+                ar_s = t1 - t0
+                times["ar_raw"].append(ar_s)
                 y_ar_np = y_ar.squeeze(0).detach().cpu().numpy()
 
                 maes["ar_raw"].append(float(np.mean(np.abs(y_ar_np[non_ctx_mask_np, :] - y_true_np[non_ctx_mask_np, :]))))
@@ -742,17 +776,20 @@ def eval_one_theta_group_compare(
                     z_xy_ar[ctx_idx_np, :] = y_true_np[ctx_idx_np, :2]
 
                 for m, key in [("alpha_beta", "ar_alpha_beta"), ("kalman_cv", "ar_kalman_cv"), ("kalman_rts", "ar_kalman_rts")]:
+                    t0 = time.perf_counter()
                     x_filt_xy = postprocess_filter(
                         z_xy=z_xy_ar, R_xy=None, method=m, dt=dt, alpha=alpha, beta=beta, sigma_a=sigma_a
                     )
+                    dt_filter = time.perf_counter() - t0
                     y_filt = y_ar_np.copy()
                     y_filt[:, :2] = x_filt_xy
                     maes[key].append(float(np.mean(np.abs(y_filt[non_ctx_mask_np, :] - y_true_np[non_ctx_mask_np, :]))))
+                    times[key].append(ar_s + dt_filter)
 
             sample_counter += 1
 
     maes_mean = {k: float(np.mean(v)) if len(v) else float("nan") for k, v in maes.items()}
-    return maes_mean, maes
+    return maes_mean, maes, times
 
 
 # ---------------------------
@@ -942,6 +979,7 @@ def _write_compare_txt_ar8(
     theta_values: List[float],
     per_theta: Dict[str, List[float]],
     keys: List[str],
+    per_theta_time: Dict[str, List[float]],
 ):
     g_raw = float(np.mean(per_theta["raw"]))
     lines: List[str] = []
@@ -975,6 +1013,14 @@ def _write_compare_txt_ar8(
                 continue
             row += f"{(per_theta['raw'][i] - per_theta[k][i]):14.4f} "
         lines.append(row)
+
+    lines.append("")
+    lines.append("=== Global mean time (ms/trajectory) ===")
+    t_raw = float(np.mean(per_theta_time["raw"])) * 1000.0
+    for k in keys:
+        tk = float(np.mean(per_theta_time[k])) * 1000.0
+        rel = (tk / t_raw) if t_raw > 0 else float("nan")
+        lines.append(f"Global mean time {k:<13s}: {tk:8.2f} ms | x{rel:5.2f} vs raw")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines), encoding="utf-8")
@@ -1104,13 +1150,15 @@ def main():
 
     per_theta: Dict[str, List[float]] = {k: [] for k in keys}
     mae_all: Dict[str, List[float]] = {k: [] for k in keys}
+    per_theta_time: Dict[str, List[float]] = {k: [] for k in keys}
+    time_all: Dict[str, List[float]] = {k: [] for k in keys}
 
     for theta in theta_values:
         samples = theta_groups[theta]
         if args.max_per_theta > 0:
             samples = samples[:args.max_per_theta]
 
-        mae_mean, mae_lists = eval_one_theta_group_compare(
+        mae_mean, mae_lists, times_lists = eval_one_theta_group_compare(
             samples=samples,
             anp_model=anp,
             y_mean=y_mean,
@@ -1140,13 +1188,15 @@ def main():
         for k in keys:
             per_theta[k].append(mae_mean[k])
             mae_all[k].extend(mae_lists[k])
+            per_theta_time[k].append(float(np.mean(times_lists[k])))
+            time_all[k].extend(times_lists[k])
             if k == "raw":
                 continue
             print(f"    - {k:13s} MAE={mae_mean[k]:.4f} | improv_vs_raw={mae_mean['raw'] - mae_mean[k]:+.4f}")
         print(f"    - {'raw':13s} MAE={mae_mean['raw']:.4f}")
 
     out_txt = Path(args.out_txt)
-    _write_compare_txt_ar8(out_txt, args, theta_values, per_theta, keys)
+    _write_compare_txt_ar8(out_txt, args, theta_values, per_theta, keys, per_theta_time)
     print(f"\n[OK] Guardado comparativa en: {out_txt.resolve()}")
 
     if args.make_boxplot:
