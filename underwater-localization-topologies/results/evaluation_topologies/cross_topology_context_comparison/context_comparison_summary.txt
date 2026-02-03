@@ -4,18 +4,18 @@ ANP Context Sensitivity - Cross-Topology Comparison
 
 ELLIPSOIDAL
 --------------------------------------------------
-Best overall context: 55% (MAE: 7.9336)
-MAE range: 7.9336 - 10.1277 (Δ=2.1941)
-Context sensitivity: 27.66%
+Best overall context: 70% (MAE: 5.1553)
+MAE range: 5.1553 - 7.4455 (Δ=2.2902)
+Context sensitivity: 44.42%
 
 RANDOM
 --------------------------------------------------
-Best overall context: 15% (MAE: 7.8577)
-MAE range: 7.8577 - 12.1462 (Δ=4.2885)
-Context sensitivity: 54.58%
+Best overall context: 90% (MAE: 4.1950)
+MAE range: 4.1950 - 10.7179 (Δ=6.5229)
+Context sensitivity: 155.49%
 
 ALIGNED
 --------------------------------------------------
-Best overall context: 90% (MAE: 7.7282)
-MAE range: 7.7282 - 13.9291 (Δ=6.2008)
-Context sensitivity: 80.24%
+Best overall context: 90% (MAE: 4.6508)
+MAE range: 4.6508 - 21.2472 (Δ=16.5964)
+Context sensitivity: 356.85%
