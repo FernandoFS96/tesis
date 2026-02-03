@@ -24,7 +24,7 @@ python evaluate_topologies.py \
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
     --mlp-dir /home/fernando/tesis/underwater-localization-topologies/src/training/results/MLP_topologies/low_variance \
     --anp-dir /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies/low_variance \
-    --output-dir /home/fernando/tesis/underwater-localization-topologies/results_2/evaluation_topologies \
+    --output-dir /home/fernando/tesis/underwater-localization-topologies/results/evaluation_topologies \
     --context 30
 '''
 

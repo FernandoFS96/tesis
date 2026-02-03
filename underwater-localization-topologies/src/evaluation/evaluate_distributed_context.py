@@ -4,19 +4,25 @@ Distributed-context evaluation for ANP (deployment-time only, no retraining).
 
 Idea:
 - Keep the ANP checkpoint fixed.
-- For each trajectory, choose a context subset (same as your normal evaluation).
+- For each trajectory, choose a context subset (same as normal evaluation).
 - Split that context across N "nodes" (context experts).
 - Each node runs ANP with its local context and predicts all target points.
 - Fuse node predictive Gaussians to form a global prediction, then compute MAE on non-context points.
 
-This script is designed to be compatible with your existing data layout:
-    data_dir/topology_{A|B|C}/
-        train_data.pkl
-        test_data.pkl
-        metadata.pkl
+Use:
+    python evaluate_distributed_context.py \
+  --data_dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+  --anp_result_dir /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies/low_variance \
+  --output_dir /home/fernando/tesis/underwater-localization-topologies/results/eval_distributed_context \
+  --topologies aligned,ellipsoidal,random \
+  --context_percent 40 \
+  --n_nodes 4 \
+  --ctx_split_mode round_robin \
+  --methods centralized,single_node,poe_fusion,gpoe_fusion,moe_fusion,consensus_poe \
+  --consensus_rounds 5 \
+  --consensus_graph ring \
+  --mc_samples 1
 
-and your existing ANP checkpoints:
-    anp_result_dir/ANP_{A|B|C}/best_checkpoint.pth.tar
 """
 
 import argparse
@@ -137,7 +143,7 @@ class DistributedContextEvaluator:
         if not ckpt_path.exists():
             raise FileNotFoundError(f"ANP checkpoint not found: {ckpt_path}")
 
-        model = LatentModel(input_dim=input_dim, output_dim=output_dim)
+        model = LatentModel(num_hidden=128, input_dim=input_dim, output_dim=output_dim)
         ckpt = torch.load(ckpt_path, map_location=self.device)
         # Compatible with your training checkpoints:
         if "model" in ckpt:
@@ -575,7 +581,7 @@ def parse_args():
     p.add_argument("--anp_result_dir", type=Path, required=True)
     p.add_argument("--output_dir", type=Path, required=True)
 
-    p.add_argument("--topologies", type=str, default="A,B,C", help="Comma-separated, e.g. A,B,C")
+    p.add_argument("--topologies", type=str, default="aligned,ellipsoidal,random", help="Comma-separated, e.g. A,B,C")
     p.add_argument("--context_percent", type=int, default=40)
     p.add_argument("--n_nodes", type=int, default=4)
     p.add_argument("--ctx_split_mode", type=str, default="round_robin", choices=["round_robin", "contiguous"])
