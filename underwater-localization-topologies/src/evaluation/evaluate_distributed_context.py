@@ -145,7 +145,7 @@ class DistributedContextEvaluator:
 
         model = LatentModel(num_hidden=128, input_dim=input_dim, output_dim=output_dim)
         ckpt = torch.load(ckpt_path, map_location=self.device)
-        # Compatible with your training checkpoints:
+        # Compatible the training checkpoints:
         if "model" in ckpt:
             model.load_state_dict(ckpt["model"])
         else:
@@ -583,7 +583,7 @@ def parse_args():
 
     p.add_argument("--topologies", type=str, default="aligned,ellipsoidal,random", help="Comma-separated, e.g. A,B,C")
     p.add_argument("--context_percent", type=int, default=40)
-    p.add_argument("--n_nodes", type=int, default=4)
+    p.add_argument("--n_nodes", type=int, default=4, help="Number of context experts/nodes")
     p.add_argument("--ctx_split_mode", type=str, default="round_robin", choices=["round_robin", "contiguous"])
 
     p.add_argument(
@@ -604,7 +604,7 @@ def parse_args():
     p.add_argument("--gpoe_beta", type=float, default=None, help="If set, overrides default beta=1/K for gpoe_fusion")
     p.add_argument("--ci_alpha", type=float, default=0.5, help="CI alpha for ci_fusion (0..1)")
 
-    p.add_argument("--device", type=str, default=None, help="e.g. cuda:0 or cpu")
+    p.add_argument("--device", type=str, default=None, help="cuda:0 or cpu")
     p.add_argument("--seed", type=int, default=18)
     return p.parse_args()
 
