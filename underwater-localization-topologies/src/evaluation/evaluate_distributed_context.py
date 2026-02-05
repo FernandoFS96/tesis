@@ -15,8 +15,8 @@ Use:
   --anp_result_dir /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies/low_variance \
   --output_dir /home/fernando/tesis/underwater-localization-topologies/results/eval_distributed_context \
   --topologies aligned,ellipsoidal,random \
-  --context_percent 40 \
-  --n_nodes 4 \
+  --context_percent 30 \
+  --n_nodes 10 \
   --ctx_split_mode round_robin \
   --methods centralized,single_node,poe_fusion,gpoe_fusion,moe_fusion,consensus_poe \
   --consensus_rounds 5 \
@@ -613,7 +613,8 @@ def main():
     args = parse_args()
     topologies = [t.strip() for t in args.topologies.split(",") if t.strip()]
     methods = [m.strip() for m in args.methods.split(",") if m.strip()]
-
+    #modify output dir to include split mode and node count
+    args.output_dir = args.output_dir / f"ctx{args.context_percent}_nodes{args.n_nodes}_{args.ctx_split_mode}"
     evaluator = DistributedContextEvaluator(
         data_dir=args.data_dir,
         anp_result_dir=args.anp_result_dir,
