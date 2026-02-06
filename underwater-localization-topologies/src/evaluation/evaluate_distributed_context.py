@@ -154,9 +154,19 @@ class DistributedContextEvaluator:
         return model
 
     # ---- context sampling ----
-    def sample_context_indices(self, total_points: int, n_context: int, g: torch.Generator) -> torch.Tensor:
-        perm = torch.randperm(total_points, generator=g, device=self.device)
-        return perm[:n_context].sort().values
+    def sample_context_indices(
+        self,
+        total_points: int,
+        n_context: int,
+        g: torch.Generator,
+        mode: str = "random",
+    ) -> torch.Tensor:
+        if mode == "first":
+            return torch.arange(n_context, device=self.device)
+        if mode == "random":
+            perm = torch.randperm(total_points, generator=g, device=self.device)
+            return perm[:n_context].sort().values
+        raise ValueError(f"Unknown context sampling mode: {mode}")
 
     # ---- context partitioning ----
     def split_context(self, ctx_idx: torch.Tensor, n_nodes: int, mode: str = "round_robin") -> List[torch.Tensor]:
@@ -362,6 +372,7 @@ class DistributedContextEvaluator:
         context_percent: int,
         n_nodes: int,
         ctx_split_mode: str,
+        ctx_sample_mode: str,
         methods: List[str],
         consensus_rounds: int,
         consensus_graph: str,
@@ -423,7 +434,7 @@ class DistributedContextEvaluator:
                 y_norm = self.normalize_y(y, y_mean, y_std)
 
                 # context selection (deterministic across methods)
-                ctx_idx = self.sample_context_indices(T, n_ctx, g)
+                ctx_idx = self.sample_context_indices(T, n_ctx, g, mode=ctx_sample_mode)
                 non_ctx_mask = torch.ones(T, dtype=torch.bool, device=self.device)
                 non_ctx_mask[ctx_idx] = False
 
@@ -531,6 +542,7 @@ class DistributedContextEvaluator:
             "context_percent": context_percent,
             "n_nodes": n_nodes,
             "ctx_split_mode": ctx_split_mode,
+            "ctx_sample_mode": ctx_sample_mode,
             "methods": methods,
             "consensus_rounds": consensus_rounds,
             "consensus_graph": consensus_graph,
@@ -586,10 +598,9 @@ def parse_args():
     p.add_argument("--n_nodes", type=int, default=4, help="Number of context experts/nodes")
     p.add_argument("--ctx_split_mode", type=str, default="round_robin", choices=["round_robin", "contiguous"])
 
-    p.add_argument(
-        "--methods",
-        type=str,
-        default="centralized,single_node,mean_fusion,poe_fusion,moe_fusion,consensus_poe",
+    p.add_argument("--ctx_sample_mode", type=str, default="first", choices=["random", "first"], help="Context sampling: random or first (ordered)")
+    
+    p.add_argument("--methods",type=str,default="centralized,single_node,mean_fusion,poe_fusion,moe_fusion,consensus_poe",
         help="Comma-separated: centralized, single_node, mean_fusion, poe_fusion, gpoe_fusion, moe_fusion, ci_fusion, consensus_poe",
     )
 
@@ -613,8 +624,8 @@ def main():
     args = parse_args()
     topologies = [t.strip() for t in args.topologies.split(",") if t.strip()]
     methods = [m.strip() for m in args.methods.split(",") if m.strip()]
-    #modify output dir to include split mode and node count
-    args.output_dir = args.output_dir / f"ctx{args.context_percent}_nodes{args.n_nodes}_{args.ctx_split_mode}"
+    #modify output dir to include split mode, node count, and sample mode
+    args.output_dir = args.output_dir / f"ctx{args.context_percent}_nodes{args.n_nodes}_{args.ctx_split_mode}_{args.ctx_sample_mode}"
     evaluator = DistributedContextEvaluator(
         data_dir=args.data_dir,
         anp_result_dir=args.anp_result_dir,
@@ -630,6 +641,7 @@ def main():
             n_nodes=args.n_nodes,
             ctx_split_mode=args.ctx_split_mode,
             methods=methods,
+            ctx_sample_mode=args.ctx_sample_mode,
             consensus_rounds=args.consensus_rounds,
             consensus_graph=args.consensus_graph,
             mc_samples=args.mc_samples,
@@ -645,7 +657,7 @@ def main():
 
         # Print compact summary
         print("\n" + "=" * 90)
-        print(f"Topology {topo} | ctx={args.context_percent}% | nodes={args.n_nodes} | split={args.ctx_split_mode}")
+        print(f"Topology {topo} | ctx={args.context_percent}% | nodes={args.n_nodes} | split={args.ctx_split_mode} | sample={args.ctx_sample_mode}")
         for m in methods:
             d = df[df["method"] == m]
             mae_overall = d["mae_overall"].iloc[0] if len(d) else float("nan")
