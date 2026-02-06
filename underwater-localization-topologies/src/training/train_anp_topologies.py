@@ -38,6 +38,15 @@ def kl_beta(epoch, warmup_epochs=500):
     return min(1.0, float(epoch) / float(max(1, warmup_epochs)))
 
 
+def sample_context_indices(total_points, context_size, mode="random", device="cpu", generator=None):
+    if mode == "first":
+        return torch.arange(context_size, device=device)
+    if mode == "random":
+        perm = torch.randperm(total_points, device=device, generator=generator)
+        return perm[:context_size].sort().values
+    raise ValueError(f"Unknown context sampling mode: {mode}")
+
+
 def load_topology_data(data_dir, topology):
     """Load all processed data for a specific topology"""
     topology_dir = os.path.join(data_dir, f'topology_{topology}')
@@ -148,7 +157,8 @@ def plot_anp_diagnostics(save_dir,
     plt.close()
 
 def train_anp_topology(train_data, val_data, save_dir, topology_name, 
-                       batch_size=8, epochs=5000, patience=200, device='cuda'):
+                       batch_size=8, epochs=5000, patience=200, device='cuda',
+                       ctx_sample_mode="random"):
     """Train a single ANP model for a topology using all theta values"""
     os.makedirs(save_dir, exist_ok=True)
     
@@ -223,23 +233,19 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
             
             context_size = torch.randint(min_context, max_context + 1, (1,), device=device).item() \
                 if max_context > min_context else min_context
-            
-            #context_indices = torch.arange(context_size)
-            #target_indices = torch.arange(total_points)
 
-            # random indexes (same subset for whole batch+)
-            perm = torch.randperm(total_points, device=device)
-            context_indices = perm[:context_size].sort().values
+            # context indices (same subset for whole batch)
+            context_indices = sample_context_indices(
+                total_points,
+                context_size,
+                mode=ctx_sample_mode,
+                device=device,
+            )
             target_indices  = torch.arange(total_points, device=device)
             
             # Normalize Y, keep raw for loss calculation
             y_batch_raw = y_batch
             y_batch_norm = (y_batch - y_mean) / y_std
-
-            #context_x = x_batch[:, context_indices, :]
-            #context_y = y_batch[:, context_indices, :]
-            #target_x = x_batch[:, target_indices, :]
-            #target_y = y_batch[:, target_indices, :]
             
             # Prepare context and target sets
             context_x = x_batch[:, context_indices, :]
@@ -248,7 +254,6 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
             target_y  = y_batch_norm[:, target_indices, :]
 
             # Forward pass
-            #y_pred_mean, _, loss, kl, nll = model(context_x, context_y, target_x, target_y)
             y_pred_mean_norm, y_pred_var_norm, loss, kl, nll = model(context_x, context_y, target_x, target_y, beta=beta)
             optimizer.zero_grad()
             loss.backward()
@@ -340,9 +345,14 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
 
                 for frac in val_fracs:
                     context_size = max(1, min(total_points - 1, int(round(frac * total_points))))
-                    # random indexes (same subset for whole batch)
-                    perm = torch.randperm(total_points, generator=g, device=device)
-                    ctx_idx = perm[:context_size].sort().values
+                    # context indices (same subset for whole batch)
+                    ctx_idx = sample_context_indices(
+                        total_points,
+                        context_size,
+                        mode=ctx_sample_mode,
+                        device=device,
+                        generator=g,
+                    )
                     tar_idx = torch.arange(total_points, device=device)
                     # Prepare context and target sets
                     context_x = x_batch[:, ctx_idx, :]
@@ -540,6 +550,8 @@ def create_comparison_plot(results, save_dir):
 def main(args):
     """Main training function"""
     
+    # change result dir to include context sampling mode
+    args.result_dir = os.path.join(args.result_dir, f'ctx_{args.ctx_sample_mode}')
     print(f"\n{'='*60}")
     print("ANP Training - One Model Per Topology")
     print(f"{'='*60}")
@@ -587,7 +599,8 @@ def main(args):
             train_data, val_data, 
             topology_dir, topology,
             args.batch_size, args.epochs, args.patience,
-            device
+            device,
+            ctx_sample_mode=args.ctx_sample_mode,
         )
         
         results[topology] = best_mae
@@ -607,39 +620,13 @@ def main(args):
     
     print(f"{'='*60}\n")
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train one ANP model per sensor topology")
-    parser.add_argument(
-        '--data-dir', 
-        type=str, 
-        required=True, 
-        help="Path to processed data directory (e.g., data/data_processed_topologies_low_variance)"
-    )
-    parser.add_argument(
-        '--result-dir', 
-        type=str, 
-        default='./results/ANP_topologies/low_variance', 
-        help="Path to save results"
-    )
-    parser.add_argument(
-        '--batch-size', 
-        type=int, 
-        default=8, 
-        help="Batch size for training"
-    )
-    parser.add_argument(
-        '--epochs', 
-        type=int, 
-        default=5000, 
-        help="Number of training epochs"
-    )
-    parser.add_argument(
-        '--patience', 
-        type=int, 
-        default=200, 
-        help="Early stopping patience"
-    )
-    
+    parser.add_argument('--data-dir',type=str,required=True,help="Path to processed data directory (e.g., data/data_processed_topologies_low_variance)")
+    parser.add_argument('--result-dir',type=str,default='./results/ANP_topologies/low_variance',help="Path to save results")
+    parser.add_argument('--batch-size',type=int,default=8,help="Batch size for training")
+    parser.add_argument('--epochs',type=int,default=10000,help="Number of training epochs")
+    parser.add_argument('--patience',type=int,default=500,help="Early stopping patience")
+    parser.add_argument('--ctx-sample-mode',type=str,default='first',choices=['random', 'first'],help="Context sampling: random or first (ordered)")
     args = parser.parse_args()
     main(args)
