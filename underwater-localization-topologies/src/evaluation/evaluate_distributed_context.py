@@ -12,9 +12,24 @@ Idea:
 Use:
     python evaluate_distributed_context.py \
   --data_dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-  --anp_result_dir /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies/low_variance \
+  --anp_result_dir /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies/low_variance/ctx_random \
   --output_dir /home/fernando/tesis/underwater-localization-topologies/results/eval_distributed_context \
   --topologies aligned,ellipsoidal,random \
+  --ctx_sample_mode random \
+  --context_percent 30 \
+  --n_nodes 10 \
+  --ctx_split_mode round_robin \
+  --methods centralized,single_node,poe_fusion,gpoe_fusion,moe_fusion,consensus_poe \
+  --consensus_rounds 5 \
+  --consensus_graph ring \
+  --mc_samples 1
+
+  python evaluate_distributed_context.py \
+  --data_dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+  --anp_result_dir /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies/low_variance/ctx_random \
+  --output_dir /home/fernando/tesis/underwater-localization-topologies/results/eval_distributed_context \
+  --topologies aligned,ellipsoidal,random \
+  --ctx_sample_mode first \
   --context_percent 30 \
   --n_nodes 10 \
   --ctx_split_mode round_robin \
@@ -159,7 +174,7 @@ class DistributedContextEvaluator:
         total_points: int,
         n_context: int,
         g: torch.Generator,
-        mode: str = "random",
+        mode: str = "first",
     ) -> torch.Tensor:
         if mode == "first":
             return torch.arange(n_context, device=self.device)
