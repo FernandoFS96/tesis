@@ -22,8 +22,9 @@ Use:
 python train_anp_topologies.py \
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
     --batch-size 8 \
-    --epochs 5000 \
-    --patience 300
+    --epochs 10000 \
+    --ctx-sample-mode random \
+    --patience 500
 '''
 
 def compute_y_stats(train_data):
