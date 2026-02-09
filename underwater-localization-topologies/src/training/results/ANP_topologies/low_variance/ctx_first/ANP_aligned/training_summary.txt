@@ -1,0 +1,21 @@
+ANP Training Summary - Topology: aligned
+==================================================
+Training samples: 420 trajectories
+Validation samples: 120 trajectories
+Best validation MAE: 26.090520
+Final epoch: 2129
+Early stopping counter: 500/500
+Training time: 122.75 minutes
+
+Diagnostics (last epoch):
+  Train NLL: -2.223131
+  Train NLL (non-ctx): -2.052015
+  Train KL: 0.000016
+  Beta: 1.000
+  Pred var (norm) min/mean/max: 1.000e-03 / 2.678e-03 / 1.987e-01
+
+Diagnostics (best/typical):
+  Min train var_mean: 1.030e-03
+  Max train var_mean: 3.118e+00
+  Min val var_mean:   1.035e-03
+  Max val var_mean:   3.481e+00

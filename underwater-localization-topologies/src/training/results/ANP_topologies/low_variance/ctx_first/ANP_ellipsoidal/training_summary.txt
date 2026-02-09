@@ -1,0 +1,21 @@
+ANP Training Summary - Topology: ellipsoidal
+==================================================
+Training samples: 420 trajectories
+Validation samples: 120 trajectories
+Best validation MAE: 8.861820
+Final epoch: 3361
+Early stopping counter: 500/500
+Training time: 180.56 minutes
+
+Diagnostics (last epoch):
+  Train NLL: -2.466221
+  Train NLL (non-ctx): -2.446697
+  Train KL: 0.000001
+  Beta: 1.000
+  Pred var (norm) min/mean/max: 1.000e-03 / 1.000e-03 / 1.002e-03
+
+Diagnostics (best/typical):
+  Min train var_mean: 1.000e-03
+  Max train var_mean: 1.915e+00
+  Min val var_mean:   1.000e-03
+  Max val var_mean:   2.112e+00

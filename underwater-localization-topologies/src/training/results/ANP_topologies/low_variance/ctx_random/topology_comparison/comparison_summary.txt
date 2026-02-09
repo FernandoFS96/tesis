@@ -1,0 +1,13 @@
+ANP Performance Comparison Across Topologies
+============================================================
+
+Validation MAE Results:
+------------------------------
+1. ellipsoidal    : 4.919370
+2. random         : 5.005497
+3. aligned        : 5.482021
+
+------------------------------
+Best topology: ellipsoidal (MAE: 4.919370)
+Performance difference: 0.562651
+Relative improvement: 10.26%
