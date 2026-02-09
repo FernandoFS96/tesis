@@ -22,7 +22,7 @@ Use:
 python train_anp_topologies.py \
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
     --batch-size 8 \
-    --epochs 10000 \
+    --epochs 5000 \
     --ctx-sample-mode random \
     --patience 500
 '''
