@@ -23,7 +23,7 @@ python train_anp_topologies.py \
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
     --batch-size 8 \
     --epochs 5000 \
-    --ctx-sample-mode random \
+    --ctx-sample-mode first \
     --patience 500
 '''
 
@@ -39,7 +39,7 @@ def kl_beta(epoch, warmup_epochs=500):
     return min(1.0, float(epoch) / float(max(1, warmup_epochs)))
 
 
-def sample_context_indices(total_points, context_size, mode="random", device="cpu", generator=None):
+def sample_context_indices(total_points, context_size, mode="first", device="cpu", generator=None):
     if mode == "first":
         return torch.arange(context_size, device=device)
     if mode == "random":
@@ -159,7 +159,7 @@ def plot_anp_diagnostics(save_dir,
 
 def train_anp_topology(train_data, val_data, save_dir, topology_name, 
                        batch_size=8, epochs=5000, patience=200, device='cuda',
-                       ctx_sample_mode="random"):
+                       ctx_sample_mode="first"):
     """Train a single ANP model for a topology using all theta values"""
     os.makedirs(save_dir, exist_ok=True)
     
@@ -179,7 +179,7 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
 
     # Initialize model
     model = LatentModel(num_hidden=128, input_dim=input_dim, output_dim=output_dim).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=8e-5, weight_decay=1e-4)
 
     # Data loaders
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
@@ -279,10 +279,6 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
                                 + 0.5 * ((target_y - y_pred_mean_norm) ** 2) / y_pred_var_norm
                 train_nll_nonctx += nll_pointwise[:, non_ctx_mask, :].mean().item()
 
-            # MAE in original scale, ONLY on non-context points
-            #non_ctx_mask = torch.ones(total_points, dtype=torch.bool, device=device)
-            #non_ctx_mask[context_indices] = False
-
             #mae = F.l1_loss(y_pred_mean, target_y, reduction='mean').item()
             y_pred_mean = y_pred_mean_norm * y_std + y_mean
             mae = F.l1_loss(y_pred_mean[:, non_ctx_mask, :], y_batch_raw[:, non_ctx_mask, :], reduction='mean').item()
@@ -312,7 +308,7 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
 
         # Validation phase
         g = torch.Generator(device=device) # deterministic context selection (same aleatory numbers each epoch -> stable val)
-        g.manual_seed(0)
+        g.manual_seed(1)
         model.eval()
         val_loss, val_mae = 0.0, 0.0
         val_nll, val_kl = 0.0, 0.0
@@ -325,21 +321,6 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
                 total_points = x_batch.size(1)
                 y_batch_raw = y_batch
                 y_batch_norm = (y_batch - y_mean) / y_std
-
-                #min_context = max(1, int(0.05 * total_points))
-                #max_context = min(int(0.90 * total_points), total_points - 1)
-                #if max_context > min_context:
-                #    context_size = torch.randint(min_context, max_context, (1,)).item()
-                #else:
-                #    context_size = min_context
-
-                #context_indices = torch.arange(context_size)
-                #target_indices = torch.arange(x_batch.size(1))
-
-                #context_x = x_batch[:, context_indices, :]
-                #context_y = y_batch[:, context_indices, :]
-                #target_x = x_batch[:, target_indices, :]
-                #target_y = y_batch[:, target_indices, :]
 
                 batch_loss = 0.0
                 batch_mae  = 0.0
@@ -380,19 +361,15 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
                                     + 0.5 * ((target_y - y_pred_mean_norm) ** 2) / y_pred_var_norm
                     val_nll_nonctx += nll_pointwise[:, non_ctx_mask, :].mean().item()
 
-
-                #y_pred_mean, _, loss, _, _ = model(context_x, context_y, target_x, target_y)
-                #mae = F.l1_loss(y_pred_mean, target_y, reduction='mean').item()
-                #val_loss += loss.item()
-                #val_mae += mae
+                # Average over different context fractions
                 val_loss += (batch_loss / len(val_fracs))
                 val_mae  += (batch_mae  / len(val_fracs))
-
+        # Average over batches
         val_loss /= len(val_loader)
         val_mae /= len(val_loader)
         val_loss_list.append(val_loss)
         val_mae_list.append(val_mae)
-
+        # Average diagnostics over batches and context fractions
         den = len(val_loader) * len(val_fracs)
         val_nll /= den
         val_kl  /= den
@@ -400,7 +377,7 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
         val_var_mean /= den
         val_var_max  /= den
         val_nll_nonctx /= den
-
+        # Store diagnostics
         val_nll_list.append(val_nll)
         val_kl_list.append(val_kl)
         val_var_min_list.append(val_var_min)
@@ -496,7 +473,6 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
     print(f"  Best validation MAE: {best_val_mae:.6f}")
     
     return best_val_mae
-
 
 def create_comparison_plot(results, save_dir):
     """Create comparison plot for the three topologies"""
