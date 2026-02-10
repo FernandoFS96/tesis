@@ -26,7 +26,7 @@ Use:
 
   python evaluate_distributed_context.py \
   --data_dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-  --anp_result_dir /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies/low_variance/ctx_random \
+  --anp_result_dir /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies/low_variance/ctx_first \
   --output_dir /home/fernando/tesis/underwater-localization-topologies/results/eval_distributed_context \
   --topologies aligned,ellipsoidal,random \
   --ctx_sample_mode first \
