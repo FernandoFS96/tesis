@@ -179,11 +179,11 @@ def train_anp_topology(train_data, val_data, save_dir, topology_name,
 
     # Initialize model
     model = LatentModel(num_hidden=128, input_dim=input_dim, output_dim=output_dim).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=8e-5, weight_decay=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=5e-4, weight_decay=1e-4)
 
     # Data loaders
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
 
     # Training variables
     best_val_mae = float('inf')
