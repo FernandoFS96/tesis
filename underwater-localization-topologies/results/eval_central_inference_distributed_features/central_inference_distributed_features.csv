@@ -1,4 +1,4 @@
-topology,context_percent,ctx_sample_mode,mc_samples,mae_overall,time_serial_total_s,n_trajectories,comm_features_total_kib,comm_outputs_total_kib,num_time_points,num_sensors
-aligned,30,first,1,9.767069898049037,0.5271386760141468,60,23554.6875,632.8125,201,10
-ellipsoidal,30,first,1,7.05519861181577,0.31189467309741303,60,23554.6875,632.8125,201,10
-random,30,first,1,5.174075945218404,0.3360801349626854,60,23554.6875,632.8125,201,10
+topology,context_percent,ctx_sample_mode,mc_samples,mae_centralized_direct,mae_central_from_recon,time_direct_total_s,time_recon_total_s,recon_max_abs_diff,n_trajectories,comm_features_total_kib,comm_outputs_total_kib,num_time_points,num_sensors
+aligned,30,first,1,9.818260757128398,9.781803687413534,0.4951724440907128,0.30325479205930606,0.0,60,23554.6875,632.8125,201,10
+ellipsoidal,30,first,1,7.033445342381795,6.916993623971939,0.3218644530134043,0.3051205089868745,0.0,60,23554.6875,632.8125,201,10
+random,30,first,1,5.174655485153198,5.217803680896759,0.3197342950006714,0.30762562302697916,0.0,60,23554.6875,632.8125,201,10
