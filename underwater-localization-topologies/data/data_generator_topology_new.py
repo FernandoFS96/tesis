@@ -8,11 +8,11 @@ import argparse
 
 '''
 Use:
-    python data_generator_topology_new.py
-    --channel_option_name 0.1 0.2 0.3 0.4
-    --n_traj 150
-    --snr 10
-    --rep 1
+    python data_generator_topology_new.py \
+        --channel_options "0.1,0.2,0.3,0.4" \
+        --n_traj 150 \
+        --snr 10 \
+        --rep 1
 
 '''
 
@@ -184,7 +184,7 @@ class channel():
             max_y = 0.5 * span_y
             # Si quieres mantener la "mitad" en y, puedes forzar max_y = max_x/2
             max_y = max(max_y, min_span / 2.0)
-            rng = np.random.default_rng(18)  # reproducibilidad
+            rng = np.random.default_rng(10)  # reproducibilidad
             x = rng.uniform(cx - max_x, cx + max_x, n_sensors)
             y = rng.uniform(cy - max_y, cy + max_y, n_sensors)
 
@@ -806,8 +806,8 @@ def process(channel_options, snr, rep, nop=-1, n_traj_override=None):
     topologies = ['ellipsoidal', 'random', 'aligned']
     
     for option_idx, option in enumerate(tqdm(channel_options)):
-        np.random.seed(18)
-        print(f"\n--- Processing Channel Option: {option} ---")
+        np.random.seed(11)
+        print(f"\n\n --- Processing Channel Option: {option} ---")
         
         # Generate parameters for this option
         params = generate_params(options=option)
@@ -824,7 +824,7 @@ def process(channel_options, snr, rep, nop=-1, n_traj_override=None):
         
         # Process each topology with the same trajectories
         for topology in topologies:
-            print(f"  Processing topology: {topology}")
+            print(f"\nProcessing topology: {topology}")
             
             # Create channel with specific topology and shared trajectories
             c = channel(load=False, params=params, number_of_processes=nop, 
@@ -879,6 +879,6 @@ if __name__ == '__main__':
         channel_options = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
     
     # Set random seed for reproducibility
-    np.random.seed(18)
+    np.random.seed(11)
 
     process(channel_options, snr=args.snr, rep=args.rep, nop=args.nop, n_traj_override=args.n_traj)
