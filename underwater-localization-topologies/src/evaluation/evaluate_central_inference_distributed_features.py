@@ -409,13 +409,13 @@ def main():
         comm_features_kib = (comm_features_floats_per_traj * 4 * n_traj) / 1024.0
         comm_outputs_kib = (comm_outputs_floats_per_traj * 4 * n_traj) / 1024.0
 
-        print("\n" + "="*95)
+        print("\n" + "="*85)
         print(f"Topology {topo} | ctx={args.context_percent}% ({args.ctx_sample_mode}) | central inference comparison")
-        print(f"  Centralized direct         MAE={mae_direct:8.4f}  time(serial)={total_time_direct:7.3f}s")
+        print(f"  Centralized direct           MAE={mae_direct:8.4f} time(serial)={total_time_direct:7.3f}s")
         print(f"  Central from recon(features) MAE={mae_recon:8.4f}  time(serial)={total_time_recon:7.3f}s")
         print(f"  Recon max|x-x_recon| = {recon_max:.3e}")
-        print(f"  comm(features)={comm_features_kib:,.1f} KiB   comm(outputs mu,var)={comm_outputs_kib:,.1f} KiB")
-        print("="*95)
+        print(f"  comm(features)={comm_features_kib:,.1f} KiB comm(outputs mu,var)={comm_outputs_kib:,.1f} KiB")
+        print("="*85)
 
         rows.append({
             "topology": topo,

@@ -8,7 +8,12 @@ import argparse
 
 '''
 Use:
-    python data_generator_topology.py
+    python data_generator_topology_new.py
+    --channel_option_name 0.1 0.2 0.3 0.4
+    --n_traj 150
+    --snr 10
+    --rep 1
+
 '''
 
 def range_m(init, end, step):  # Matlab-like range, including end!
@@ -646,6 +651,7 @@ def plot_validation(channels_dict, option_idx=0, n_samples=10, seed=None):
     Genera n_samples imágenes de comparación de topologías
     para trayectorias elegidas aleatoriamente.
     Cada imagen muestra la MISMA trayectoria en las 3 topologías.
+    Se muestra el numero de cada sensor y se marcan claramente el punto de inicio (verde) y el punto final (negro) de la trayectoria.
     """
     import os
     import numpy as np
@@ -704,8 +710,10 @@ def plot_validation(channels_dict, option_idx=0, n_samples=10, seed=None):
             ax.plot(traj[0, 0], traj[1, 0], 'go', markersize=10)
             # punto final
             ax.plot(traj[0, -1], traj[1, -1], 'ko', markersize=10)
-            # sensores
-            ax.plot(sensors[0, :], sensors[1, :], 'ro', markeredgecolor='black', markersize=10)
+            # sensores junto con su número
+            for i, (x, y) in enumerate(zip(sensors[0, :], sensors[1, :])):
+                ax.text(x, y, str(i), fontsize=9, ha='center', va='center', color='white', weight='bold')
+                ax.plot(x, y, 'ro', markeredgecolor='black', markersize=10)
 
             ax.set_title(f"{title}\n(traj {trajectory_idx})", fontsize=16)
             ax.set_xlim([x_min, x_max])
@@ -857,10 +865,8 @@ def parse_float_list(s):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Generar datos de canal (topologías).")
-    parser.add_argument('--channel_options', type=str, default="0.0,0.1,0.2,0.3,0.4,0.5",
-                        help="Lista de opciones separadas por coma (ej: '0.0,0.1,0.2').")
-    #parser.add_argument('--dopp_params', type=str, default=None,
-    #                    help="Lista de floats separada por coma o espacios. Puede ser 10 valores (todo Dopp_params) o 4 valores (thetas -> índices 1,3,5,7).")
+    parser.add_argument('--channel_options', type=str, default="0.0,0.1,0.2,0.3,0.4,0.5", help="Lista de opciones separadas por coma (ej: '0.0,0.1,0.2').")
+
     parser.add_argument('--n_traj', type=int, default=150, help="Número de trayectorias (sobrescribe params['n_traj']).")
     parser.add_argument('--snr', type=float, default=10, help="SNR para filtrado.")
     parser.add_argument('--rep', type=int, default=1, help="Repeticiones.")
