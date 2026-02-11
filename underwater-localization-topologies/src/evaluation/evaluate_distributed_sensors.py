@@ -4,20 +4,20 @@ Distributed deployment (node = sensor) evaluation for ANP (deployment-time only,
 
 Key change vs evaluate_distributed_context.py:
 - Nodes are now sensors (S nodes). Each node sees only its sensor features.
-- We DO NOT change input dimension. We mask all other sensors to zero so the ANP checkpoint remains compatible.
-- Context selection still happens over time indices (first/random), but is shared across sensors unless you change it.
+- I DO NOT change input dimension. I mask all other sensors to zero so the ANP checkpoint remains compatible.
+- Context selection still happens over time indices (first/random), but is shared across sensors unless it is changed.
 
-Assumptions (consistent with your preprocessing):
+Assumptions:
 - X is flattened with shape (T, num_time_points*num_sensors) where sensor features are interleaved:
   for sensor s in [0..S-1], its slice is X[:, s::S] of length num_time_points.
 
 Usage example:
 python evaluate_distributed_sensors.py \
-  --data_dir /path/to/data_processed_topologies_low_variance \
-  --anp_result_dir /path/to/results/ANP_topologies/low_variance \
-  --output_dir /path/to/results/eval_distributed_sensors \
+  --data_dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+  --anp_result_dir /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies/low_variance/ctx_first \
+  --output_dir /home/fernando/tesis/underwater-localization-topologies/results/eval_distributed_sensors \
   --topologies aligned,ellipsoidal,random \
-  --ctx_sample_mode random \
+  --ctx_sample_mode first \
   --context_percent 30 \
   --num_time_points 201 \
   --num_sensors 10 \
@@ -205,12 +205,29 @@ class DistributedSensorEvaluator:
         with Timer(self.device) as tmr:
             for _ in range(max(1, mc_samples)):
                 out = model(cx, cy, tx)
-                if isinstance(out, (tuple, list)) and len(out) == 2:
-                    m, v = out
+
+                # Case 1: model returns tuple/list (often includes extra outputs like KL)
+                if isinstance(out, (tuple, list)):
+                    # If it's (mean, var, *extras)
+                    if len(out) >= 2 and torch.is_tensor(out[0]) and torch.is_tensor(out[1]):
+                        m, v = out[0], out[1]
+                    # If it's ((mean, var), *extras)
+                    elif len(out) >= 1 and isinstance(out[0], (tuple, list)) and len(out[0]) >= 2:
+                        m, v = out[0][0], out[0][1]
+                    else:
+                        raise TypeError(f"Unexpected tuple output structure from model: type={type(out)}, len={len(out)}")
+
+                # Case 2: model returns dict-like
+                elif isinstance(out, dict):
+                    m = out.get("mean", None)
+                    v = out.get("var", None)
+                    if m is None or v is None:
+                        raise KeyError(f"Model returned dict without 'mean'/'var' keys: {out.keys()}")
+
                 else:
-                    # Fallback if model returns a dict or other
-                    m = out["mean"]
-                    v = out["var"]
+                    raise TypeError(f"Unexpected model output type: {type(out)}")
+
+                # Validate shapes
                 means.append(m)
                 vars_.append(v)
         mean = torch.stack(means, dim=0).mean(dim=0)
