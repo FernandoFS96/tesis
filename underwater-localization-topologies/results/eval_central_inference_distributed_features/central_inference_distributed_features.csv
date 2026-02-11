@@ -1,0 +1,4 @@
+topology,context_percent,ctx_sample_mode,mc_samples,mae_overall,time_serial_total_s,n_trajectories,comm_features_total_kib,comm_outputs_total_kib,num_time_points,num_sensors
+aligned,30,first,1,9.767069898049037,0.5271386760141468,60,23554.6875,632.8125,201,10
+ellipsoidal,30,first,1,7.05519861181577,0.31189467309741303,60,23554.6875,632.8125,201,10
+random,30,first,1,5.174075945218404,0.3360801349626854,60,23554.6875,632.8125,201,10
