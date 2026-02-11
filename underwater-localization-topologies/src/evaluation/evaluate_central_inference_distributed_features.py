@@ -8,8 +8,7 @@ A fusion center reconstructs x_full(t) in R^(num_time_points*num_sensors) and ru
 Also reports:
 - MAE (global) on non-context targets
 - comm_features: KiB to send local features to the fusion center
-- comm_outputs: KiB to send predictive params (mu,var) if you wanted output-level fusion
-  (useful to compare comm budgets)
+- comm_outputs: KiB to send predictive params (mu,var) (useful to compare comm budgets)
 
 This matches an edge acquisition + central analytics architecture.
 
@@ -131,7 +130,7 @@ def load_x_sensor_means(data_dir: Path, topology: str, num_time_points: int, num
     Dx = X.shape[1]
     assert Dx == num_time_points * num_sensors, (Dx, num_time_points * num_sensors)
 
-    # Reshape to (N*T, P, S) using the same interleaving you verified
+    # Reshape to (N*T, P, S)
     X3 = X.reshape(X.shape[0], num_time_points, num_sensors)  # (N*T, P, S)
 
     # Mean per sensor -> (P,S)
@@ -338,7 +337,7 @@ def main():
         comm_features_floats_per_traj = args.num_sensors * T * args.num_time_points
 
         # comm: sending outputs (mu,var) from S sensors (if doing output-level fusion)
-        # per trajectory: (S-1) * 2 * T * Dy floats to a fusion center (same convention as your old script)
+        # per trajectory: (S-1) * 2 * T * Dy floats to a fusion center
         comm_outputs_floats_per_traj = (args.num_sensors - 1) * 2 * T * Dy
 
         for theta in theta_values:
