@@ -39,6 +39,21 @@ Use:
   --sensor_importance \
   --fill_mode train_mean
 
+  With Permutation importance por sensor (PFI):
+    python evaluate_central_inference_distributed_features.py \
+  --data_dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+  --anp_result_dir /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies/low_variance/ctx_first \
+  --output_dir /home/fernando/tesis/underwater-localization-topologies/results/eval_central_inference_distributed_features \
+  --topologies aligned,ellipsoidal,random \
+  --context_percent 30 \
+  --ctx_sample_mode first \
+  --num_time_points 201 \
+  --num_sensors 10 \
+  --mc_samples 1 \
+  --perm_importance \
+  --perm_repeats 5 \
+  --perm_mode time \
+  --perm_seed 0
 """
 
 import argparse
@@ -226,6 +241,14 @@ def reconstruct_x_from_sensors(x_parts: List[torch.Tensor], S: int) -> torch.Ten
     X = X.permute(1, 2, 3, 0).contiguous()   # (1,T,P,S)
     return X.view(X.shape[0], X.shape[1], -1)  # (1,T,P*S)
 
+def permute_sensor_block_time(x_block: torch.Tensor, gen: torch.Generator) -> torch.Tensor:
+    """
+    x_block: (1, T, P). Returns a copy with time dimension permuted.
+    Uses the same permutation for all P (preserves within-time structure).
+    """
+    T = x_block.shape[1]
+    perm = torch.randperm(T, generator=gen, device=x_block.device)
+    return x_block[:, perm, :].contiguous()
 
 def main():
     p = argparse.ArgumentParser()
@@ -244,11 +267,13 @@ def main():
     p.add_argument("--seed_eval", type=int, default=0)
     p.add_argument("--max_traj_per_theta", type=int, default=-1)
 
-    p.add_argument("--sensor_importance", action="store_true",
-               help="Run LOSO+LISO sensor ablation and save per-sensor MAE table.")
-    p.add_argument("--fill_mode", type=str, default="train_mean", choices=["train_mean", "zero"],
-                   help="How to fill missing sensors for LOSO/LISO.")
+    p.add_argument("--sensor_importance", action="store_true", help="Run LOSO+LISO sensor ablation and save per-sensor MAE table.")
+    p.add_argument("--fill_mode", type=str, default="train_mean", choices=["train_mean", "zero"], help="How to fill missing sensors for LOSO/LISO.")
 
+    p.add_argument("--perm_importance", action="store_true", help="Run permutation feature importance (PFI) per sensor and save table.")
+    p.add_argument("--perm_repeats", type=int, default=5, help="Number of permutations per sensor (stabilizes estimate).")
+    p.add_argument("--perm_mode", type=str, default="time", choices=["time"], help="Permutation mode. 'time' shuffles the sensor block along trajectory time.")
+    p.add_argument("--perm_seed", type=int, default=0, help="Base seed for permutation importance.")
 
     p.add_argument("--device", type=str, default=None)
     args = p.parse_args()
@@ -265,6 +290,11 @@ def main():
 
     for topo in topologies:
         theta_groups, theta_values = load_topology_test(args.data_dir, topo)
+
+        total = sum(len(theta_groups[t]) for t in theta_values)
+        print("TEST trajectories total =", total)
+        print("Per-theta counts:", {t: len(theta_groups[t]) for t in theta_values})
+
         x0, y0 = theta_groups[theta_values[0]][0]
         T = x0.shape[0]
         Dx = x0.shape[1]
@@ -294,6 +324,10 @@ def main():
 
         # Base (all sensors) MAE list
         mae_all_list = []
+
+        # Para PFI: lista de deltas por sensor (cada una acumula muchas trayectorias * repeats)
+        pfi_delta_lists = {s: [] for s in range(args.num_sensors)}
+        pfi_mae_lists   = {s: [] for s in range(args.num_sensors)}  # opcional: MAE permutado bruto
 
         # LOSO/LISO accumulators per sensor
         loso_mae_lists = {s: [] for s in range(args.num_sensors)}
@@ -399,6 +433,33 @@ def main():
                         mae_liso = F.l1_loss(pred_liso[:, non_ctx_mask, :], y[:, non_ctx_mask, :], reduction="none").mean().item()
                         liso_mae_lists[s].append(mae_liso)
 
+                if args.perm_importance:
+                    # generador reproducible por trayectoria
+                    base_gen = torch.Generator(device=device)
+                    base_gen.manual_seed(args.perm_seed)
+
+                    for s in range(args.num_sensors):
+                        for r in range(args.perm_repeats):
+                            # Copia lista de partes
+                            x_parts_perm = [p.clone() for p in x_parts_all]
+
+                            # Permuta SOLO el bloque del sensor s
+                            # Usamos una semilla distinta por (sensor, repeat) para evitar perm iguales
+                            gen_sr = torch.Generator(device=device)
+                            gen_sr.manual_seed(args.perm_seed + 1000*s + 10*r)
+
+                            x_parts_perm[s] = permute_sensor_block_time(x_parts_perm[s], gen_sr)
+
+                            x_perm = reconstruct_x_from_sensors(x_parts_perm, args.num_sensors)
+
+                            cx_p = x_perm[:, ctx_idx, :]
+                            cy_p = y_norm[:, ctx_idx, :]
+                            m_p, v_p, _ = anp_predict(model, cx_p, cy_p, x_perm, args.mc_samples, device)
+                            pred_p = denormalize_y(m_p, y_mean, y_std)
+
+                            mae_p = F.l1_loss(pred_p[:, non_ctx_mask, :], y[:, non_ctx_mask, :], reduction="none").mean().item()
+                            pfi_mae_lists[s].append(mae_p)
+                            pfi_delta_lists[s].append(mae_p - mae_all)
 
         mae_direct = float(np.mean(total_mae_direct)) if total_mae_direct else float("nan")
         mae_recon  = float(np.mean(total_mae_recon))  if total_mae_recon  else float("nan")
@@ -460,6 +521,35 @@ def main():
         out_csv = outdir / f"sensor_importance_topology_{topo}.csv"
         df_imp.to_csv(out_csv, index=False)
         print(f"\nSaved sensor importance table: {out_csv}\n")
+
+    if args.perm_importance:
+        mae_all_mean = float(np.mean(mae_all_list)) if mae_all_list else float("nan")
+
+        rows_pfi = []
+        for s in range(args.num_sensors):
+            deltas = np.array(pfi_delta_lists[s], dtype=float)
+            maes   = np.array(pfi_mae_lists[s], dtype=float)
+
+            rows_pfi.append({
+                "topology": topo,
+                "sensor": s,
+                "ctx_percent": args.context_percent,
+                "ctx_sample_mode": args.ctx_sample_mode,
+                "mc_samples": args.mc_samples,
+                "perm_repeats": args.perm_repeats,
+                "perm_mode": args.perm_mode,
+                "mae_all": mae_all_mean,
+                "mae_perm_mean": float(np.mean(maes)) if len(maes) else float("nan"),
+                "delta_mae_mean": float(np.mean(deltas)) if len(deltas) else float("nan"),
+                "delta_mae_std": float(np.std(deltas)) if len(deltas) else float("nan"),
+                "n_eval": int(len(deltas)),
+            })
+
+        df_pfi = pd.DataFrame(rows_pfi)
+        out_csv = outdir / f"sensor_permutation_importance_topology_{topo}.csv"
+        df_pfi.to_csv(out_csv, index=False)
+        print(f"\nSaved PFI table: {out_csv}\n")
+
     else:
         df = pd.DataFrame(rows)
         csv_path = outdir / "central_inference_distributed_features.csv"
