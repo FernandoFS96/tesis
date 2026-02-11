@@ -11,7 +11,34 @@ Also reports:
 - comm_outputs: KiB to send predictive params (mu,var) if you wanted output-level fusion
   (useful to compare comm budgets)
 
-This matches an edge acquisition + central analytics architecture. :contentReference[oaicite:1]{index=1}
+This matches an edge acquisition + central analytics architecture.
+
+Use:
+    python evaluate_central_inference_distributed_features.py \
+  --data_dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+  --anp_result_dir /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies/low_variance/ctx_first \
+  --output_dir /home/fernando/tesis/underwater-localization-topologies/results/eval_central_inference_distributed_features \
+  --topologies aligned,ellipsoidal,random \
+  --context_percent 30 \
+  --ctx_sample_mode first \
+  --num_time_points 201 \
+  --num_sensors 10 \
+  --mc_samples 1
+
+  With sensor importance ablation (LOSO/LISO):
+    python evaluate_central_inference_distributed_features.py \
+  --data_dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+  --anp_result_dir /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies/low_variance/ctx_first \
+  --output_dir /home/fernando/tesis/underwater-localization-topologies/results/eval_central_inference_distributed_features \
+  --topologies aligned,ellipsoidal,random \
+  --context_percent 30 \
+  --ctx_sample_mode first \
+  --num_time_points 201 \
+  --num_sensors 10 \
+  --mc_samples 1 \
+  --sensor_importance \
+  --fill_mode train_mean
+
 """
 
 import argparse
@@ -74,6 +101,31 @@ def load_y_stats(data_dir: Path, topology: str, device: torch.device):
     return y_mean, y_std
 
 
+def load_x_sensor_means(data_dir: Path, topology: str, num_time_points: int, num_sensors: int, device: torch.device):
+    """
+    Returns x_mean_parts: list length S, each tensor shape (1,T,P) BUT we'll store per-feature mean (P,)
+    computed from train_data.pkl, assuming interleaved layout in X_flat: s::S.
+    """
+    topo_dir = data_dir / f"topology_{topology}"
+    train_path = topo_dir / "train_data.pkl"
+    with open(train_path, "rb") as f:
+        train_data = pickle.load(f)
+
+    # Concatenate all trajectory points: (N*T, Dx)
+    X = np.concatenate([x for x, _ in train_data], axis=0)  # (N*T, Dx)
+    Dx = X.shape[1]
+    assert Dx == num_time_points * num_sensors, (Dx, num_time_points * num_sensors)
+
+    # Reshape to (N*T, P, S) using the same interleaving you verified
+    X3 = X.reshape(X.shape[0], num_time_points, num_sensors)  # (N*T, P, S)
+
+    # Mean per sensor -> (P,S)
+    mean_PS = X3.mean(axis=0)  # (P,S)
+
+    # Convert to list of tensors, each (P,)
+    x_means = [torch.tensor(mean_PS[:, s], dtype=torch.float32, device=device) for s in range(num_sensors)]
+    return x_means
+
 def normalize_y(y, y_mean, y_std):
     return (y - y_mean.view(1, 1, -1)) / y_std.view(1, 1, -1)
 
@@ -130,6 +182,39 @@ def extract_sensor_features(x_full: torch.Tensor, s: int, S: int) -> torch.Tenso
     """
     return x_full[..., s::S]
 
+def build_x_parts_with_mask(
+    x_full: torch.Tensor,                 # (1,T,Dx)
+    active_sensors: List[int],
+    num_time_points: int,
+    num_sensors: int,
+    device: torch.device,
+    fill_mode: str,
+    x_means: Optional[List[torch.Tensor]],  # list of (P,)
+) -> List[torch.Tensor]:
+    """
+    Returns x_parts list length S with shape (1,T,P) each.
+    For inactive sensors:
+      - fill_mode='train_mean': fill with per-sensor mean over train (broadcast to (1,T,P))
+      - fill_mode='zero': fill with zeros
+    """
+    T = x_full.shape[1]
+    parts = []
+    active = set(active_sensors)
+
+    for s in range(num_sensors):
+        if s in active:
+            parts.append(extract_sensor_features(x_full, s, num_sensors))  # (1,T,P)
+        else:
+            if fill_mode == "zero":
+                parts.append(torch.zeros((1, T, num_time_points), dtype=torch.float32, device=device))
+            elif fill_mode == "train_mean":
+                assert x_means is not None
+                mu = x_means[s].view(1, 1, num_time_points).expand(1, T, num_time_points)
+                parts.append(mu.clone())
+            else:
+                raise ValueError(fill_mode)
+
+    return parts
 
 def reconstruct_x_from_sensors(x_parts: List[torch.Tensor], S: int) -> torch.Tensor:
     """
@@ -159,6 +244,12 @@ def main():
     p.add_argument("--seed_eval", type=int, default=0)
     p.add_argument("--max_traj_per_theta", type=int, default=-1)
 
+    p.add_argument("--sensor_importance", action="store_true",
+               help="Run LOSO+LISO sensor ablation and save per-sensor MAE table.")
+    p.add_argument("--fill_mode", type=str, default="train_mean", choices=["train_mean", "zero"],
+                   help="How to fill missing sensors for LOSO/LISO.")
+
+
     p.add_argument("--device", type=str, default=None)
     args = p.parse_args()
 
@@ -186,10 +277,27 @@ def main():
         model = load_model(args.anp_result_dir, topo, Dx, Dy, device)
         y_mean, y_std = load_y_stats(args.data_dir, topo, device)
 
+        # Means per sensor for filling missing sensors in LOSO/LISO
+        x_means = None
+        if args.sensor_importance and args.fill_mode == "train_mean":
+            x_means = load_x_sensor_means(args.data_dir, topo, args.num_time_points, args.num_sensors, device)
+
         n_ctx = max(1, min(int((args.context_percent / 100.0) * T), T))
 
         total_mae = []
+        total_mae_direct = []
+        total_mae_recon = []
+        recon_errs = []
+        total_time_direct = 0.0
+        total_time_recon = 0.0
         total_time = 0.0
+
+        # Base (all sensors) MAE list
+        mae_all_list = []
+
+        # LOSO/LISO accumulators per sensor
+        loso_mae_lists = {s: [] for s in range(args.num_sensors)}
+        liso_mae_lists = {s: [] for s in range(args.num_sensors)}
 
         # comm: sending features (float32) from S sensors to fusion center for all T points
         # per trajectory: S * T * num_time_points floats
@@ -214,31 +322,98 @@ def main():
                 # fusion center reconstructs x_full_recon
                 x_full_recon = reconstruct_x_from_sensors(x_parts, args.num_sensors)
 
+                # (sanity) reconstruction error should be ~0
+                recon_err = torch.max(torch.abs(x_full - x_full_recon)).item()
+                if recon_err > 1e-4:
+                    raise ValueError(f"Reconstruction error too high: {recon_err}")
+
                 # context selection (same indices for all sensors and central)
                 ctx_idx = sample_context_indices(T, n_ctx, args.ctx_sample_mode, gen, device)
                 non_ctx_mask = torch.ones(T, dtype=torch.bool, device=device)
                 non_ctx_mask[ctx_idx] = False
 
-                cx = x_full_recon[:, ctx_idx, :]
+                # ---- A) Centralized direct (original x_full) ----
+                cx0 = x_full[:, ctx_idx, :]
+                cy0 = y_norm[:, ctx_idx, :]
+                mean0, var0, dt0 = anp_predict(model, cx0, cy0, x_full, args.mc_samples, device)
+                pred0 = denormalize_y(mean0, y_mean, y_std)
+                mae0 = F.l1_loss(pred0[:, non_ctx_mask, :], y[:, non_ctx_mask, :], reduction="none").mean().item()
+
+                # ---- B) Central inference from reconstructed features ----
+                cx1 = x_full_recon[:, ctx_idx, :]
+                cy1 = y_norm[:, ctx_idx, :]
+                mean1, var1, dt1 = anp_predict(model, cx1, cy1, x_full_recon, args.mc_samples, device)
+                pred1 = denormalize_y(mean1, y_mean, y_std)
+                mae1 = F.l1_loss(pred1[:, non_ctx_mask, :], y[:, non_ctx_mask, :], reduction="none").mean().item()
+
+                # accumulate
+                total_mae_direct.append(mae0)
+                total_mae_recon.append(mae1)
+                total_time_direct += dt0
+                total_time_recon += dt1
+                recon_errs.append(recon_err)
+
+                # baseline: all sensors present (reconstructed, but identical)
+                x_parts_all = [extract_sensor_features(x_full, s, args.num_sensors) for s in range(args.num_sensors)]
+                x_all = reconstruct_x_from_sensors(x_parts_all, args.num_sensors)
+
+                cx = x_all[:, ctx_idx, :]
                 cy = y_norm[:, ctx_idx, :]
-
-                mean_norm, var_norm, dt = anp_predict(model, cx, cy, x_full_recon, args.mc_samples, device)
-                total_time += dt
-
+                mean_norm, var_norm, _ = anp_predict(model, cx, cy, x_all, args.mc_samples, device)
                 pred = denormalize_y(mean_norm, y_mean, y_std)
-                mae = F.l1_loss(pred[:, non_ctx_mask, :], y[:, non_ctx_mask, :], reduction="none").mean().item()
-                total_mae.append(mae)
+                mae_all = F.l1_loss(pred[:, non_ctx_mask, :], y[:, non_ctx_mask, :], reduction="none").mean().item()
+                mae_all_list.append(mae_all)
 
-        mae_overall = float(np.mean(total_mae)) if total_mae else float("nan")
+                if args.sensor_importance:
+                    for s in range(args.num_sensors):
+                    
+                        # --- LOSO: all except s ---
+                        active_loso = [k for k in range(args.num_sensors) if k != s]
+                        x_parts_loso = build_x_parts_with_mask(
+                            x_full, active_loso,
+                            args.num_time_points, args.num_sensors,
+                            device, args.fill_mode, x_means
+                        )
+                        x_loso = reconstruct_x_from_sensors(x_parts_loso, args.num_sensors)
+
+                        cx_loso = x_loso[:, ctx_idx, :]
+                        cy_loso = y_norm[:, ctx_idx, :]
+                        m_loso, v_loso, _ = anp_predict(model, cx_loso, cy_loso, x_loso, args.mc_samples, device)
+                        pred_loso = denormalize_y(m_loso, y_mean, y_std)
+                        mae_loso = F.l1_loss(pred_loso[:, non_ctx_mask, :], y[:, non_ctx_mask, :], reduction="none").mean().item()
+                        loso_mae_lists[s].append(mae_loso)
+
+                        # --- LISO: only s ---
+                        active_liso = [s]
+                        x_parts_liso = build_x_parts_with_mask(
+                            x_full, active_liso,
+                            args.num_time_points, args.num_sensors,
+                            device, args.fill_mode, x_means
+                        )
+                        x_liso = reconstruct_x_from_sensors(x_parts_liso, args.num_sensors)
+
+                        cx_liso = x_liso[:, ctx_idx, :]
+                        cy_liso = y_norm[:, ctx_idx, :]
+                        m_liso, v_liso, _ = anp_predict(model, cx_liso, cy_liso, x_liso, args.mc_samples, device)
+                        pred_liso = denormalize_y(m_liso, y_mean, y_std)
+                        mae_liso = F.l1_loss(pred_liso[:, non_ctx_mask, :], y[:, non_ctx_mask, :], reduction="none").mean().item()
+                        liso_mae_lists[s].append(mae_liso)
+
+
+        mae_direct = float(np.mean(total_mae_direct)) if total_mae_direct else float("nan")
+        mae_recon  = float(np.mean(total_mae_recon))  if total_mae_recon  else float("nan")
+        recon_max  = float(np.max(recon_errs)) if recon_errs else float("nan")
 
         # total comm in KiB across all evaluated trajectories
-        n_traj = len(total_mae)
+        n_traj = len(total_mae_direct)
         comm_features_kib = (comm_features_floats_per_traj * 4 * n_traj) / 1024.0
         comm_outputs_kib = (comm_outputs_floats_per_traj * 4 * n_traj) / 1024.0
 
         print("\n" + "="*95)
-        print(f"Topology {topo} | ctx={args.context_percent}% ({args.ctx_sample_mode}) | central inference, distributed features")
-        print(f"  MAE={mae_overall:8.4f}  time(serial)={total_time:7.3f}s")
+        print(f"Topology {topo} | ctx={args.context_percent}% ({args.ctx_sample_mode}) | central inference comparison")
+        print(f"  Centralized direct         MAE={mae_direct:8.4f}  time(serial)={total_time_direct:7.3f}s")
+        print(f"  Central from recon(features) MAE={mae_recon:8.4f}  time(serial)={total_time_recon:7.3f}s")
+        print(f"  Recon max|x-x_recon| = {recon_max:.3e}")
         print(f"  comm(features)={comm_features_kib:,.1f} KiB   comm(outputs mu,var)={comm_outputs_kib:,.1f} KiB")
         print("="*95)
 
@@ -247,8 +422,11 @@ def main():
             "context_percent": args.context_percent,
             "ctx_sample_mode": args.ctx_sample_mode,
             "mc_samples": args.mc_samples,
-            "mae_overall": mae_overall,
-            "time_serial_total_s": total_time,
+            "mae_centralized_direct": mae_direct,
+            "mae_central_from_recon": mae_recon,
+            "time_direct_total_s": total_time_direct,
+            "time_recon_total_s": total_time_recon,
+            "recon_max_abs_diff": recon_max,
             "n_trajectories": n_traj,
             "comm_features_total_kib": comm_features_kib,
             "comm_outputs_total_kib": comm_outputs_kib,
@@ -257,10 +435,36 @@ def main():
         })
 
     import pandas as pd
-    df = pd.DataFrame(rows)
-    csv_path = outdir / "central_inference_distributed_features.csv"
-    df.to_csv(csv_path, index=False)
-    print(f"\nSaved CSV: {csv_path}\n")
+
+    if args.sensor_importance:
+        mae_all_mean = float(np.mean(mae_all_list)) if mae_all_list else float("nan")
+
+        table_rows = []
+        for s in range(args.num_sensors):
+            mae_loso = float(np.mean(loso_mae_lists[s])) if loso_mae_lists[s] else float("nan")
+            mae_liso = float(np.mean(liso_mae_lists[s])) if liso_mae_lists[s] else float("nan")
+            table_rows.append({
+                "topology": topo,
+                "sensor": s,
+                "fill_mode": args.fill_mode,
+                "ctx_percent": args.context_percent,
+                "ctx_sample_mode": args.ctx_sample_mode,
+                "mc_samples": args.mc_samples,
+                "mae_all": mae_all_mean,
+                "mae_loso": mae_loso,
+                "delta_mae_loso": mae_loso - mae_all_mean,
+                "mae_liso": mae_liso,
+            })
+
+        df_imp = pd.DataFrame(table_rows)
+        out_csv = outdir / f"sensor_importance_topology_{topo}.csv"
+        df_imp.to_csv(out_csv, index=False)
+        print(f"\nSaved sensor importance table: {out_csv}\n")
+    else:
+        df = pd.DataFrame(rows)
+        csv_path = outdir / "central_inference_distributed_features.csv"
+        df.to_csv(csv_path, index=False)
+        print(f"\nSaved CSV: {csv_path}\n")
 
 
 if __name__ == "__main__":
