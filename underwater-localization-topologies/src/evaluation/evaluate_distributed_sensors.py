@@ -21,7 +21,22 @@ python evaluate_distributed_sensors.py \
   --context_percent 30 \
   --num_time_points 201 \
   --num_sensors 10 \
-  --methods centralized,single_node,poe_fusion,gpoe_fusion,moe_fusion,consensus_poe \
+  --methods centralized,single_node,ci_fusion,poe_fusion,gpoe_fusion,moe_fusion,consensus_poe \
+  --single_sensor_idx 0 \
+  --consensus_rounds 5 \
+  --consensus_graph ring \
+  --mc_samples 1
+
+python evaluate_distributed_sensors.py \
+  --data_dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+  --anp_result_dir /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies/low_variance/ctx_random \
+  --output_dir /home/fernando/tesis/underwater-localization-topologies/results/eval_distributed_sensors \
+  --topologies aligned,ellipsoidal,random \
+  --ctx_sample_mode random \
+  --context_percent 30 \
+  --num_time_points 201 \
+  --num_sensors 10 \
+  --methods centralized,single_node,ci_fusion,poe_fusion,gpoe_fusion,moe_fusion,consensus_poe \
   --single_sensor_idx 0 \
   --consensus_rounds 5 \
   --consensus_graph ring \
@@ -89,6 +104,7 @@ class DistributedSensorEvaluator:
         torch.manual_seed(seed)
 
         self._y_stats_cache: Dict[str, Tuple[torch.Tensor, torch.Tensor]] = {}
+        self._x_stats_cache: Dict[str, torch.Tensor] = {}
 
     # ---- data i/o ----
     def load_topology_data(self, topology: str) -> Tuple[Dict[float, List], List[float]]:
@@ -129,6 +145,29 @@ class DistributedSensorEvaluator:
 
         self._y_stats_cache[topology] = (y_mean, y_std)
         return y_mean, y_std
+    
+    def get_x_mean(self, topology: str) -> torch.Tensor:
+        """
+        Compute per-feature mean of X from train_data.pkl for the given topology.
+        Returns: x_mean (Dx,) on self.device
+        """
+        if topology in self._x_stats_cache:
+            return self._x_stats_cache[topology]
+
+        topo_dir = self.data_dir / f"topology_{topology}"
+        train_path = topo_dir / "train_data.pkl"
+        if not train_path.exists():
+            raise FileNotFoundError(f"Missing train_data.pkl in {topo_dir}")
+
+        with open(train_path, "rb") as f:
+            train_data = pickle.load(f)
+
+        # train_data: list of (X, Y) where X is (T, Dx)
+        X = np.concatenate([x for x, _ in train_data], axis=0)  # (N*T, Dx)
+        x_mean = torch.tensor(X.mean(axis=0), dtype=torch.float32, device=self.device)
+        self._x_stats_cache[topology] = x_mean
+        return x_mean
+
 
     # ---- normalization ----
     @staticmethod
@@ -169,18 +208,21 @@ class DistributedSensorEvaluator:
             return perm[:n_context].sort().values
         raise ValueError(f"Unknown context sampling mode: {mode}")
 
-    # ---- sensor masking (keeps same Dx) ----
-    @staticmethod
+    # ---- sensor masking ----
     def mask_to_single_sensor(
-        x: torch.Tensor,  # (1,T,Dx)
+        self,
+        x: torch.Tensor, # (1,T,Dx)
         sensor_idx: int,
         num_sensors: int,
+        x_fill: torch.Tensor, # (Dx,)
     ) -> torch.Tensor:
         """
-        Keep only the features corresponding to one sensor and set the rest to 0.
+        Keep only sensor_idx features, fill all other features with x_fill (mean-imputation).
         Assumes interleaved layout: sensor s features are x[..., s::num_sensors].
         """
-        x_masked = torch.zeros_like(x)
+        # start from mean background
+        x_masked = x_fill.view(1, 1, -1).expand_as(x).clone()
+        # overwrite the selected sensor slice with real data
         x_masked[..., sensor_idx::num_sensors] = x[..., sensor_idx::num_sensors]
         return x_masked
 
@@ -370,6 +412,7 @@ class DistributedSensorEvaluator:
         seed_eval: int,
         gpoe_beta: Optional[float],
         ci_alpha: float,
+        mask_fill: str,
     ) -> Dict[str, Any]:
         theta_groups, theta_values = self.load_topology_data(topology)
 
@@ -389,6 +432,12 @@ class DistributedSensorEvaluator:
 
         model = self.load_anp_model(topology, input_dim=input_dim, output_dim=output_dim)
         y_mean, y_std = self.get_y_stats(topology)
+
+        x_mean = self.get_x_mean(topology)   # (Dx,)
+        if mask_fill == "zero":
+            x_fill = torch.zeros_like(x_mean)
+        else:
+            x_fill = x_mean
 
         g = torch.Generator(device=self.device)
         g.manual_seed(seed_eval)
@@ -436,7 +485,7 @@ class DistributedSensorEvaluator:
 
                 if any(m != "centralized" for m in methods):
                     for s in range(num_sensors):
-                        x_s = self.mask_to_single_sensor(x_full, sensor_idx=s, num_sensors=num_sensors)
+                        x_s = self.mask_to_single_sensor(x_full, sensor_idx=s, num_sensors=num_sensors, x_fill=x_fill)
                         cx_s = x_s[:, ctx_idx, :]
                         cy_s = y_norm[:, ctx_idx, :]
                         m_s, v_s, t_s, _ = self.anp_predict_mc(model, cx_s, cy_s, x_s, mc_samples=mc_samples)
@@ -581,6 +630,8 @@ class DistributedSensorEvaluator:
 def parse_args():
     p = argparse.ArgumentParser()
 
+    p.add_argument("--mask_fill", type=str, default="mean", choices=["mean", "zero"], help="Method to fill masked values (mean or zero)")
+
     p.add_argument("--data_dir", type=Path, required=True)
     p.add_argument("--anp_result_dir", type=Path, required=True)
     p.add_argument("--output_dir", type=Path, required=True)
@@ -609,7 +660,7 @@ def parse_args():
     p.add_argument("--max_traj_per_theta", type=int, default=-1)
 
     p.add_argument("--gpoe_beta", type=float, default=None)
-    p.add_argument("--ci_alpha", type=float, default=0.5)
+    p.add_argument("--ci_alpha", type=float, default=0.5, help="alpha parameter for CI fusion (0.0 = only use neighbor, 1.0 = only use self, 0.5 = average)")
 
     p.add_argument("--device", type=str, default=None)
     p.add_argument("--seed", type=int, default=18)
@@ -646,6 +697,7 @@ def main():
             seed_eval=args.seed_eval,
             gpoe_beta=args.gpoe_beta,
             ci_alpha=args.ci_alpha,
+            mask_fill=args.mask_fill,
         )
 
         csv_path = evaluator.output_dir / f"distributed_sensors_topology_{topo}.csv"
