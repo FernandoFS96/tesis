@@ -53,6 +53,37 @@ Use:
   --perm_repeats 5 \
   --perm_mode time \
   --perm_seed 0
+
+
+  
+  python evaluate_central_inference_distributed_features.py \
+  --data_dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+  --anp_result_dir /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies_masked/masked_dropbernoulli_p0.2_train_mean_first \
+  --output_dir /home/fernando/tesis/underwater-localization-topologies/results/eval_masked_central_features \
+  --topologies ellipsoidal \
+  --context_percent 30 \
+  --ctx_sample_mode first \
+  --num_time_points 201 \
+  --num_sensors 10 \
+  --mc_samples 1 \
+  --sensor_importance \
+  --fill_mode train_mean
+
+  python evaluate_central_inference_distributed_features.py \
+  --data_dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+  --anp_result_dir /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies_masked/masked_dropbernoulli_p0.2_train_mean_first \
+  --output_dir /home/fernando/tesis/underwater-localization-topologies/results/eval_masked_central_features \
+  --topologies ellipsoidal \
+  --context_percent 30 \
+  --ctx_sample_mode first \
+  --num_time_points 201 \
+  --num_sensors 10 \
+  --mc_samples 1 \
+  --perm_importance \
+  --perm_repeats 5 \
+  --perm_mode time \
+  --perm_seed 0
+
 """
 
 import argparse
