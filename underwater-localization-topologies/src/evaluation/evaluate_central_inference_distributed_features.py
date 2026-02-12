@@ -88,6 +88,19 @@ class Timer:
             raise RuntimeError("Timer used without being started.")
         self.dt = time.perf_counter() - self.t0
 
+def make_sensor_mask_feat(T: int, num_sensors: int, active_sensors: List[int], device: torch.device) -> torch.Tensor:
+    """
+    Devuelve mask_feat con shape (1, T, S) en float32, donde mask[s]=1 si sensor s está activo.
+    """
+    m = torch.zeros((1, num_sensors), dtype=torch.float32, device=device)
+    m[0, active_sensors] = 1.0
+    return m.view(1, 1, num_sensors).expand(1, T, num_sensors)
+
+def append_sensor_mask(x: torch.Tensor, mask_feat: torch.Tensor) -> torch.Tensor:
+    """
+    x: (1,T,Dx), mask_feat: (1,T,S)  -> (1,T,Dx+S)
+    """
+    return torch.cat([x, mask_feat], dim=-1)
 
 def load_topology_test(data_dir: Path, topology: str):
     topo_dir = data_dir / f"topology_{topology}"
@@ -159,7 +172,15 @@ def sample_context_indices(T: int, n_ctx: int, mode: str, gen: torch.Generator, 
 
 
 def load_model(anp_result_dir: Path, topology: str, input_dim: int, output_dim: int, device: torch.device):
-    ckpt_path = anp_result_dir / f"ANP_{topology}" / "best_checkpoint.pth.tar"
+    # masked training layout (como tu ruta nueva)
+    ckpt_path_masked = anp_result_dir / f"topology_{topology}" / "best_checkpoint.pth.tar"
+    # legacy layout (como antes)
+    ckpt_path_legacy = anp_result_dir / f"ANP_{topology}" / "best_checkpoint.pth.tar"
+
+    ckpt_path = ckpt_path_masked if ckpt_path_masked.exists() else ckpt_path_legacy
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"No checkpoint found. Tried:\n  {ckpt_path_masked}\n  {ckpt_path_legacy}")
+
     model = LatentModel(num_hidden=128, input_dim=input_dim, output_dim=output_dim)
     ckpt = torch.load(ckpt_path, map_location=device)
     model.load_state_dict(ckpt["model"] if "model" in ckpt else ckpt)

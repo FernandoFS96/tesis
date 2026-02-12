@@ -1,3 +1,24 @@
+'''
+Docstring for src.training.train_anp_topologies_masked
+
+This script trains ANP models with sensor masking for each topology and logs detailed diagnostics.
+
+Usage:
+python train_anp_topologies_masked.py \
+  --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+  --batch-size 8 \
+  --epochs 5000 \
+  --ctx-sample-mode first \
+  --patience 500 \
+  --num-sensors 10 \
+  --num-time-points 201 \
+  --sensor-drop-mode bernoulli \
+  --sensor-drop-p 0.2 \
+  --mask-fill train_mean \
+  --topologies ellipsoidal \
+
+'''
+
 import csv
 import sys
 import os
