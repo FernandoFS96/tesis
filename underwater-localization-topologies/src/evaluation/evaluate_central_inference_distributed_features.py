@@ -324,7 +324,8 @@ def main():
         if Dx != expected:
             raise ValueError(f"[{topo}] Dx={Dx} != {expected} (num_time_points*num_sensors)")
 
-        model = load_model(args.anp_result_dir, topo, Dx, Dy, device)
+        input_dim_model = Dx + args.num_sensors
+        model = load_model(args.anp_result_dir, topo, input_dim_model, Dy, device)
         y_mean, y_std = load_y_stats(args.data_dir, topo, device)
 
         # Means per sensor for filling missing sensors in LOSO/LISO
@@ -386,17 +387,25 @@ def main():
                 non_ctx_mask = torch.ones(T, dtype=torch.bool, device=device)
                 non_ctx_mask[ctx_idx] = False
 
+                active_all = list(range(args.num_sensors))
+                mask_all = make_sensor_mask_feat(T, args.num_sensors, active_all, device)
+                
+                x_full_aug = append_sensor_mask(x_full, mask_all)                 # (1,T,Dx+S)
+                x_full_recon_aug = append_sensor_mask(x_full_recon, mask_all)     # (1,T,Dx+S)
+                if x_full_aug.shape[-1] != Dx + args.num_sensors:
+                    raise RuntimeError(f"Bad input dim: {x_full_aug.shape[-1]} != {Dx + args.num_sensors}")
+
                 # ---- A) Centralized direct (original x_full) ----
-                cx0 = x_full[:, ctx_idx, :]
+                cx0 = x_full_aug[:, ctx_idx, :]
                 cy0 = y_norm[:, ctx_idx, :]
-                mean0, var0, dt0 = anp_predict(model, cx0, cy0, x_full, args.mc_samples, device)
+                mean0, var0, dt0 = anp_predict(model, cx0, cy0, x_full_aug, args.mc_samples, device)
                 pred0 = denormalize_y(mean0, y_mean, y_std)
                 mae0 = F.l1_loss(pred0[:, non_ctx_mask, :], y[:, non_ctx_mask, :], reduction="none").mean().item()
 
                 # ---- B) Central inference from reconstructed features ----
-                cx1 = x_full_recon[:, ctx_idx, :]
+                cx1 = x_full_recon_aug[:, ctx_idx, :]
                 cy1 = y_norm[:, ctx_idx, :]
-                mean1, var1, dt1 = anp_predict(model, cx1, cy1, x_full_recon, args.mc_samples, device)
+                mean1, var1, dt1 = anp_predict(model, cx1, cy1, x_full_recon_aug, args.mc_samples, device)
                 pred1 = denormalize_y(mean1, y_mean, y_std)
                 mae1 = F.l1_loss(pred1[:, non_ctx_mask, :], y[:, non_ctx_mask, :], reduction="none").mean().item()
 
@@ -409,11 +418,13 @@ def main():
 
                 # baseline: all sensors present (reconstructed, but identical)
                 x_parts_all = [extract_sensor_features(x_full, s, args.num_sensors) for s in range(args.num_sensors)]
-                x_all = reconstruct_x_from_sensors(x_parts_all, args.num_sensors)
+                x_all = reconstruct_x_from_sensors(x_parts_all, args.num_sensors)      # (1,T,Dx)
+                x_all_aug = append_sensor_mask(x_all, mask_all)                        # (1,T,Dx+S)
 
-                cx = x_all[:, ctx_idx, :]
+                cx = x_all_aug[:, ctx_idx, :]
                 cy = y_norm[:, ctx_idx, :]
-                mean_norm, var_norm, _ = anp_predict(model, cx, cy, x_all, args.mc_samples, device)
+                mean_norm, var_norm, _ = anp_predict(model, cx, cy, x_all_aug, args.mc_samples, device)
+
                 pred = denormalize_y(mean_norm, y_mean, y_std)
                 mae_all = F.l1_loss(pred[:, non_ctx_mask, :], y[:, non_ctx_mask, :], reduction="none").mean().item()
                 mae_all_list.append(mae_all)
@@ -430,9 +441,12 @@ def main():
                         )
                         x_loso = reconstruct_x_from_sensors(x_parts_loso, args.num_sensors)
 
-                        cx_loso = x_loso[:, ctx_idx, :]
+                        mask_loso = make_sensor_mask_feat(T, args.num_sensors, active_loso, device)
+                        x_loso_aug = append_sensor_mask(x_loso, mask_loso)
+
+                        cx_loso = x_loso_aug[:, ctx_idx, :]
                         cy_loso = y_norm[:, ctx_idx, :]
-                        m_loso, v_loso, _ = anp_predict(model, cx_loso, cy_loso, x_loso, args.mc_samples, device)
+                        m_loso, v_loso, _ = anp_predict(model, cx_loso, cy_loso, x_loso_aug, args.mc_samples, device)
                         pred_loso = denormalize_y(m_loso, y_mean, y_std)
                         mae_loso = F.l1_loss(pred_loso[:, non_ctx_mask, :], y[:, non_ctx_mask, :], reduction="none").mean().item()
                         loso_mae_lists[s].append(mae_loso)
@@ -446,9 +460,12 @@ def main():
                         )
                         x_liso = reconstruct_x_from_sensors(x_parts_liso, args.num_sensors)
 
-                        cx_liso = x_liso[:, ctx_idx, :]
+                        mask_liso = make_sensor_mask_feat(T, args.num_sensors, active_liso, device)
+                        x_liso_aug = append_sensor_mask(x_liso, mask_liso)
+
+                        cx_liso = x_liso_aug[:, ctx_idx, :]
                         cy_liso = y_norm[:, ctx_idx, :]
-                        m_liso, v_liso, _ = anp_predict(model, cx_liso, cy_liso, x_liso, args.mc_samples, device)
+                        m_liso, v_liso, _ = anp_predict(model, cx_liso, cy_liso, x_liso_aug, args.mc_samples, device)
                         pred_liso = denormalize_y(m_liso, y_mean, y_std)
                         mae_liso = F.l1_loss(pred_liso[:, non_ctx_mask, :], y[:, non_ctx_mask, :], reduction="none").mean().item()
                         liso_mae_lists[s].append(mae_liso)
@@ -472,9 +489,12 @@ def main():
 
                             x_perm = reconstruct_x_from_sensors(x_parts_perm, args.num_sensors)
 
-                            cx_p = x_perm[:, ctx_idx, :]
+                            x_perm_aug = append_sensor_mask(x_perm, mask_all)
+
+                            cx_p = x_perm_aug[:, ctx_idx, :]
                             cy_p = y_norm[:, ctx_idx, :]
-                            m_p, v_p, _ = anp_predict(model, cx_p, cy_p, x_perm, args.mc_samples, device)
+                            m_p, v_p, _ = anp_predict(model, cx_p, cy_p, x_perm_aug, args.mc_samples, device)
+
                             pred_p = denormalize_y(m_p, y_mean, y_std)
 
                             mae_p = F.l1_loss(pred_p[:, non_ctx_mask, :], y[:, non_ctx_mask, :], reduction="none").mean().item()
