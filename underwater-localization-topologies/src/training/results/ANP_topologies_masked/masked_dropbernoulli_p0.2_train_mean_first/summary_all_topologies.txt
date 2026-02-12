@@ -1,0 +1,3 @@
+Best validation MAE per topology (MASKED training)
+============================================================
+ellipsoidal  : 6.701316
