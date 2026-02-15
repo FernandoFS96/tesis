@@ -15,7 +15,7 @@ python train_anp_topologies_masked.py \
   --sensor-drop-mode bernoulli \
   --sensor-drop-p 0.2 \
   --mask-fill train_mean \
-  --topologies ellipsoidal \
+  --topologies aligned,ellipsoidal,random \
 
 '''
 
@@ -297,7 +297,7 @@ def train_anp_topology_masked(
 
     # model
     model = LatentModel(num_hidden=128, input_dim=input_dim_new, output_dim=output_dim).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=5e-4, weight_decay=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=8e-4, weight_decay=1e-4)
 
     # logs
     best_val_mae = float("inf")
