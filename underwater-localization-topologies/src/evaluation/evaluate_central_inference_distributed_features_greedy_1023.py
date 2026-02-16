@@ -440,13 +440,13 @@ def write_greedy_txt(
         f.write("=" * 90 + "\n\n")
 
         for h in history:
-            f.write(f"STEP {h['step']:02d} | sensors={h['n_sensors']:02d} | MAE={h['mae']:.6f}\n")
+            f.write(f"STEP {h['step']:02d} | sensors={h['n_sensors']:02d} | MAE={h['mae']:.4f}\n")
             f.write(f"  active: {h['active']}\n")
             if h["removed"] is not None:
                 f.write(f"  removed: {h['removed']}\n")
                 f.write("  candidates (remove -> MAE, delta vs prev):\n")
                 for (s_remove, mae_cand, delta) in h["candidates"]:
-                    f.write(f"    - remove {s_remove:2d}: MAE={mae_cand:.6f}, delta={delta:+.6f}\n")
+                    f.write(f"    - remove {s_remove:2d}: MAE={mae_cand:.4f}, delta={delta:+.4f}\n")
             f.write("\n")
 
 
@@ -525,11 +525,63 @@ def exhaustive_subsets_report(
                     "active": active,
                     "bitmask": int(mask),
                     "mae": float(mae),
-                    "delta_vs_all": float(mae - mae_all),
+                    "delta_vs_all": round(float(mae - mae_all), 4),
                 })
                 pbar.update(1)
 
     return float(mae_all), rows
+
+
+def plot_exhaustive_mae_boxplot(
+    rows_sub: List[Dict[str, Any]],
+    out_path: Path,
+    topology: str,
+    ctx_percent: int,
+    ctx_sample_mode: str,
+    mc_samples: int,
+    fill_mode: str,
+) -> None:
+    """
+    Save a boxplot of MAE values grouped by subset size (number of sensors).
+    """
+    if not rows_sub:
+        return
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    grouped: Dict[int, List[float]] = {}
+    for row in rows_sub:
+        k = int(row["subset_size"])
+        grouped.setdefault(k, []).append(float(row["mae"]))
+
+    ks = sorted(grouped.keys())
+    data = [grouped[k] for k in ks]
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.boxplot(data, tick_labels=[str(k) for k in ks], showfliers=True)
+    ax.set_xlabel("Number of sensors (subset size)")
+    ax.set_ylabel("MAE")
+    ax.set_title(
+        f"MAE distribution by subset size | {topology} | ctx={ctx_percent}% {ctx_sample_mode} | mc={mc_samples} | fill={fill_mode}"
+    )
+    fig.tight_layout()
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+
+
+def round_mae_columns(df):
+    for col in df.columns:
+        if "mae" in col:
+            try:
+                df[col] = df[col].round(4)
+            except Exception:
+                pass
+    return df
 
 
 # --------------------------
@@ -826,6 +878,7 @@ def main():
                     "mae_liso": mae_liso,
                 })
             df_imp = pd.DataFrame(table_rows)
+            df_imp = round_mae_columns(df_imp)
             out_csv = outdir / f"sensor_importance_topology_{topo}.csv"
             df_imp.to_csv(out_csv, index=False)
             print(f"\nSaved sensor importance table: {out_csv}\n")
@@ -852,6 +905,7 @@ def main():
                     "n_eval": int(len(deltas)),
                 })
             df_pfi = pd.DataFrame(rows_pfi)
+            df_pfi = round_mae_columns(df_pfi)
             out_csv = outdir / f"sensor_permutation_importance_topology_{topo}.csv"
             df_pfi.to_csv(out_csv, index=False)
             print(f"\nSaved PFI table: {out_csv}\n")
@@ -915,13 +969,34 @@ def main():
                 df_sub.insert(3, "ctx_sample_mode", args.ctx_sample_mode)
                 df_sub.insert(4, "mc_samples", args.mc_samples)
                 df_sub["active"] = df_sub["active"].apply(lambda xs: "|".join(map(str, xs)))
+                df_sub = round_mae_columns(df_sub)
 
             out_csv = outdir / f"{args.exhaustive_out_prefix}_topology_{topo}.csv"
             df_sub.to_csv(out_csv, index=False)
 
+            out_plot = outdir / f"exhaustive_subsets_mae_boxplot_topology_{topo}.png"
+            plot_exhaustive_mae_boxplot(
+                rows_sub=rows_sub,
+                out_path=out_plot,
+                topology=topo,
+                ctx_percent=args.context_percent,
+                ctx_sample_mode=args.ctx_sample_mode,
+                mc_samples=args.mc_samples,
+                fill_mode=args.fill_mode,
+            )
+
             # Best subset per size k
             if len(df_sub):
-                df_best = df_sub.loc[df_sub.groupby("subset_size")["mae"].idxmin()].sort_values("subset_size")
+                grp = df_sub.groupby("subset_size")["mae"]
+                df_best = df_sub.loc[grp.idxmin()].sort_values("subset_size")
+                df_best = df_best.rename(columns={"mae": "mae_best"})
+                df_best = df_best.merge(
+                    grp.agg(mae_min="min", mae_max="max", mae_mean="mean").reset_index(),
+                    on="subset_size",
+                    how="left",
+                )
+                #df_best["mae"] = df_best["mae_mean"]
+                df_best = round_mae_columns(df_best)
                 out_best = outdir / f"{args.exhaustive_out_prefix}_best_per_k_topology_{topo}.csv"
                 df_best.to_csv(out_best, index=False)
             else:
@@ -930,12 +1005,13 @@ def main():
             print(
                 f"[exhaustive_subsets] Saved: {out_csv}"
                 + (f" and {out_best}" if out_best is not None else "")
-                + f" | mae_all={mae_all_exh:.6f} | elapsed={dt_exh:.1f}s"
+                + f" | mae_all={mae_all_exh:.4f} | elapsed={dt_exh:.1f}s"
             )
 
     # ----- Always save main CSV -----
     import pandas as pd
     df_main = pd.DataFrame(rows_main)
+    df_main = round_mae_columns(df_main)
     csv_path = outdir / "central_inference_distributed_features.csv"
     df_main.to_csv(csv_path, index=False)
     print(f"\nSaved CSV: {csv_path}\n")
