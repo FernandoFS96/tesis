@@ -1,0 +1,97 @@
+Greedy sensor pruning (sequential backward elimination)
+==========================================================================================
+topology: random
+context_percent: 30
+ctx_sample_mode: first
+mc_samples: 1
+fill_mode: train_mean
+stop_at_min_sensors: 3
+==========================================================================================
+
+STEP 00 | sensors=10 | MAE=6.436547
+  active: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+STEP 01 | sensors=09 | MAE=7.079445
+  active: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+  removed: 0
+  candidates (remove -> MAE, delta vs prev):
+    - remove  0: MAE=7.079445, delta=+0.642899
+    - remove  1: MAE=7.165896, delta=+0.729349
+    - remove  9: MAE=7.172441, delta=+0.735894
+    - remove  7: MAE=7.221525, delta=+0.784979
+    - remove  2: MAE=7.255786, delta=+0.819239
+    - remove  4: MAE=7.514220, delta=+1.077673
+    - remove  6: MAE=8.048019, delta=+1.611472
+    - remove  8: MAE=8.056724, delta=+1.620177
+    - remove  3: MAE=8.131176, delta=+1.694630
+    - remove  5: MAE=8.132219, delta=+1.695673
+
+STEP 02 | sensors=08 | MAE=7.981304
+  active: [1, 2, 3, 4, 5, 6, 7, 8]
+  removed: 9
+  candidates (remove -> MAE, delta vs prev):
+    - remove  9: MAE=7.981304, delta=+0.901859
+    - remove  1: MAE=8.170219, delta=+1.090774
+    - remove  4: MAE=8.356557, delta=+1.277111
+    - remove  2: MAE=8.473731, delta=+1.394286
+    - remove  7: MAE=8.503660, delta=+1.424215
+    - remove  5: MAE=8.697157, delta=+1.617712
+    - remove  3: MAE=8.779880, delta=+1.700435
+    - remove  6: MAE=8.966696, delta=+1.887251
+    - remove  8: MAE=9.054652, delta=+1.975207
+
+STEP 03 | sensors=07 | MAE=9.146255
+  active: [2, 3, 4, 5, 6, 7, 8]
+  removed: 1
+  candidates (remove -> MAE, delta vs prev):
+    - remove  1: MAE=9.146255, delta=+1.164951
+    - remove  4: MAE=9.319005, delta=+1.337701
+    - remove  2: MAE=9.630202, delta=+1.648898
+    - remove  8: MAE=10.277288, delta=+2.295984
+    - remove  3: MAE=10.421351, delta=+2.440047
+    - remove  5: MAE=10.592454, delta=+2.611149
+    - remove  6: MAE=10.611607, delta=+2.630303
+    - remove  7: MAE=10.760906, delta=+2.779602
+
+STEP 04 | sensors=06 | MAE=10.987416
+  active: [2, 3, 5, 6, 7, 8]
+  removed: 4
+  candidates (remove -> MAE, delta vs prev):
+    - remove  4: MAE=10.987416, delta=+1.841161
+    - remove  2: MAE=11.844933, delta=+2.698678
+    - remove  8: MAE=12.303108, delta=+3.156853
+    - remove  7: MAE=12.949327, delta=+3.803071
+    - remove  6: MAE=13.122616, delta=+3.976360
+    - remove  5: MAE=13.219169, delta=+4.072913
+    - remove  3: MAE=13.729248, delta=+4.582993
+
+STEP 05 | sensors=05 | MAE=14.730501
+  active: [2, 3, 5, 6, 7]
+  removed: 8
+  candidates (remove -> MAE, delta vs prev):
+    - remove  8: MAE=14.730501, delta=+3.743085
+    - remove  2: MAE=14.914514, delta=+3.927098
+    - remove  6: MAE=15.452072, delta=+4.464656
+    - remove  7: MAE=16.252036, delta=+5.264620
+    - remove  3: MAE=18.150669, delta=+7.163253
+    - remove  5: MAE=18.240688, delta=+7.253272
+
+STEP 06 | sensors=04 | MAE=19.399991
+  active: [3, 5, 6, 7]
+  removed: 2
+  candidates (remove -> MAE, delta vs prev):
+    - remove  2: MAE=19.399991, delta=+4.669490
+    - remove  6: MAE=21.159959, delta=+6.429458
+    - remove  7: MAE=22.091750, delta=+7.361249
+    - remove  3: MAE=22.347675, delta=+7.617174
+    - remove  5: MAE=25.125061, delta=+10.394559
+
+STEP 07 | sensors=03 | MAE=27.169126
+  active: [3, 5, 7]
+  removed: 6
+  candidates (remove -> MAE, delta vs prev):
+    - remove  6: MAE=27.169126, delta=+7.769135
+    - remove  3: MAE=29.782865, delta=+10.382875
+    - remove  5: MAE=31.768664, delta=+12.368673
+    - remove  7: MAE=31.860279, delta=+12.460288
+
