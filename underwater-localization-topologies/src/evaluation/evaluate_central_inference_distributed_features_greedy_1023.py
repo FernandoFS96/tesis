@@ -51,6 +51,7 @@ Usage example:
 """
 
 import argparse
+import math
 import pickle
 import time
 from pathlib import Path
@@ -510,20 +511,23 @@ def exhaustive_subsets_report(
     mae_all = eval_set(active_all)
 
     rows: List[Dict[str, Any]] = []
-    for k in range(min_k, max_k + 1):
-        for comb in itertools.combinations(range(num_sensors), k):
-            active = list(comb)
-            mask = 0
-            for s in active:
-                mask |= (1 << int(s))
-            mae = eval_set(active)
-            rows.append({
-                "subset_size": int(k),
-                "active": active,
-                "bitmask": int(mask),
-                "mae": float(mae),
-                "delta_vs_all": float(mae - mae_all),
-            })
+    total_subsets = sum(math.comb(num_sensors, k) for k in range(min_k, max_k + 1))
+    with tqdm(total=total_subsets, desc="exhaustive subsets", unit="subset", leave=True) as pbar:
+        for k in range(min_k, max_k + 1):
+            for comb in itertools.combinations(range(num_sensors), k):
+                active = list(comb)
+                mask = 0
+                for s in active:
+                    mask |= (1 << int(s))
+                mae = eval_set(active)
+                rows.append({
+                    "subset_size": int(k),
+                    "active": active,
+                    "bitmask": int(mask),
+                    "mae": float(mae),
+                    "delta_vs_all": float(mae - mae_all),
+                })
+                pbar.update(1)
 
     return float(mae_all), rows
 
