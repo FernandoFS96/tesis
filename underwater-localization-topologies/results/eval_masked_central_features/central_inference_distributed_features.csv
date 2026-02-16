@@ -1,2 +1,2 @@
 topology,context_percent,ctx_sample_mode,mc_samples,mae_centralized_direct,mae_central_from_recon,time_direct_total_s,time_recon_total_s,recon_max_abs_diff,n_trajectories,comm_features_total_kib,comm_outputs_total_kib,num_time_points,num_sensors
-ellipsoidal,30,first,1,5.6923,5.7531,0.4966622438514605,0.3004792152205482,0.0,60,23554.6875,632.8125,201,10
+ellipsoidal,30,first,1,5.7389,5.7891,0.4957128177629784,0.30306672293227166,0.0,60,23554.6875,632.8125,201,10
