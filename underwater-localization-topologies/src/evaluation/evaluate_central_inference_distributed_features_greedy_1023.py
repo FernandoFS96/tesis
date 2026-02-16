@@ -334,6 +334,89 @@ def mae_for_active_sensors(
     mae = F.l1_loss(pred[:, non_ctx_mask, :], y[:, non_ctx_mask, :], reduction="none").mean().item()
     return float(mae)
 
+
+@torch.no_grad()
+def mae_for_active_sensors_batch(
+    model: torch.nn.Module,
+    batch_items: List[Dict[str, Any]],
+    active_sensors: List[int],
+    num_time_points: int,
+    num_sensors: int,
+    device: torch.device,
+    fill_mode: str,
+    x_means: Optional[List[torch.Tensor]],
+    y_mean: torch.Tensor,
+    y_std: torch.Tensor,
+    mc_samples: int,
+    batch_size: int,
+) -> torch.Tensor:
+    """
+    Batched version of mae_for_active_sensors. Returns per-trajectory MAE tensor (B,).
+    """
+    if not batch_items:
+        return torch.empty((0,), device=device)
+
+    if batch_size is None or batch_size <= 0:
+        batch_size = len(batch_items)
+
+    T = batch_items[0]["x_full"].shape[1]
+    mask_feat = make_sensor_mask_feat(T, num_sensors, active_sensors, device)
+
+    mae_chunks = []
+    for start in range(0, len(batch_items), batch_size):
+        chunk = batch_items[start:start + batch_size]
+
+        x_sub_list = []
+        y_list = []
+        y_norm_list = []
+        ctx_idx_list = []
+        non_ctx_mask_list = []
+
+        for item in chunk:
+            x_full = item["x_full"]
+
+            x_parts = build_x_parts_with_mask(
+                x_full=x_full,
+                active_sensors=active_sensors,
+                num_time_points=num_time_points,
+                num_sensors=num_sensors,
+                device=device,
+                fill_mode=fill_mode,
+                x_means=x_means,
+            )
+            x_sub = reconstruct_x_from_sensors(x_parts, num_sensors)
+            x_sub_aug = append_sensor_mask(x_sub, mask_feat)
+
+            x_sub_list.append(x_sub_aug)
+            y_list.append(item["y"])
+            y_norm_list.append(item["y_norm"])
+            ctx_idx_list.append(item["ctx_idx"])
+            non_ctx_mask_list.append(item["non_ctx_mask"])
+
+        x_sub_batch = torch.cat(x_sub_list, dim=0)
+        y_batch = torch.cat(y_list, dim=0)
+        y_norm_batch = torch.cat(y_norm_list, dim=0)
+        ctx_idx_batch = torch.stack(ctx_idx_list, dim=0)
+        non_ctx_mask_batch = torch.stack(non_ctx_mask_list, dim=0)
+
+        batch_idx = torch.arange(x_sub_batch.shape[0], device=device).unsqueeze(1)
+        cx = x_sub_batch[batch_idx, ctx_idx_batch, :]
+        cy = y_norm_batch[batch_idx, ctx_idx_batch, :]
+
+        mean_norm, _, _ = anp_predict(model, cx, cy, x_sub_batch, mc_samples, device)
+        pred = denormalize_y(mean_norm, y_mean, y_std)
+
+        abs_err = torch.abs(pred - y_batch)
+        mask = non_ctx_mask_batch.unsqueeze(-1)
+        abs_err = abs_err * mask
+
+        denom = mask.sum(dim=1).float() * y_batch.shape[2]
+        denom = denom.clamp(min=1.0)
+        mae_per = abs_err.sum(dim=(1, 2)) / denom
+        mae_chunks.append(mae_per)
+
+    return torch.cat(mae_chunks, dim=0)
+
 def greedy_prune_report(
     model: torch.nn.Module,
     traj_cache: List[Dict[str, Any]],
@@ -346,6 +429,7 @@ def greedy_prune_report(
     y_mean: torch.Tensor,
     y_std: torch.Tensor,
     mc_samples: int,
+    eval_batch_size: int,
 ) -> List[Dict[str, Any]]:
     """
     Greedy sequential backward elimination. Returns history list.
@@ -355,28 +439,23 @@ def greedy_prune_report(
     history: List[Dict[str, Any]] = []
 
     def eval_set(active_set: List[int]) -> float:
-        maes = []
-        for item in traj_cache:
-            maes.append(
-                mae_for_active_sensors(
-                    model=model,
-                    x_full=item["x_full"],
-                    y=item["y"],
-                    y_norm=item["y_norm"],
-                    ctx_idx=item["ctx_idx"],
-                    non_ctx_mask=item["non_ctx_mask"],
-                    active_sensors=active_set,
-                    num_time_points=num_time_points,
-                    num_sensors=num_sensors,
-                    device=device,
-                    fill_mode=fill_mode,
-                    x_means=x_means,
-                    y_mean=y_mean,
-                    y_std=y_std,
-                    mc_samples=mc_samples,
-                )
-            )
-        return float(np.mean(maes)) if len(maes) else float("nan")
+        if not traj_cache:
+            return float("nan")
+        mae_vals = mae_for_active_sensors_batch(
+            model=model,
+            batch_items=traj_cache,
+            active_sensors=active_set,
+            num_time_points=num_time_points,
+            num_sensors=num_sensors,
+            device=device,
+            fill_mode=fill_mode,
+            x_means=x_means,
+            y_mean=y_mean,
+            y_std=y_std,
+            mc_samples=mc_samples,
+            batch_size=eval_batch_size,
+        )
+        return float(mae_vals.mean().item()) if len(mae_vals) else float("nan")
 
     # baseline
     mae_cur = eval_set(active)
@@ -465,6 +544,7 @@ def exhaustive_subsets_report(
     y_mean: torch.Tensor,
     y_std: torch.Tensor,
     mc_samples: int,
+    eval_batch_size: int,
     min_k: int = 1,
     max_k: Optional[int] = None,
 ) -> Tuple[float, List[Dict[str, Any]]]:
@@ -484,28 +564,23 @@ def exhaustive_subsets_report(
         raise ValueError("min_k cannot be > max_k")
 
     def eval_set(active_set: List[int]) -> float:
-        maes = []
-        for item in traj_cache:
-            maes.append(
-                mae_for_active_sensors(
-                    model=model,
-                    x_full=item["x_full"],
-                    y=item["y"],
-                    y_norm=item["y_norm"],
-                    ctx_idx=item["ctx_idx"],
-                    non_ctx_mask=item["non_ctx_mask"],
-                    active_sensors=active_set,
-                    num_time_points=num_time_points,
-                    num_sensors=num_sensors,
-                    device=device,
-                    fill_mode=fill_mode,
-                    x_means=x_means,
-                    y_mean=y_mean,
-                    y_std=y_std,
-                    mc_samples=mc_samples,
-                )
-            )
-        return float(np.mean(maes)) if len(maes) else float("nan")
+        if not traj_cache:
+            return float("nan")
+        mae_vals = mae_for_active_sensors_batch(
+            model=model,
+            batch_items=traj_cache,
+            active_sensors=active_set,
+            num_time_points=num_time_points,
+            num_sensors=num_sensors,
+            device=device,
+            fill_mode=fill_mode,
+            x_means=x_means,
+            y_mean=y_mean,
+            y_std=y_std,
+            mc_samples=mc_samples,
+            batch_size=eval_batch_size,
+        )
+        return float(mae_vals.mean().item()) if len(mae_vals) else float("nan")
 
     active_all = list(range(num_sensors))
     mae_all = eval_set(active_all)
@@ -612,7 +687,11 @@ def main():
     p.add_argument("--perm_mode", type=str, default="time", choices=["time"], help="Permutation mode.")
     p.add_argument("--perm_seed", type=int, default=0, help="Base seed for permutation importance.")
 
-    # NEW: greedy pruning
+    # batch size for greedy/exhaustive eval.
+    p.add_argument("--eval_batch_size", type=int, default=0,
+                   help="Batch size for MAE eval in greedy/exhaustive. 0 means all trajectories.")
+
+    # greedy pruning
     p.add_argument("--greedy_prune", action="store_true",
                    help="Run greedy sensor pruning (10->...->min) and save .txt report per topology.")
     p.add_argument("--greedy_min_sensors", type=int, default=3,
@@ -620,7 +699,7 @@ def main():
     p.add_argument("--greedy_out_prefix", type=str, default="greedy_pruning",
                    help="Prefix for greedy report txt files.")
 
-    # NEW: exhaustive evaluation of all sensor subsets
+    # Ehaustive evaluation of all sensor subsets
     p.add_argument("--exhaustive_subsets", action="store_true",
                    help="Evaluate all non-empty sensor subsets (2^S-1) and save a per-topology CSV.")
     p.add_argument("--exhaustive_out_prefix", type=str, default="exhaustive_subsets",
@@ -927,6 +1006,7 @@ def main():
                 y_mean=y_mean,
                 y_std=y_std,
                 mc_samples=args.mc_samples,
+                eval_batch_size=args.eval_batch_size,
             )
 
             out_txt = outdir / f"{args.greedy_out_prefix}_topology_{topo}.txt"
@@ -956,6 +1036,7 @@ def main():
                 y_mean=y_mean,
                 y_std=y_std,
                 mc_samples=args.mc_samples,
+                eval_batch_size=args.eval_batch_size,
                 min_k=args.subset_min_k,
                 max_k=args.subset_max_k,
             )
