@@ -2,10 +2,10 @@ ANP MASKED Training Summary - Topology: ellipsoidal
 ============================================================
 Training samples: 420 trajectories
 Validation samples: 120 trajectories
-Best validation MAE: 6.091041
-Final epoch: 5000
-Early stopping counter: 443/500
-Training time: 240.33 minutes
+Best validation MAE: 6.371066
+Final epoch: 3979
+Early stopping counter: 500/500
+Training time: 29.92 minutes
 
 Masking config:
   num_sensors: 10

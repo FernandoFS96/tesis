@@ -10,7 +10,7 @@ from tqdm import tqdm
 Use:
     python data_process_topology.py --mode separate
 
-    python data_process_topology.py --data-dir ./data_save --mode separate
+    python data_process_topology.py --data-dir ./data --mode separate --theta-range 0.0 0.3
 '''
 
 # Function to reshape input data

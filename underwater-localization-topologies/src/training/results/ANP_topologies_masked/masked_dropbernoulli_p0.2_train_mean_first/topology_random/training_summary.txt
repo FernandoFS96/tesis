@@ -2,10 +2,10 @@ ANP MASKED Training Summary - Topology: random
 ============================================================
 Training samples: 420 trajectories
 Validation samples: 120 trajectories
-Best validation MAE: 5.740846
-Final epoch: 3781
+Best validation MAE: 5.328693
+Final epoch: 4334
 Early stopping counter: 500/500
-Training time: 182.64 minutes
+Training time: 33.16 minutes
 
 Masking config:
   num_sensors: 10
