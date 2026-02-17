@@ -4,10 +4,15 @@ from joblib import Parallel, delayed, cpu_count
 import os
 from tqdm import tqdm
 import pickle
+import argparse
 
 '''
 Use:
-    python data_generator_topology.py
+    python data_generator_topology_new.py \
+        --n_traj 150 \
+        --snr 10 \
+        --rep 1
+
 '''
 
 def range_m(init, end, step):  # Matlab-like range, including end!
@@ -119,43 +124,82 @@ class channel():
                        }
         self.params['w0'] = np.pi / self.params['T']  # Rotation pulsation
 
-    def generate_sensor_positions(self):
-        """Generate sensor positions based on topology"""
+    def generate_sensor_positions(self, traj, scale=1.10, min_span=50.0):
+        """
+        Genera posiciones de sensores adaptadas al tamaño de las trayectorias 'traj'
+        para las tres topologías: 'ellipsoidal', 'random' y 'aligned'.
+
+        Parámetros
+        ----------
+        traj : np.ndarray
+            Array (3, n_traj, ppt+1) con las trayectorias ya generadas.
+        scale : float
+            Factor >1 para dar un pequeño margen alrededor de las trayectorias.
+        min_span : float
+            Amplitud mínima (m) para evitar rangos demasiado pequeños.
+
+        Devuelve
+        --------
+        r_posicion : np.ndarray de forma (3, n_sensors)
+        """
+
         n_sensors = self.params['n_sensors']
-        radius_r = self.params['radius_r']
-        
+        hr0 = self.params['ci']['hr0']
+
+        # --- 1) Medidas robustas del "tamaño" de las trayectorias ---
+        xs = traj[0].ravel()
+        ys = traj[1].ravel()
+        if xs.size == 0:
+            raise ValueError("Trajectories array is empty")
+
+        # Caja que contiene las trayectorias con percentiles robustos
+        x_lo, x_hi = np.percentile(xs, [2.0, 98.0])
+        y_lo, y_hi = np.percentile(ys, [2.0, 98.0])
+
+        # Centro y spans
+        cx = 0.5 * (x_lo + x_hi)
+        cy = 0.5 * (y_lo + y_hi)
+        span_x = max((x_hi - x_lo) * scale, min_span)
+        span_y = max((y_hi - y_lo) * scale, min_span)
+
+        # Aseguramos aspecto similar al original de la elipse (b = a/2)
+        # Usaremos 'a' a partir del radio robusto r95
+        r = np.sqrt(xs**2 + ys**2)
+        r95 = float(np.percentile(r, 95)) if r.size > 0 else 1.0
+        a = max(scale * r95, min_span / 2)     # semieje mayor ~ tamaño de la espiral
+        b = 0.5 * a                             # elipse "aplastada" (como antes)
+
+        # --- 2) Topologías ---
         if self.topology == 'ellipsoidal':
-            # Original implementation
-            x_r = radius_r * np.cos(2 * np.pi / n_sensors * 
-                                   np.linspace(0, n_sensors, n_sensors + 1))
-            y_r = radius_r / 2 * np.sin(2 * np.pi / n_sensors * 
-                                       np.linspace(0, n_sensors, n_sensors + 1))
-            r_posicion = np.zeros([3, n_sensors])
-            r_posicion[0, :] = x_r[0:n_sensors]
-            r_posicion[1, :] = y_r[0:n_sensors]
-            r_posicion[2, :] = self.params['ci']['hr0']
-            
+            # Elipse centrada en (cx, cy) con semiejes a y b
+            thetas = np.linspace(0.0, 2*np.pi, n_sensors, endpoint=False)
+            x = cx + a * np.cos(thetas)
+            y = cy + b * np.sin(thetas)
+
         elif self.topology == 'random':
-            # Random scatter in the plane
-            np.random.seed(18)  # Fixed seed for reproducibility
-            # Generate random positions within a square region
-            max_range = radius_r * 1.5  # Extend the range a bit for better coverage
-            r_posicion = np.zeros([3, n_sensors])
-            r_posicion[0, :] = np.random.uniform(-max_range, max_range, n_sensors)
-            r_posicion[1, :] = np.random.uniform(-max_range/2, max_range/2, n_sensors)
-            r_posicion[2, :] = self.params['ci']['hr0']
-            
+            # Dispersión uniforme dentro de una caja centrada en (cx, cy)
+            # Caja ligeramente rectangular como en tu código original (y la mitad que x)
+            max_x = 0.5 * span_x
+            max_y = 0.5 * span_y
+            # Si quieres mantener la "mitad" en y, puedes forzar max_y = max_x/2
+            max_y = max(max_y, min_span / 2.0)
+            rng = np.random.default_rng(10)  # reproducibilidad
+            x = rng.uniform(cx - max_x, cx + max_x, n_sensors)
+            y = rng.uniform(cy - max_y, cy + max_y, n_sensors)
+
         elif self.topology == 'aligned':
-            # Aligned along x-axis
-            r_posicion = np.zeros([3, n_sensors])
-            # Spread sensors evenly along x-axis
-            r_posicion[0, :] = np.linspace(-radius_r * 1.5, radius_r * 1.5, n_sensors)
-            r_posicion[1, :] = 0  # All sensors at y=0
-            r_posicion[2, :] = self.params['ci']['hr0']
-            
+            # Alineados en x, centrados en cx, con y = cy
+            # Longitud total ≈ span_x; si quieres menos/mas largo, ajusta factor
+            x = np.linspace(cx - 0.5*span_x, cx + 0.5*span_x, n_sensors)
+            y = np.full(n_sensors, cy)
+
         else:
             raise ValueError(f"Unknown topology: {self.topology}")
-        
+
+        r_posicion = np.zeros((3, n_sensors))
+        r_posicion[0, :] = x
+        r_posicion[1, :] = y
+        r_posicion[2, :] = hr0
         return r_posicion
 
     def generate_trajectories(self):
@@ -167,13 +211,13 @@ class channel():
         n_traj = self.params['n_traj']
         ppt = self.params['ppt']
         
-        radio_t = 100 + 1000 * np.random.rand(n_traj)
+        radio_t = np.random.uniform(250.0, 350.0, size=n_traj) #100 + 1000 * np.random.rand(n_traj)
         fase0 = 2 * np.pi * np.random.rand(n_traj)
-        omega0 = 2 * np.pi * np.random.rand(n_traj)
+        omega0 = np.random.uniform(0.8,  2.5,  size=n_traj) #2 * np.pi * np.random.rand(n_traj)
 
         traj = np.zeros([3, n_traj, ppt + 1])
-        aux_1 = np.linspace(0, ppt, ppt + 1)
-        aux_2 = np.linspace(ppt, 2 * ppt, ppt + 1)
+        aux_1 = np.linspace(0, 1.4 * ppt, ppt + 1)
+        aux_2 = np.linspace(0.2 * ppt, 1.4 * ppt, ppt + 1)#aux_2 = np.linspace(ppt, 2 * ppt, ppt + 1)
         
         for it in range(n_traj):
             traj[0, it, :] = radio_t[it] / ppt * aux_2 * np.cos(
@@ -185,12 +229,12 @@ class channel():
         return traj
 
     def obtain_h(self):
-        # Generate sensor positions based on topology
-        self.r_posicion = self.generate_sensor_positions()
-        
-        # Generate or use precomputed trajectories
+        # Generar (o cargar) trayectorias
         self.traj = self.generate_trajectories()
-        
+    
+        # Generar sensores adaptados al tamaño real de las trayectorias
+        self.r_posicion = self.generate_sensor_positions(self.traj, scale=0.6, min_span=20.0)
+           
         # Process values for each pair (sensor, trajectory)
         def process_sensor(ise):
             import scipy.signal as signal
@@ -544,7 +588,7 @@ def generate_params(options=None):
                     'cut': 50.000000,  # minimum_relative_path_strength
                     'fmin': 10000.000000,  # minimum_frequency_[Hz]
                     'B': 10000.000000,  # bandwidth_[Hz]
-                    'df': 25.000000,  # frequency_resolution_[Hz]
+                    'df': 50, #25.000000,  # frequency_resolution_[Hz]
                     'dt': 6.045000,  # time_resolution_[seconds]
                     'T_SS': 6.000000,  # coherence_time_of_the_small - scale_variations_[seconds]
                     'sig2s': 1.125000,  # variance_of_S_S_surface_variations_[m ^ 2]
@@ -601,100 +645,174 @@ def generate_params(options=None):
     params['w0'] = np.pi / params['T']
     return params
 
-def plot_validation(channels_dict, option_idx=0):
-    """Plot one trajectory with all three sensor arrangements for validation"""
-    fig, axes = plt.subplots(1, 3, figsize=(18, 8))
-    trajectory_idx = 5  # Use first trajectory for visualization
-    
+def plot_validation(channels_dict, option_idx=0, n_samples=10, seed=None):
+    """
+    Genera n_samples imágenes de comparación de topologías
+    para trayectorias elegidas aleatoriamente.
+    Cada imagen muestra la MISMA trayectoria en las 3 topologías.
+    Se muestra el numero de cada sensor y se marcan claramente el punto de inicio (verde) y el punto final (negro) de la trayectoria.
+    """
+    import os
+    import numpy as np
+    import matplotlib.pyplot as plt
+
     topologies = ['ellipsoidal', 'random', 'aligned']
     titles = ['Ellipsoidal Topology', 'Random Topology', 'Aligned Topology']
-    
-    # Calculate global limits for all plots
+
+    # cuántas trayectorias hay en total (lo tomamos de la primera topología)
+    n_traj = channels_dict[topologies[0]].traj.shape[1]
+
+    # generador aleatorio
+    rng = np.random.default_rng(seed)
+    # elegimos hasta n_samples trayectorias distintas
+    chosen_trajs = rng.choice(n_traj, size=min(n_samples, n_traj), replace=False)
+
+    # carpeta base donde ya guardabas
+    base_dir = 'data'
+    plot_dir = f'{base_dir}/validation'
+    # NUEVA subcarpeta
+    samples_dir = os.path.join(plot_dir, f'random_trajectories_option_{option_idx}')
+    os.makedirs(samples_dir, exist_ok=True)
+
+    # Para que todas las imágenes tengan el mismo encuadre,
+    # primero calculamos los límites globales UNA VEZ
     x_min, x_max = float('inf'), float('-inf')
     y_min, y_max = float('inf'), float('-inf')
-    
-    # First pass to find global limits
     for topology in topologies:
         c = channels_dict[topology]
-        traj = c.traj[:, trajectory_idx, :]
-        sensors = c.r_posicion
-        
-        x_min = min(x_min, traj[0, :].min(), sensors[0, :].min())
-        x_max = max(x_max, traj[0, :].max(), sensors[0, :].max())
-        y_min = min(y_min, traj[1, :].min(), sensors[1, :].min())
-        y_max = max(y_max, traj[1, :].max(), sensors[1, :].max())
-    
-    # Add some padding to the limits (10% of the range)
-    x_padding = 0.1 * (x_max - x_min)
-    y_padding = 0.1 * (y_max - y_min)
-    x_min -= x_padding
-    x_max += x_padding
-    y_min -= y_padding
-    y_max += y_padding
-    
-    for idx, (topology, title) in enumerate(zip(topologies, titles)):
-        ax = axes[idx]
-        c = channels_dict[topology]
-        
-        # Plot trajectory
-        traj = c.traj[:, trajectory_idx, :]
-        ax.plot(traj[0, :], traj[1, :], 'b-', linewidth=2, alpha=0.7)
-        ax.plot(traj[0, 0], traj[1, 0], 'go', markersize=10)
-        ax.plot(traj[0, -1], traj[1, -1], 'ko', markersize=10)
-        
-        # Plot sensors
-        sensors = c.r_posicion
-        ax.scatter(sensors[0, :], sensors[1, :], c='red', s=100, marker='o',
-                  edgecolors='black', linewidth=1, zorder=5)
-        
-        # Add sensor numbers
-        for i in range(sensors.shape[1]):
-            ax.annotate(f'{i}', (sensors[0, i], sensors[1, i]), 
-                       textcoords="offset points", xytext=(0,5), ha='center', fontsize=14)
-        
-        # Increase font size for labels and ticks
-        ax.set_xlabel('X [m]', fontsize=16)
-        ax.set_ylabel('Y [m]', fontsize=16)
-        ax.set_title(title, fontsize=18, pad=10)
-        
-        # Increase tick label sizes
-        ax.tick_params(axis='both', which='major', labelsize=14)
-        
-        ax.grid(True, alpha=0.3)
-        
-        # Set the same limits for all plots
-        ax.set_xlim([x_min, x_max])
-        ax.set_ylim([y_min, y_max])
-        ax.set_aspect('equal', adjustable='box')
-        
-        # Only add legend to the first plot
-        if idx == 0:
-            ax.plot([], [], 'b-', linewidth=2, label='Trajectory')
-            ax.plot([], [], 'go', markersize=10, label='Start')
-            ax.plot([], [], 'ko', markersize=10, label='End')
-            ax.plot([], [], 'ro', markeredgecolor='black', markersize=10, label='Sensors')
-            ax.legend(loc='upper left', fontsize=14)  
-    #plt.suptitle(f'Validation Plot - Trajectory with Different Sensor Topologies\n(Channel Option: {option_idx})', fontsize=14)
-    plt.tight_layout()
-    
-    # Save the plot
-    base_dir = 'data'
-    plot_dir = f'{base_dir}/validation_plots'
-    os.makedirs(plot_dir, exist_ok=True)
-    plt.savefig(f'{plot_dir}/topology_comparison_option_{option_idx}.png', dpi=150, bbox_inches='tight')
-    plt.show()
-    print(f"Validation plot saved to {plot_dir}/topology_comparison_option_{option_idx}.png")
+        traj_all = c.traj  # shape: (2, n_traj, T) o similar
+        for traj_idx in chosen_trajs:
+            traj = traj_all[:, traj_idx, :]
+            x_min = min(x_min, traj[0, :].min())
+            x_max = max(x_max, traj[0, :].max())
+            y_min = min(y_min, traj[1, :].min())
+            y_max = max(y_max, traj[1, :].max())
+            # también miramos sensores
+            sensors = c.r_posicion
+            x_min = min(x_min, sensors[0, :].min())
+            x_max = max(x_max, sensors[0, :].max())
+            y_min = min(y_min, sensors[1, :].min())
+            y_max = max(y_max, sensors[1, :].max())
 
-def process(channel_options, snr, rep, nop=-1):
+    # ahora sí: generamos una figura por trayectoria elegida
+    for k, trajectory_idx in enumerate(chosen_trajs):
+        fig, axes = plt.subplots(1, 3, figsize=(18, 8))
+
+        for idx, (ax, topology, title) in enumerate(zip(axes, topologies, titles)):
+            c = channels_dict[topology]
+            traj = c.traj[:, trajectory_idx, :]
+            sensors = c.r_posicion
+
+            # trayectoria
+            ax.plot(traj[0, :], traj[1, :], 'b-', linewidth=2)
+            # punto inicio
+            ax.plot(traj[0, 0], traj[1, 0], 'go', markersize=10)
+            # punto final
+            ax.plot(traj[0, -1], traj[1, -1], 'ko', markersize=10)
+            # sensores junto con su número
+            for i, (x, y) in enumerate(zip(sensors[0, :], sensors[1, :])):
+                ax.text(x, y, str(i), fontsize=9, ha='center', va='center', color='white', weight='bold')
+                ax.plot(x, y, 'ro', markeredgecolor='black', markersize=10)
+
+            ax.set_title(f"{title}\n(traj {trajectory_idx})", fontsize=16)
+            ax.set_xlim([x_min, x_max])
+            ax.set_ylim([y_min, y_max])
+            ax.set_aspect('equal', adjustable='box')
+            ax.grid(True, alpha=0.3)
+
+            if idx == 0:
+                ax.plot([], [], 'b-', linewidth=2, label='Trajectory')
+                ax.plot([], [], 'go', markersize=10, label='Start')
+                ax.plot([], [], 'ko', markersize=10, label='End')
+                ax.plot([], [], 'ro', markeredgecolor='black', markersize=10, label='Sensors')
+                ax.legend(loc='upper left', fontsize=12)
+
+        plt.tight_layout()
+
+        # nombre de la imagen
+        out_path = os.path.join(
+            samples_dir,
+            f'topology_comparison_option_{option_idx}_traj_{int(trajectory_idx):03d}.png'
+        )
+        plt.savefig(out_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+
+    print(f"Se han guardado {len(chosen_trajs)} imágenes en: {samples_dir}")
+
+def save_velocity_histogram(traj, T_tot, bins=40, option_idx=None):
+    """
+    Calcula el histograma de velocidades a partir de las trayectorias generadas
+    y guarda la figura en el directorio actual.
+
+    Parámetros
+    ----------
+    traj : np.ndarray
+        Array de trayectorias con forma (3, n_traj, ppt+1).
+    T_tot : float
+        Tiempo T_tot usado actualmente en el canal para la velocidad "vehicular".
+        IMPORTANTE: aquí se interpreta como tiempo por salto (tal y como está en tu código).
+    bins : int
+        Número de bins del histograma.
+    filename : str
+        Nombre del archivo de imagen a guardar (PNG).
+
+    Retorna
+    -------
+    dict con estadísticas básicas: {'mean': ..., 'min': ..., 'max': ..., 'std': ...}
+    """
+    assert traj.ndim == 3 and traj.shape[0] == 3, "traj debe ser de forma (3, n_traj, ppt+1)"
+    # Diferencias entre puntos consecutivos (componentes x,y,z)
+    diffs = np.diff(traj, axis=2)                 # -> (3, n_traj, ppt)
+    # Módulo del desplazamiento por salto
+    step_dists = np.linalg.norm(diffs, axis=0)    # -> (n_traj, ppt)
+    # Velocidades por salto con la semántica actual: v = Δs / T_tot
+    speeds = step_dists / float(T_tot)            # -> (n_traj, ppt)
+    speeds_flat = speeds.ravel()
+
+    # Estadísticas
+    v_mean = float(np.mean(speeds_flat))
+    v_min  = float(np.min(speeds_flat))
+    v_max  = float(np.max(speeds_flat))
+    v_std  = float(np.std(speeds_flat))
+
+    # Figura
+    plt.figure(figsize=(8, 5))
+    plt.hist(speeds_flat, bins=bins, edgecolor="k")
+    plt.xlabel("Velocidad por salto (m/s)")
+    plt.ylabel("Frecuencia")
+    plt.title("Histograma de velocidades (Δs / T_tot)")
+    # Texto con stats
+    txt = f"mean={v_mean:.2f} m/s\nstd={v_std:.2f} m/s\nmin={v_min:.2f} m/s\nmax={v_max:.2f} m/s"
+    plt.gca().text(0.98, 0.95, txt, ha="right", va="top", transform=plt.gca().transAxes,
+                   bbox=dict(boxstyle="round", facecolor="white", alpha=0.8, lw=0.5))
+    plt.tight_layout()
+
+    # Guardado en el directorio de ejecución
+    base_dir = 'data'
+    plot_dir = f'{base_dir}/validation'
+    filename=f"velocity_hist_theta_{option_idx}.png"
+    os.makedirs(plot_dir, exist_ok=True)
+    plt.savefig(f'{plot_dir}/{filename}', dpi=150)
+    plt.close()
+
+    #print(f"Histograma guardado en: {base_dir}/validation/{filename}")
+    #print(f"Velocidad media: {v_mean:.3f} m/s | std: {v_std:.3f} m/s | min: {v_min:.3f} m/s | max: {v_max:.3f} m/s")
+
+    return {"mean": v_mean, "std": v_std, "min": v_min, "max": v_max}
+
+def process(channel_options, snr, rep, nop=-1, n_traj_override=None):
     """Process data for all topologies using the same trajectories"""
     topologies = ['ellipsoidal', 'random', 'aligned']
     
-    for option_idx, option in enumerate(tqdm(channel_options, desc="Processing channel options")):
-        print(f"\n--- Processing Channel Option: {option} ---")
+    for option_idx, option in enumerate(tqdm(channel_options)):
+        np.random.seed(11)
+        print(f"\n\n --- Processing Channel Option: {option} ---")
         
         # Generate parameters for this option
         params = generate_params(options=option)
         
+        if n_traj_override is not None:
+            params['n_traj'] = int(n_traj_override)
         # First, generate trajectories that will be shared across all topologies
         # We create a temporary channel just to generate trajectories
         temp_channel = channel(load=False, params=params, number_of_processes=nop, 
@@ -705,7 +823,7 @@ def process(channel_options, snr, rep, nop=-1):
         
         # Process each topology with the same trajectories
         for topology in topologies:
-            print(f"  Processing topology: {topology}")
+            print(f"\nProcessing topology: {topology}")
             
             # Create channel with specific topology and shared trajectories
             c = channel(load=False, params=params, number_of_processes=nop, 
@@ -735,15 +853,31 @@ def process(channel_options, snr, rep, nop=-1):
         # Create validation plot for this option (only for the first option)
         if option_idx == 0:
             plot_validation(channels_for_validation, option)
+        
+        stats = save_velocity_histogram(trjs, T_tot=params['ci']['T_tot'], bins=40, option_idx=option)
 
+def parse_float_list(s):
+    if s is None:
+        return None
+    parts = [p for p in s.replace(',', ' ').split() if p != '']
+    return [float(p) for p in parts]
 
-if __name__ == '__main__':    
-    channel_options = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5] #[0.6, 0.7, 0.8, 0.9, 1.0]
-    
-    snr = 10
-    rep = 1
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="Generar datos de canal (topologías).")
+    parser.add_argument('--channel_options', type=str, default="0.0,0.1,0.2,0.3,0.4,0.5", help="Lista de opciones separadas por coma (ej: '0.0,0.1,0.2').")
+
+    parser.add_argument('--n_traj', type=int, default=150, help="Número de trayectorias (sobrescribe params['n_traj']).")
+    parser.add_argument('--snr', type=float, default=10, help="SNR para filtrado.")
+    parser.add_argument('--rep', type=int, default=1, help="Repeticiones.")
+    parser.add_argument('--nop', type=int, default=-1, help="Número de procesos para paralelismo (-1 == cpu_count()).")
+    args = parser.parse_args()
+
+    # Parse channel options
+    channel_options = parse_float_list(args.channel_options)
+    if channel_options is None:
+        channel_options = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
     
     # Set random seed for reproducibility
-    np.random.seed(18)
-    
-    process(channel_options, snr, rep)
+    np.random.seed(11)
+
+    process(channel_options, snr=args.snr, rep=args.rep, nop=args.nop, n_traj_override=args.n_traj)
