@@ -4,6 +4,7 @@ Docstring for src.training.train_anp_topologies_masked
 This script trains ANP models with sensor masking for each topology and logs detailed diagnostics.
 
 Usage:
+Using bernoulli dropout with 20% drop probability and filling masked sensors with training mean:
 python train_anp_topologies_masked.py \
   --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
   --batch-size 8 \
@@ -17,6 +18,18 @@ python train_anp_topologies_masked.py \
   --mask-fill train_mean \
   --topologies aligned,ellipsoidal,random \
 
+  Using k-uniform dropout with random k:
+python train_anp_topologies_masked.py \
+  --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+  --batch-size 8 \
+  --epochs 5000 \
+  --ctx-sample-mode first \
+  --patience 500 \
+  --num-sensors 10 \
+  --num-time-points 201 \
+  --sensor-drop-mode k_uniform \
+  --mask-fill train_mean \
+  --topologies aligned,ellipsoidal,random
 '''
 
 import csv
