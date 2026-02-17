@@ -19,6 +19,7 @@ class Linear(nn.Module):
 class LatentEncoder(nn.Module):
     def __init__(self, num_hidden, num_latent, input_dim, output_dim):
         super(LatentEncoder, self).__init__()
+        #self.input_projection = Linear(input_dim + 3, num_hidden)
         self.input_projection = Linear(input_dim + output_dim, num_hidden)
         self.self_attentions = nn.ModuleList([Attention(num_hidden) for _ in range(2)])
         self.penultimate_layer = Linear(num_hidden, num_hidden, w_init='relu')
@@ -48,6 +49,7 @@ class DeterministicEncoder(nn.Module):
         super(DeterministicEncoder, self).__init__()
         self.self_attentions = nn.ModuleList([Attention(num_hidden) for _ in range(2)])
         self.cross_attentions = nn.ModuleList([Attention(num_hidden) for _ in range(2)])
+        #self.input_projection = Linear(input_dim + 3, num_hidden)
         self.input_projection = Linear(input_dim + output_dim, num_hidden)
         self.context_projection = Linear(input_dim, num_hidden)
         self.target_projection = Linear(input_dim, num_hidden)
@@ -72,7 +74,9 @@ class Decoder(nn.Module):
         super(Decoder, self).__init__()
         self.target_projection = Linear(input_dim, num_hidden)
         self.linears = nn.ModuleList([Linear(num_hidden * 3, num_hidden * 3, w_init='relu') for _ in range(3)])
-        self.mean_projection = Linear(num_hidden*3, output_dim)
+        #self.mean_projection = Linear(num_hidden * 3, 3)
+        #self.log_var_projection = Linear(num_hidden * 3, 3)
+        self.mean_projection    = Linear(num_hidden*3, output_dim)
         self.log_var_projection = Linear(num_hidden*3, output_dim)
 
 
@@ -83,8 +87,23 @@ class Decoder(nn.Module):
         for linear in self.linears:
             hidden = t.relu(linear(hidden))
         mean = self.mean_projection(hidden)
+        #var = 10000 * t.sigmoid(self.log_var_projection(hidden))
         var = 1e-3 + F.softplus(self.log_var_projection(hidden))
         return mean, var
+
+#class MultiheadAttention(nn.Module):
+#    def __init__(self, num_hidden_k):
+#        super(MultiheadAttention, self).__init__()
+#        self.num_hidden_k = num_hidden_k
+#        self.attn_dropout = nn.Dropout(p=0.1)
+#
+#    def forward(self, key, value, query):
+#        attn = t.bmm(query, key.transpose(1, 2))
+#        attn = attn / math.sqrt(self.num_hidden_k)
+#        attn = t.softmax(attn, dim=-1)
+#        attn = self.attn_dropout(attn)
+#        result = t.bmm(attn, value)
+#        return result, attn
 
 class MultiheadAttention(nn.Module):
     def __init__(self, num_hidden_k):
@@ -100,7 +119,7 @@ class MultiheadAttention(nn.Module):
         # SDPA apply scale 1/sqrt(d) internally and can use optimized kernels
         dropout_p = self.attn_dropout.p if self.training else 0.0
 
-        # scaled_dot_product_attention expects (query, key, value)
+        # Note: scaled_dot_product_attention expects (query, key, value)
         out = F.scaled_dot_product_attention(
             query, key, value,
             attn_mask=None,
@@ -108,7 +127,7 @@ class MultiheadAttention(nn.Module):
             is_causal=False
         )
 
-        # For max perf, SDPA does not return attention weights.
+        # For maximum performance, SDPA does not return attention weights.
         attn_weights = None
         return out, attn_weights
 
@@ -177,7 +196,7 @@ class LocalSensorEncoder(nn.Module):
         return e.view(B, T, S, -1)    # (B, T, S, emb_dim)
 
 
-# LatentModel:
+# LatentModel: Define in src/models/anp.py
 
 class LatentModel(nn.Module):
     def __init__(self, num_hidden, input_dim, output_dim):
@@ -225,3 +244,78 @@ class LatentModel(nn.Module):
              + (prior_var - posterior_var) # (B, latent_dim)
         kl = 0.5 * kl.sum(dim=-1) # (B,)
         return kl.mean() # scalar, stable vs batch size
+
+class DistributedLatentModel(nn.Module):
+    """
+    Wraps a LatentModel with a per-sensor encoder + sensor fusion.
+    Expects *flat* inputs of shape (B, T, n_sensors * in_dim_per_sensor).
+    """
+    def __init__(
+        self,
+        base_anp: LatentModel,
+        n_sensors: int = 10,
+        in_dim_per_sensor: int = 401,
+        emb_dim: int = 64,
+        fusion: str = "mean",
+    ):
+        super().__init__()
+        self.base_anp = base_anp
+        self.n_sensors = n_sensors
+        self.in_dim_per_sensor = in_dim_per_sensor
+        self.emb_dim = emb_dim
+        self.fusion = fusion
+
+        self.local_encoder = LocalSensorEncoder(
+            in_dim=in_dim_per_sensor,
+            emb_dim=emb_dim,
+        )
+
+    def _fuse(self, x_flat: t.Tensor) -> t.Tensor:
+        """
+        x_flat: (B, T, n_sensors * in_dim_per_sensor)
+        returns fused: (B, T, emb_dim)
+        """
+        B, T, D = x_flat.shape
+        expected_D = self.n_sensors * self.in_dim_per_sensor
+        if D != expected_D:
+            raise ValueError(f"Expected input_dim={expected_D}, got {D}")
+
+        # (B, T, S, in_dim_per_sensor)
+        x = x_flat.view(B, T, self.n_sensors, self.in_dim_per_sensor)
+
+        # local encodings: (B, T, S, emb_dim)
+        e = self.local_encoder(x)
+
+        # fuse across sensors
+        if self.fusion == "mean":
+            fused = e.mean(dim=2)            # (B, T, emb_dim)
+        elif self.fusion == "max":
+            fused, _ = e.max(dim=2)         # (B, T, emb_dim)
+        else:
+            raise ValueError(f"Unknown fusion type: {self.fusion}")
+
+        return fused
+
+    def forward(
+        self,
+        context_x: t.Tensor,
+        context_y: t.Tensor,
+        target_x: t.Tensor,
+        target_y: t.Tensor = None,
+    ):
+        """
+        context_x: (B, N_ctx, n_sensors * in_dim_per_sensor)
+        context_y: (B, N_ctx, output_dim)
+        target_x:  (B, N_tar, n_sensors * in_dim_per_sensor)
+        target_y:  (B, N_tar, output_dim) or None
+        """
+        # Fuse context and target sensor data separately
+        fused_context_x = self._fuse(context_x)   # (B, N_ctx, emb_dim)
+        fused_target_x  = self._fuse(target_x)    # (B, N_tar, emb_dim)
+
+        return self.base_anp(
+            fused_context_x,
+            context_y,
+            fused_target_x,
+            target_y,
+        )
