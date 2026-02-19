@@ -47,7 +47,7 @@ import matplotlib.pyplot as plt
 import time
 
 # Ajusta imports si repo usa otra ruta
-from src.models.anp import LatentModel, DistributedLatentModel
+from src.models.anp import LatentModel
 from src.utils.nav_dataset import NavigationTrajectoryDataset
 
 
@@ -150,17 +150,7 @@ def load_anp_model(
     n_sensors = 10
     sensor_feature_dim = 401
 
-    if distributed:
-        base = LatentModel(num_hidden=128, input_dim=sensor_emb_dim, output_dim=output_dim)
-        model = DistributedLatentModel(
-            base_anp=base,
-            n_sensors=n_sensors,
-            in_dim_per_sensor=sensor_feature_dim,
-            emb_dim=sensor_emb_dim,
-            fusion="mean",
-        )
-    else:
-        model = LatentModel(num_hidden=128, input_dim=input_dim, output_dim=output_dim)
+    model = LatentModel(num_hidden=128, input_dim=input_dim, output_dim=output_dim)
 
     checkpoint = torch.load(ckpt_path, map_location=device)
     state = checkpoint["model"] if isinstance(checkpoint, dict) and "model" in checkpoint else checkpoint
@@ -1047,7 +1037,6 @@ def main():
     parser.add_argument("--use-gt-context", action="store_true", help="Usa GT en puntos de contexto como medidas del filtro")
     parser.add_argument("--context-R-eps", type=float, default=1e-4, help="Ruido de medida para puntos de contexto (si use-gt-context)")
 
-    parser.add_argument("--distributed", action="store_true", help="Cargar ANP en modo DistributedLatentModel")
     parser.add_argument("--max-per-theta", type=int, default=-1, help="Limita nº de trayectorias por theta (debug)")
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"])
 
