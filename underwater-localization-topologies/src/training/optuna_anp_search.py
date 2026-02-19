@@ -90,7 +90,7 @@ def make_objective(args):
         }
 
         # batch-size often interacts with lr; keep a small menu
-        hp["batch_size"] = trial.suggest_categorical("batch_size", [4, 8, 16])
+        hp["batch_size"] = trial.suggest_categorical("batch_size", [8, 16, 32])
 
         # ---------------------------
         # 2) Per-trial output folder
