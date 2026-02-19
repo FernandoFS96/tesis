@@ -157,7 +157,7 @@ def main():
     p.add_argument("--aggregate-topologies", action="store_true", help="If set, objective = mean MAE over ALL topologies (slower but more robust).")
 
     # training settings (keep these fixed during HPO; tune them only if you really need)
-    p.add_argument("--epochs", type=int, default=1500)
+    p.add_argument("--epochs", type=int, default=3000)
     p.add_argument("--patience", type=int, default=200)
     p.add_argument("--device", type=str, default="cuda")
 

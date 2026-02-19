@@ -1,0 +1,11 @@
+{
+  "num_hidden": 128,
+  "lr": 0.0016409119617016143,
+  "weight_decay": 6.431172050131997e-05,
+  "kl_warmup_epochs": 500,
+  "ctx_sample_mode": "first",
+  "sensor_drop_mode": "k_uniform",
+  "sensor_drop_p": 0.275034884505077,
+  "mask_fill": "zero",
+  "batch_size": 8
+}

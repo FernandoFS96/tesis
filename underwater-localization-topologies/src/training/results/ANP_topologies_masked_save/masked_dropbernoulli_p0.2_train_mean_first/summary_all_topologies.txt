@@ -1,0 +1,5 @@
+Best validation MAE per topology (MASKED training)
+============================================================
+aligned      : 13.044143
+ellipsoidal  : 6.371066
+random       : 5.328693
