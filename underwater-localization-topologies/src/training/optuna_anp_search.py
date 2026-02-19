@@ -8,34 +8,34 @@ Optuna wrapper for train_anp_topologies_masked.py
 
 Run (single process):
   python optuna_anp_search.py \
-    --data-dir /path/to/data_processed_topologies \
+    --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
     --topologies ellipsoidal \
     --objective-topology ellipsoidal \
     --n-trials 100 \
-    --storage sqlite:///optuna_anp.db \
+    --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/optuna_anp.db \
     --study-name anp_masked_v1
 
 Resume:
-  p--data-dir /path/to/data_processed_topologies_low_variance \
+  p--data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
   --topologies ellipsoidal \
   --objective-topology ellipsoidal \
   --n-trials 50 \
-  --storage sqlite:///optuna_anp.db \
+  --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/optuna_anp.db \
   --study-name anp_masked_v1 \
   --device cuda
 
 With nohup and redirect to log:
     nohup python optuna_anp_search.py \
-        --data-dir /path/to/data_processed_topologies \
+        --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
         --topologies ellipsoidal \
         --objective-topology ellipsoidal \
         --n-trials 100 \
-        --storage sqlite:///optuna_anp.db \
+        --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/optuna_anp.db \
         --study-name anp_masked_v1 \
-        > optuna_anp_masked_v1.log 2>&1 &
+        > optuna_anp_masked_v1_$(date +%F_%H%M%S)_$$.log 2>&1 &
 
     monitor with:
-    tail -f optuna_anp_masked_v1.log
+    tail -f optuna_anp_masked_v1_$(date +%F_%H%M%S)_$$.log 2>&1 &
 
 Parallel: start multiple processes pointing to the same storage+study:
   # terminal 1
