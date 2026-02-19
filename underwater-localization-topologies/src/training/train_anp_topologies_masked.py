@@ -276,6 +276,11 @@ def train_anp_topology_masked(
     mask_fill="train_mean",
     mask_in_val=False,
     kl_warmup_epochs=500,
+    num_hidden=128,
+    lr=8e-4,
+    weight_decay=1e-4,
+    trial=None,
+    report_every=25,
 ):
     os.makedirs(save_dir, exist_ok=True)
 
@@ -309,8 +314,8 @@ def train_anp_topology_masked(
     x_means_SP = torch.tensor(x_means_np, dtype=torch.float32, device=device)
 
     # model
-    model = LatentModel(num_hidden=128, input_dim=input_dim_new, output_dim=output_dim).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=8e-4, weight_decay=1e-4)
+    model = LatentModel(num_hidden=num_hidden, input_dim=input_dim_new, output_dim=output_dim).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
     # logs
     best_val_mae = float("inf")
@@ -539,6 +544,13 @@ def train_anp_topology_masked(
         val_var_mean_list.append(val_var_mean)
         val_var_max_list.append(val_var_max)
         val_nll_nonctx_list.append(val_nll_nonctx)
+
+        # Optuna pruning
+        if trial is not None and (epoch % report_every == 0):
+            import optuna
+            trial.report(val_mae, step=epoch)
+            if trial.should_prune():
+                raise optuna.TrialPruned()
 
         # early stopping
         if val_mae < best_val_mae:

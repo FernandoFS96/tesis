@@ -9,14 +9,33 @@ Optuna wrapper for train_anp_topologies_masked.py
 Run (single process):
   python optuna_anp_search.py \
     --data-dir /path/to/data_processed_topologies \
-    --topologies aligned,ellipsoidal,random \
-    --objective-topology aligned \
-    --n-trials 50 \
+    --topologies ellipsoidal \
+    --objective-topology ellipsoidal \
+    --n-trials 100 \
     --storage sqlite:///optuna_anp.db \
     --study-name anp_masked_v1
 
 Resume:
-  python optuna_anp_search.py ... same --storage and --study-name
+  p--data-dir /path/to/data_processed_topologies_low_variance \
+  --topologies ellipsoidal \
+  --objective-topology ellipsoidal \
+  --n-trials 50 \
+  --storage sqlite:///optuna_anp.db \
+  --study-name anp_masked_v1 \
+  --device cuda
+
+With nohup and redirect to log:
+    nohup python optuna_anp_search.py \
+        --data-dir /path/to/data_processed_topologies \
+        --topologies ellipsoidal \
+        --objective-topology ellipsoidal \
+        --n-trials 100 \
+        --storage sqlite:///optuna_anp.db \
+        --study-name anp_masked_v1 \
+        > optuna_anp_masked_v1.log 2>&1 &
+
+    monitor with:
+    tail -f optuna_anp_masked_v1.log
 
 Parallel: start multiple processes pointing to the same storage+study:
   # terminal 1
@@ -54,24 +73,24 @@ def make_objective(args):
         # ---------------------------
         hp = {
             # model / optimizer
-            "num_hidden": trial.suggest_int("num_hidden", 64, 256, step=32),
-            "lr": trial.suggest_float("lr", 1e-4, 3e-3, log=True),
+            "num_hidden": trial.suggest_int("num_hidden", 32, 192, step=32),
+            "lr": trial.suggest_float("lr", 1e-4, 5e-3, log=True),
             "weight_decay": trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True),
 
             # ANP training dynamics
-            "kl_warmup_epochs": trial.suggest_int("kl_warmup_epochs", 100, 800, step=100),
+            "kl_warmup_epochs": trial.suggest_int("kl_warmup_epochs", 200, 800, step=100),
 
             # context sampling
-            "ctx_sample_mode": trial.suggest_categorical("ctx_sample_mode", ["first", "random"]),
+            "ctx_sample_mode": trial.suggest_categorical("ctx_sample_mode", ["first"]),#trial.suggest_categorical("ctx_sample_mode", ["first", "random"]),
 
             # masking
             "sensor_drop_mode": trial.suggest_categorical("sensor_drop_mode", ["bernoulli", "k_uniform"]),
-            "sensor_drop_p": trial.suggest_float("sensor_drop_p", 0.0, 0.5),
+            "sensor_drop_p": trial.suggest_float("sensor_drop_p", 0.1, 0.5),
             "mask_fill": trial.suggest_categorical("mask_fill", ["train_mean", "zero"]),
         }
 
         # batch-size often interacts with lr; keep a small menu
-        hp["batch_size"] = trial.suggest_categorical("batch_size", [4, 8, 12, 16])
+        hp["batch_size"] = trial.suggest_categorical("batch_size", [4, 8, 16])
 
         # ---------------------------
         # 2) Per-trial output folder
@@ -93,8 +112,7 @@ def make_objective(args):
             save_dir = trial_dir / f"topology_{topo}"
             save_dir.mkdir(parents=True, exist_ok=True)
 
-            # NOTE: requires the small patch below so train_anp_topology_masked accepts:
-            #   num_hidden, lr, weight_decay, trial (optional)
+            # training function already has Optuna pruning hooks (trial.report + trial.should_prune), so it will report intermediate MAE values and prune unpromising trials.
             best_mae = train_mod.train_anp_topology_masked(
                 train_data=train_data,
                 val_data=val_data,
@@ -149,7 +167,7 @@ def main():
     p.add_argument("--mask-in-val", action="store_true", help="If set, apply masking also during validation (harder).")
 
     # optuna
-    p.add_argument("--n-trials", type=int, default=50)
+    p.add_argument("--n-trials", type=int, default=200)
     p.add_argument("--timeout", type=int, default=None)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--storage", type=str, default="sqlite:///optuna_anp.db")
