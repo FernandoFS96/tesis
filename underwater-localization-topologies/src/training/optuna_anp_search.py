@@ -173,7 +173,7 @@ def main():
     p.add_argument("--storage", type=str, default="sqlite:///optuna_anp.db")
     p.add_argument("--study-name", type=str, default="anp_masked_hpo")
     p.add_argument("--results-dir", type=str, default="results/optuna")
-    p.add_argument("--report-every", type=int, default=25, help="Epoch interval for trial.report() in training (pruning granularity).")
+    p.add_argument("--report-every", type=int, default=200, help="Epoch interval for trial.report() in training (pruning granularity).")
 
     # For GPU training, keep n_jobs=1 and parallelize with multiple processes (same --storage).
     p.add_argument("--n-jobs", type=int, default=1)
