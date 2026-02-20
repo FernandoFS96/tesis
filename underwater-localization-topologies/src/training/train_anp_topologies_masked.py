@@ -7,16 +7,16 @@ Usage:
 Using bernoulli dropout with 20% drop probability and filling masked sensors with training mean:
 python train_anp_topologies_masked.py \
   --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-  --batch-size 8 \
-  --epochs 5000 \
+  --batch-size 32 \
+  --epochs 3000 \
   --ctx-sample-mode first \
-  --patience 500 \
+  --patience 300 \
   --num-sensors 10 \
   --num-time-points 201 \
   --sensor-drop-mode bernoulli \
   --sensor-drop-p 0.2 \
   --mask-fill train_mean \
-  --topologies aligned,ellipsoidal,random \
+  --topologies ellipsoidal,aligned,random \
 
   Using k-uniform dropout with random k:
 python train_anp_topologies_masked.py \
