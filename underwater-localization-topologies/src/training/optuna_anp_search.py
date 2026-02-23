@@ -49,6 +49,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+from time import time
 
 import optuna
 from optuna.samplers import TPESampler
@@ -69,6 +70,9 @@ def make_objective(args):
     results_root.mkdir(parents=True, exist_ok=True)
 
     def objective(trial: optuna.trial.Trial) -> float:
+        t0 = time.perf_counter()
+        minutes_per_topology = {}
+        maes = {}
         # ---------------------------
         # 1) Sample hyperparameters
         # ---------------------------
@@ -104,7 +108,6 @@ def make_objective(args):
         # ---------------------------
         # 3) Train/eval on chosen topology/topologies
         # ---------------------------
-        maes = {}
         for topo in obj_topos:
             train_data, val_data, _ = train_mod.load_topology_data(args.data_dir, topo)
             if train_data is None:
@@ -112,6 +115,8 @@ def make_objective(args):
 
             save_dir = trial_dir / f"topology_{topo}"
             save_dir.mkdir(parents=True, exist_ok=True)
+
+            topo_t0 = time.perf_counter()
 
             # training function already has Optuna pruning hooks (trial.report + trial.should_prune), so it will report intermediate MAE values and prune unpromising trials.
             best_mae = train_mod.train_anp_topology_masked(
@@ -131,18 +136,22 @@ def make_objective(args):
                 mask_fill=hp["mask_fill"],
                 mask_in_val=args.mask_in_val,
                 kl_warmup_epochs=hp["kl_warmup_epochs"],
-                # new (patch)
+
                 num_hidden=hp["num_hidden"],
                 lr=hp["lr"],
                 weight_decay=hp["weight_decay"],
                 trial=trial,
                 report_every=args.report_every,
+
+                save_checkpoints=False,
             )
+            minutes_per_topology[topo] = (time.perf_counter() - topo_t0) / 60.0
             maes[topo] = float(best_mae)
 
-        # aggregate objective
         value = sum(maes.values()) / len(maes)
+
         trial.set_user_attr("mae_per_topology", maes)
+        trial.set_user_attr("minutes_per_topology", minutes_per_topology)
         trial.set_user_attr("objective_topologies", obj_topos)
         trial.set_user_attr("trial_dir", str(trial_dir))
         return value
@@ -182,13 +191,13 @@ def main():
     args = p.parse_args()
 
     sampler = TPESampler(seed=args.seed)
-    pruner = optuna.pruners.MedianPruner(
-    n_startup_trials=10,   # wait for more completed trials before pruning starts
-    n_warmup_steps=2000,   # allow at least 2000 updates before pruning
-    interval_steps=500,    # check every 500 updates
-    n_min_trials=5,        # require at least 5 trials reporting at this step
-)
-    pruner = MedianPruner(n_startup_trials=5, n_warmup_steps=max(1, args.report_every), interval_steps=args.report_every)
+    pruner = MedianPruner(
+        n_startup_trials=10,   # wait for more completed trials before pruning starts
+        n_warmup_steps=2000,   # allow at least 2000 updates before pruning
+        interval_steps=500,    # check every 500 updates
+        n_min_trials=5,        # require at least 5 trials reporting at this step
+    )
+    #pruner = MedianPruner(n_startup_trials=5, n_warmup_steps=max(1, args.report_every), interval_steps=args.report_every)
 
     study = optuna.create_study(
         study_name=args.study_name,

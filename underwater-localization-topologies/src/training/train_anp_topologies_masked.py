@@ -281,6 +281,7 @@ def train_anp_topology_masked(
     weight_decay=1e-4,
     trial=None,
     report_every=25,
+    save_checkpoints: bool = True,
 ):
     os.makedirs(save_dir, exist_ok=True)
 
@@ -559,8 +560,8 @@ def train_anp_topology_masked(
         if val_mae < best_val_mae:
             best_val_mae = val_mae
             early_stop_counter = 0
-            torch.save({'model': model.state_dict(), 'optimizer': optimizer.state_dict()},
-                       os.path.join(save_dir, 'best_checkpoint.pth.tar'))
+            if save_checkpoints:
+                torch.save({'model': model.state_dict(), 'optimizer': optimizer.state_dict()}, os.path.join(save_dir, 'best_checkpoint.pth.tar'))
         else:
             early_stop_counter += 1
 
@@ -582,8 +583,8 @@ def train_anp_topology_masked(
         })
 
     # save final
-    torch.save({'model': model.state_dict(), 'optimizer': optimizer.state_dict()},
-               os.path.join(save_dir, 'last_checkpoint.pth.tar'))
+    if save_checkpoints:
+        torch.save({'model': model.state_dict(), 'optimizer': optimizer.state_dict()}, os.path.join(save_dir, 'last_checkpoint.pth.tar'))
 
     save_all_metrics(
         train_loss_list, val_loss_list, train_mae_list, val_mae_list, save_dir,
