@@ -546,9 +546,12 @@ def train_anp_topology_masked(
         val_nll_nonctx_list.append(val_nll_nonctx)
 
         # Optuna pruning
+        steps_per_epoch = len(train_loader)   # number of gradient updates per epoch
+        global_step = (epoch + 1) * steps_per_epoch
+
         if trial is not None and (epoch % report_every == 0):
             import optuna
-            trial.report(val_mae, step=epoch)
+            trial.report(val_mae, step=global_step)
             if trial.should_prune():
                 raise optuna.TrialPruned()
 

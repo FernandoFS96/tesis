@@ -182,6 +182,12 @@ def main():
     args = p.parse_args()
 
     sampler = TPESampler(seed=args.seed)
+    pruner = optuna.pruners.MedianPruner(
+    n_startup_trials=10,   # wait for more completed trials before pruning starts
+    n_warmup_steps=2000,   # allow at least 2000 updates before pruning
+    interval_steps=500,    # check every 500 updates
+    n_min_trials=5,        # require at least 5 trials reporting at this step
+)
     pruner = MedianPruner(n_startup_trials=5, n_warmup_steps=max(1, args.report_every), interval_steps=args.report_every)
 
     study = optuna.create_study(
