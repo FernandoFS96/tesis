@@ -8,31 +8,32 @@ Optuna wrapper for train_anp_topologies_masked.py
 
 Run (single process):
   python optuna_anp_search.py \
-    --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
+    --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
     --topologies ellipsoidal \
     --objective-topology ellipsoidal \
-    --n-trials 100 \
+    --n-trials 200 \
     --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/optuna_anp.db \
-    --study-name anp_masked_v1
+    --study-name anp_masked_v2
 
 Resume:
-  p--data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
+  python optuna_anp_search.py \
+    --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
   --topologies ellipsoidal \
   --objective-topology ellipsoidal \
-  --n-trials 50 \
+  --n-trials 200 \
   --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/optuna_anp.db \
-  --study-name anp_masked_v1 \
+  --study-name anp_masked_v2 \
   --device cuda
 
 With nohup and redirect to log:
     nohup python optuna_anp_search.py \
-        --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
+        --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
         --topologies ellipsoidal \
         --objective-topology ellipsoidal \
-        --n-trials 100 \
+        --n-trials 200 \
         --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/optuna_anp.db \
-        --study-name anp_masked_v1 \
-        > optuna_anp_masked_v1_$(date +%F_%H%M%S)_$$.log 2>&1 &
+        --study-name anp_masked_v2 \
+        > optuna_anp_masked_v2_$(date +%F_%H%M%S)_$$.log 2>&1 &
 
     monitor with:
     tail -f optuna_anp_masked_v1_$(date +%F_%H%M%S)_$$.log 2>&1 &
@@ -173,7 +174,7 @@ def main():
     p.add_argument("--storage", type=str, default="sqlite:///optuna_anp.db")
     p.add_argument("--study-name", type=str, default="anp_masked_hpo")
     p.add_argument("--results-dir", type=str, default="results/optuna")
-    p.add_argument("--report-every", type=int, default=200, help="Epoch interval for trial.report() in training (pruning granularity).")
+    p.add_argument("--report-every", type=int, default=50, help="Epoch interval for trial.report() in training (pruning granularity).")
 
     # For GPU training, keep n_jobs=1 and parallelize with multiple processes (same --storage).
     p.add_argument("--n-jobs", type=int, default=1)
