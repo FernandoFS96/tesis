@@ -193,8 +193,8 @@ def main():
     sampler = TPESampler(seed=args.seed)
     pruner = MedianPruner(
         n_startup_trials=10,   # wait for more completed trials before pruning starts
-        n_warmup_steps=2000,   # allow at least 2000 updates before pruning
-        interval_steps=500,    # check every 500 updates
+        n_warmup_steps=1000,   # allow at least 1000 updates before pruning
+        interval_steps=250,    # check every 250 updates
         n_min_trials=5,        # require at least 5 trials reporting at this step
     )
     #pruner = MedianPruner(n_startup_trials=5, n_warmup_steps=max(1, args.report_every), interval_steps=args.report_every)
