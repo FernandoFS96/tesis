@@ -21,10 +21,10 @@ Use:
 # Train one ANP per topology using all theta values
 python train_anp_topologies.py \
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-    --batch-size 8 \
+    --batch-size 32 \
     --epochs 5000 \
     --ctx-sample-mode first \
-    --patience 500
+    --patience 250
 '''
 
 def compute_y_stats(train_data):
@@ -54,7 +54,7 @@ def load_topology_data(data_dir, topology):
     
     # Load train and validation data
     train_path = os.path.join(topology_dir, 'train_data.pkl')
-    val_path = os.path.join(topology_dir, 'val_data.pkl')
+    val_path = os.path.join(topology_dir, 'test_data.pkl')
     metadata_path = os.path.join(topology_dir, 'metadata.pkl')
     
     if not all(os.path.exists(p) for p in [train_path, val_path, metadata_path]):

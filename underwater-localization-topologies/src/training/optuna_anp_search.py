@@ -12,7 +12,7 @@ Run (single process):
     --topologies ellipsoidal \
     --objective-topology ellipsoidal \
     --n-trials 200 \
-    --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/optuna_anp.db \
+    --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
     --study-name anp_masked_v2
 
 Resume:
@@ -21,7 +21,7 @@ Resume:
   --topologies ellipsoidal \
   --objective-topology ellipsoidal \
   --n-trials 200 \
-  --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/optuna_anp.db \
+  --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
   --study-name anp_masked_v2 \
   --device cuda
 
@@ -31,12 +31,12 @@ With nohup and redirect to log:
         --topologies ellipsoidal \
         --objective-topology ellipsoidal \
         --n-trials 200 \
-        --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/optuna_anp.db \
+        --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
         --study-name anp_masked_v2 \
         > optuna_anp_masked_v2_$(date +%F_%H%M%S)_$$.log 2>&1 &
 
     monitor with:
-    tail -f optuna_anp_masked_v1_$(date +%F_%H%M%S)_$$.log 2>&1 &
+    tail -f optuna_anp_masked_v2_$(date +%F_%H%M%S)_$$.log 2>&1 &
 
 Parallel: start multiple processes pointing to the same storage+study:
   # terminal 1
@@ -49,7 +49,7 @@ import argparse
 import json
 import os
 from pathlib import Path
-from time import time
+import time
 
 import optuna
 from optuna.samplers import TPESampler
