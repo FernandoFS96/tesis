@@ -15,10 +15,10 @@ Notas:
 - El AR-rollout implementa despliegue autoregresivo en test-time (sin reentrenar), inspirado en AR deployment para CNP/NP.
   Véase: Bruinsma et al., "Autoregressive Conditional Neural Processes" (2023). (solo referencia conceptual)
 
-Ejemplo (8 métodos en compare + txt + boxplot):
+Ejemplo:
 python eval_anp_postprocess_filters_ar.py \
   --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-  --anp-dir  /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies/low_variance \
+  --anp-dir  /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies/low_variance/ctx_first \
   --topology random \
   --context 30 \
   --dt 1.0 \
@@ -139,7 +139,6 @@ def load_anp_model(
     input_dim: int,
     output_dim: int,
     device: torch.device,
-    distributed: bool = False,
 ) -> torch.nn.Module:
     """Carga best_checkpoint.pth.tar."""
     ckpt_path = Path(anp_dir) / f"ANP_{topology}" / "best_checkpoint.pth.tar"
@@ -976,7 +975,7 @@ def _write_compare_txt_ar8(
     lines.append("Postprocess comparison report")
     lines.append(f"Generated: {datetime.now().isoformat(timespec='seconds')}")
     lines.append(f"Topology={args.topology} | context={args.context}% | dt={args.dt} | eval_seed={args.eval_seed} | device={args.device}")
-    lines.append(f"use_gt_context={args.use_gt_context} | distributed={args.distributed} | context_R_eps={args.context_R_eps}")
+    lines.append(f"use_gt_context={args.use_gt_context} | context_R_eps={args.context_R_eps}")
     lines.append(f"alpha_beta: alpha={args.ab_alpha} beta={args.ab_beta} | kalman: sigma_a={args.kf_sigma_a}")
     if args.compare_include_ar:
         lines.append(f"AR: order={args.ar_order} | block_k={args.ar_block_k} | use_mu_as_z={args.use_mu_as_z} | var_thresh={args.ar_var_thresh} | force_accept={args.ar_force_accept} | max_added={args.ar_max_added}")
@@ -1015,6 +1014,129 @@ def _write_compare_txt_ar8(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines), encoding="utf-8")
 
+
+def pareto_mask_2d(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """
+    Pareto (minimización) para 2 objetivos:
+      x = tiempo (ms)
+      y = MAE
+    Devuelve mask booleano con los puntos NO dominados.
+    """
+    n = len(x)
+    mask = np.ones(n, dtype=bool)
+    for i in range(n):
+        if not mask[i]:
+            continue
+        # j domina a i si es <= en ambos y < en al menos uno
+        for j in range(n):
+            if i == j:
+                continue
+            if (x[j] <= x[i] and y[j] <= y[i]) and (x[j] < x[i] or y[j] < y[i]):
+                mask[i] = False
+                break
+    return mask
+
+
+def save_pareto_mae_vs_time(
+    mae_dict: Dict[str, List[float]],
+    time_dict: Dict[str, List[float]],
+    out_path: Path,
+    title: str,
+    order: List[str],
+    use_median: bool = False,
+    annotate: bool = True,
+):
+    """
+    Dibuja Pareto MAE vs tiempo (ms/trajectory).
+    - mae_dict[k] lista de MAE por trayectoria (o por-theta, pero mejor por trayectoria)
+    - time_dict[k] lista de tiempos por trayectoria (segundos)
+    """
+    labels = order
+    mae_vals = []
+    time_ms = []
+
+    for k in labels:
+        maes = np.asarray(mae_dict[k], dtype=float)
+        ts = np.asarray(time_dict[k], dtype=float) * 1000.0  # -> ms
+
+        if use_median:
+            mae_vals.append(float(np.median(maes)))
+            time_ms.append(float(np.median(ts)))
+        else:
+            mae_vals.append(float(np.mean(maes)))
+            time_ms.append(float(np.mean(ts)))
+
+    mae_vals = np.asarray(mae_vals)
+    time_ms = np.asarray(time_ms)
+
+    front = pareto_mask_2d(time_ms, mae_vals)
+
+    # ordenar front por tiempo para dibujar línea bonita
+    idx_front = np.where(front)[0]
+    idx_front = idx_front[np.argsort(time_ms[idx_front])]
+
+    fig, ax = plt.subplots(figsize=(7, 5), constrained_layout=True)
+
+    # todos los puntos
+    ax.scatter(time_ms, mae_vals)
+
+    # resaltar front
+    ax.scatter(time_ms[front], mae_vals[front])
+    ax.plot(time_ms[idx_front], mae_vals[idx_front])  # línea del front
+
+    if annotate:
+        for i, k in enumerate(labels):
+            ax.annotate(k, (time_ms[i], mae_vals[i]))
+
+    ax.set_xlabel("Tiempo medio (ms/trajectory)")
+    ax.set_ylabel("MAE medio" + (" (mediana)" if use_median else ""))
+    ax.set_title(title)
+    ax.grid(True, alpha=0.25)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+def lower_hull_indices(points_xy: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+    """
+    Devuelve índices del LOWER convex hull para puntos 2D (x,y) en orden creciente de x.
+    Útil para minimización (queremos la envolvente "inferior").
+
+    points_xy: (N,2) con columnas [x, y]
+    """
+    pts = np.asarray(points_xy, dtype=float)
+    n = pts.shape[0]
+    if n <= 1:
+        return np.arange(n)
+
+    # ordenar por x y luego por y
+    order = np.lexsort((pts[:, 1], pts[:, 0]))
+    pts_sorted = pts[order]
+
+    def cross(o, a, b):
+        # producto cruzado (OA x OB)
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower = []
+    for i, p in enumerate(pts_sorted):
+        while len(lower) >= 2:
+            o = pts_sorted[lower[-2]]
+            a = pts_sorted[lower[-1]]
+            b = p
+            # Para lower hull, quitamos giros no "clockwise" (cross <= 0) según convención.
+            # eps evita problemas numéricos / colinealidad.
+            if cross(o, a, b) <= eps:
+                lower.pop()
+            else:
+                break
+        lower.append(i)
+
+    # mapear a índices originales
+    hull_sorted_idx = np.array(lower, dtype=int)
+    hull_original_idx = order[hull_sorted_idx]
+    # asegurar orden por x creciente
+    hull_original_idx = hull_original_idx[np.argsort(pts[hull_original_idx, 0])]
+    return hull_original_idx
 
 # ---------------------------
 # Main
@@ -1093,7 +1215,7 @@ def main():
     y_mean, y_std = get_y_stats_from_train(Path(args.data_dir), args.topology, device=device)
     print(f"y_mean={y_mean.detach().cpu().numpy()}, y_std={y_std.detach().cpu().numpy()}")
 
-    anp = load_anp_model(Path(args.anp_dir), args.topology, input_dim, output_dim, device=device, distributed=args.distributed)
+    anp = load_anp_model(Path(args.anp_dir), args.topology, input_dim, output_dim, device=device)
     print("Loaded ANP.")
 
     # ---- modo normal (raw-only) ----
@@ -1188,6 +1310,19 @@ def main():
     _write_compare_txt_ar8(out_txt, args, theta_values, per_theta, keys, per_theta_time)
     print(f"\n[OK] Guardado comparativa en: {out_txt.resolve()}")
 
+    # Pareto MAE vs tiempo (ms/trajectory)
+    save_pareto_mae_vs_time(
+        mae_dict=mae_all,
+        time_dict=time_all,
+        out_path=Path("pareto_mae_vs_time.png"),
+        title=f"Pareto MAE vs Time | topology={args.topology} | context={args.context}% | include_ar={include_ar}",
+        order=keys,
+        use_median=False,
+        annotate=True,
+    )
+    print("[OK] Pareto guardado en: pareto_mae_vs_time.png")
+
+    # boxplot MAE por trayectoria
     if args.make_boxplot:
         save_mae_boxplot(
             mae_dict=mae_all,

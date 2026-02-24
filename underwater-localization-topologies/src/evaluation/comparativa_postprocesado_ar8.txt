@@ -1,0 +1,33 @@
+Postprocess comparison report
+Generated: 2026-02-23T19:51:14
+Topology=random | context=30% | dt=1.0 | eval_seed=0 | device=auto
+use_gt_context=False | context_R_eps=0.0001
+alpha_beta: alpha=0.85 beta=0.005 | kalman: sigma_a=0.11
+AR: order=closest | block_k=5 | use_mu_as_z=True | var_thresh=0.01 | force_accept=True | max_added=-1
+
+=== Global means (NO-context MAE) ===
+Global mean raw          : 6.1052 | improv_vs_raw=+0.0000 | improv%=+0.00%
+Global mean alpha_beta   : 5.7823 | improv_vs_raw=+0.3229 | improv%=+5.29%
+Global mean kalman_cv    : 5.0543 | improv_vs_raw=+1.0509 | improv%=+17.21%
+Global mean kalman_rts   : 4.7395 | improv_vs_raw=+1.3657 | improv%=+22.37%
+Global mean ar_raw       : 6.3667 | improv_vs_raw=-0.2614 | improv%=-4.28%
+Global mean ar_alpha_beta: 5.8690 | improv_vs_raw=+0.2363 | improv%=+3.87%
+Global mean ar_kalman_cv : 4.6186 | improv_vs_raw=+1.4866 | improv%=+24.35%
+Global mean ar_kalman_rts: 3.5411 | improv_vs_raw=+2.5642 | improv%=+42.00%
+
+=== Per-theta ===
+ theta            raw     alpha_beta      kalman_cv     kalman_rts         ar_raw  ar_alpha_beta   ar_kalman_cv  ar_kalman_rts impr_alpha_beta impr_kalman_cv impr_kalman_rts    impr_ar_raw impr_ar_alpha_beta impr_ar_kalman_cv impr_ar_kalman_rts
+   0.0         5.7807         5.4650         4.9193         4.6976         6.0878         5.6120         4.5246         3.5072         0.3157         0.8614         1.0831        -0.3071         0.1687         1.2561         2.2735 
+   0.1         5.7919         5.5337         4.8964         4.6471         6.1131         5.6590         4.5480         3.5089         0.2583         0.8955         1.1448        -0.3211         0.1329         1.2439         2.2830 
+   0.2         5.9515         5.6620         5.0089         4.6960         6.1047         5.6258         4.4648         3.4497         0.2895         0.9426         1.2555        -0.1532         0.3257         1.4867         2.5018 
+   0.3         6.8969         6.4686         5.3928         4.9174         7.1612         6.5790         4.9371         3.6984         0.4282         1.5040         1.9795        -0.2643         0.3179         1.9598         3.1985 
+
+=== Global mean time (ms/trajectory) ===
+Global mean time raw          :     3.28 ms | x 1.00 vs raw
+Global mean time alpha_beta   :     3.39 ms | x 1.03 vs raw
+Global mean time kalman_cv    :     5.93 ms | x 1.81 vs raw
+Global mean time kalman_rts   :     7.20 ms | x 2.20 vs raw
+Global mean time ar_raw       :    28.47 ms | x 8.69 vs raw
+Global mean time ar_alpha_beta:    28.59 ms | x 8.73 vs raw
+Global mean time ar_kalman_cv :    31.15 ms | x 9.50 vs raw
+Global mean time ar_kalman_rts:    32.37 ms | x 9.88 vs raw
