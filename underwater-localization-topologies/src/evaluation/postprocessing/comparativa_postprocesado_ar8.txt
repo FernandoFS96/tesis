@@ -1,33 +1,33 @@
 Postprocess comparison report
-Generated: 2026-01-30T13:15:35
+Generated: 2026-02-25T09:56:39
 Topology=random | context=30% | dt=1.0 | eval_seed=0 | device=auto
-use_gt_context=False | distributed=False | context_R_eps=0.0001
+use_gt_context=False | context_R_eps=0.0001
 alpha_beta: alpha=0.85 beta=0.005 | kalman: sigma_a=0.11
 AR: order=closest | block_k=5 | use_mu_as_z=True | var_thresh=0.01 | force_accept=True | max_added=-1
 
 === Global means (NO-context MAE) ===
-Global mean raw          : 4.6863 | improv_vs_raw=+0.0000 | improv%=+0.00%
-Global mean alpha_beta   : 4.2063 | improv_vs_raw=+0.4801 | improv%=+10.24%
-Global mean kalman_cv    : 3.9914 | improv_vs_raw=+0.6949 | improv%=+14.83%
-Global mean kalman_rts   : 2.8695 | improv_vs_raw=+1.8168 | improv%=+38.77%
-Global mean ar_raw       : 4.5312 | improv_vs_raw=+0.1552 | improv%=+3.31%
-Global mean ar_alpha_beta: 4.0232 | improv_vs_raw=+0.6631 | improv%=+14.15%
-Global mean ar_kalman_cv : 3.4958 | improv_vs_raw=+1.1906 | improv%=+25.40%
-Global mean ar_kalman_rts: 2.0386 | improv_vs_raw=+2.6477 | improv%=+56.50%
+Global mean raw          : 6.1052 | improv_vs_raw=+0.0000 | improv%=+0.00%
+Global mean alpha_beta   : 5.7823 | improv_vs_raw=+0.3229 | improv%=+5.29%
+Global mean kalman_cv    : 5.0543 | improv_vs_raw=+1.0509 | improv%=+17.21%
+Global mean kalman_rts   : 4.7395 | improv_vs_raw=+1.3657 | improv%=+22.37%
+Global mean ar_raw       : 6.3667 | improv_vs_raw=-0.2614 | improv%=-4.28%
+Global mean ar_alpha_beta: 5.8690 | improv_vs_raw=+0.2363 | improv%=+3.87%
+Global mean ar_kalman_cv : 4.6186 | improv_vs_raw=+1.4866 | improv%=+24.35%
+Global mean ar_kalman_rts: 3.5411 | improv_vs_raw=+2.5642 | improv%=+42.00%
 
 === Per-theta ===
  theta            raw     alpha_beta      kalman_cv     kalman_rts         ar_raw  ar_alpha_beta   ar_kalman_cv  ar_kalman_rts impr_alpha_beta impr_kalman_cv impr_kalman_rts    impr_ar_raw impr_ar_alpha_beta impr_ar_kalman_cv impr_ar_kalman_rts
-   0.1         3.5134         3.1329         3.4860         2.3745         3.2655         2.9027         3.0030         1.6597         0.3805         0.0274         1.1389         0.2479         0.6107         0.5104         1.8537 
-   0.2         3.6970         3.3982         3.5819         2.3424         3.5124         3.1339         3.0837         1.6783         0.2989         0.1151         1.3546         0.1847         0.5631         0.6134         2.0187 
-   0.3         4.7418         4.2291         3.9712         2.9181         4.5018         3.9640         3.4773         1.9304         0.5127         0.7705         1.8236         0.2399         0.7778         1.2645         2.8114 
-   0.4         6.7932         6.0649         4.9266         3.8430         6.8450         6.0922         4.4192         2.8859         0.7283         1.8666         2.9502        -0.0518         0.7010         2.3740         3.9073 
+   0.0         5.7807         5.4650         4.9193         4.6976         6.0878         5.6120         4.5246         3.5072         0.3157         0.8614         1.0831        -0.3071         0.1687         1.2561         2.2735 
+   0.1         5.7919         5.5337         4.8964         4.6471         6.1131         5.6590         4.5480         3.5089         0.2583         0.8955         1.1448        -0.3211         0.1329         1.2439         2.2830 
+   0.2         5.9515         5.6620         5.0089         4.6960         6.1047         5.6258         4.4648         3.4497         0.2895         0.9426         1.2555        -0.1532         0.3257         1.4867         2.5018 
+   0.3         6.8969         6.4686         5.3928         4.9174         7.1612         6.5790         4.9371         3.6984         0.4282         1.5040         1.9795        -0.2643         0.3179         1.9598         3.1985 
 
 === Global mean time (ms/trajectory) ===
-Global mean time raw          :     3.33 ms | x 1.00 vs raw
-Global mean time alpha_beta   :     3.45 ms | x 1.03 vs raw
-Global mean time kalman_cv    :     5.92 ms | x 1.78 vs raw
-Global mean time kalman_rts   :     7.20 ms | x 2.16 vs raw
-Global mean time ar_raw       :    24.54 ms | x 7.36 vs raw
-Global mean time ar_alpha_beta:    24.65 ms | x 7.40 vs raw
-Global mean time ar_kalman_cv :    27.16 ms | x 8.15 vs raw
-Global mean time ar_kalman_rts:    28.40 ms | x 8.52 vs raw
+Global mean time raw          :     3.70 ms | x 1.00 vs raw
+Global mean time alpha_beta   :     3.82 ms | x 1.03 vs raw
+Global mean time kalman_cv    :     6.36 ms | x 1.72 vs raw
+Global mean time kalman_rts   :     7.61 ms | x 2.06 vs raw
+Global mean time ar_raw       :    24.94 ms | x 6.74 vs raw
+Global mean time ar_alpha_beta:    25.06 ms | x 6.77 vs raw
+Global mean time ar_kalman_cv :    27.60 ms | x 7.46 vs raw
+Global mean time ar_kalman_rts:    28.88 ms | x 7.81 vs raw

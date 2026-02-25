@@ -14,8 +14,8 @@ Adds to your current inspect script:
 
 Usage:
   python inspect_optuna_v2.py \
-    --storage "sqlite:////home/fernando/tesis/underwater-localization-topologies/optuna_anp.db" \
-    --study-name anp_masked_v2 \
+    --storage "sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db" \
+    --study-name anp_masked_v3 \
     --output-dir results/optuna \
     --group-param batch_size \
     --top-n 5 \
