@@ -1198,6 +1198,16 @@ def main():
     parser.add_argument("--pareto-hull", action="store_true", help="Dibuja la envolvente convexa inferior (supported hull) en el Pareto.")
     args = parser.parse_args()
 
+    script_dir = Path(__file__).resolve().parent
+    out_root = script_dir / "postprocessing"
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    def _to_postprocessing_path(path_str: str) -> Path:
+        p = Path(path_str)
+        if p.is_absolute():
+            return out_root / p.name
+        return out_root / p
+
     device = torch.device(
         "cuda" if (args.device == "auto" and torch.cuda.is_available()) else
         ("cuda" if args.device == "cuda" else "cpu")
@@ -1307,7 +1317,7 @@ def main():
             print(f"    - {k:13s} MAE={mae_mean[k]:.4f} | improv_vs_raw={mae_mean['raw'] - mae_mean[k]:+.4f}")
         print(f"    - {'raw':13s} MAE={mae_mean['raw']:.4f}")
 
-    out_txt = Path(args.out_txt)
+    out_txt = _to_postprocessing_path(args.out_txt)
     _write_compare_txt_ar8(out_txt, args, theta_values, per_theta, keys, per_theta_time)
     print(f"\n[OK] Guardado comparativa en: {out_txt.resolve()}")
 
@@ -1315,61 +1325,56 @@ def main():
     save_pareto_mae_vs_time(
         mae_dict=mae_all,
         time_dict=time_all,
-        out_path=Path("pareto_mae_vs_time.png"),
+        out_path=_to_postprocessing_path("pareto_mae_vs_time.png"),
         title=f"Pareto MAE vs Time | topology={args.topology} | context={args.context}% | include_ar={include_ar}",
         order=keys,
         use_median=False,
         annotate=True,
         show_supported_hull=args.pareto_hull,
     )
-    print("[OK] Pareto guardado en: pareto_mae_vs_time.png")
+    print(f"[OK] Pareto guardado en: {_to_postprocessing_path('pareto_mae_vs_time.png').resolve()}")
 
     # boxplot MAE por trayectoria
     if args.make_boxplot:
         save_mae_boxplot(
             mae_dict=mae_all,
-            out_path=Path(args.boxplot_path),
+            out_path=_to_postprocessing_path(args.boxplot_path),
             title=f"MAE distribution | topology={args.topology} | context={args.context}% | include_ar={include_ar}",
             showfliers=args.boxplot_showfliers,
             order=keys,
         )
-        print(f"[OK] Boxplot guardado en: {Path(args.boxplot_path).resolve()}")
+        print(f"[OK] Boxplot guardado en: {_to_postprocessing_path(args.boxplot_path).resolve()}")
 
     # cualitativos: solo raw + filtros clásicos
-    if args.make_qual_plots:
-        qdir = Path(args.qual_dir)
-        qdir.mkdir(parents=True, exist_ok=True)
-        methods = ["alpha_beta", "kalman_cv", "kalman_rts"]
-
-        for theta in theta_values:
-            samples = theta_groups[theta]
-            if args.max_per_theta > 0:
-                samples = samples[:args.max_per_theta]
-
-            out_fig = qdir / f"theta_{theta:.1f}.png"
-            save_qualitative_plot_for_theta(
-                theta=theta,
-                samples=samples,
-                anp_model=anp,
-                y_mean=y_mean,
-                y_std=y_std,
-                device=device,
-                context_percent=args.context,
-                base_eval_seed=args.eval_seed,
-                methods=methods,
-                dt=args.dt,
-                use_gt_context_in_filter=args.use_gt_context,
-                context_R_eps=args.context_R_eps,
-                alpha=args.ab_alpha,
-                beta=args.ab_beta,
-                sigma_a=args.kf_sigma_a,
-                n_traj=args.qual_n,
-                pick_seed=args.qual_seed,
-                out_path=out_fig,
-            )
-
-        print(f"[OK] Plots cualitativos guardados en: {qdir.resolve()}")
-
+    qdir = _to_postprocessing_path(args.qual_dir)
+    qdir.mkdir(parents=True, exist_ok=True)
+    methods = ["alpha_beta", "kalman_cv", "kalman_rts"]
+    for theta in theta_values:
+        samples = theta_groups[theta]
+        if args.max_per_theta > 0:
+            samples = samples[:args.max_per_theta]
+        out_fig = qdir / f"theta_{theta:.1f}.png"
+        save_qualitative_plot_for_theta(
+            theta=theta,
+            samples=samples,
+            anp_model=anp,
+            y_mean=y_mean,
+            y_std=y_std,
+            device=device,
+            context_percent=args.context,
+            base_eval_seed=args.eval_seed,
+            methods=methods,
+            dt=args.dt,
+            use_gt_context_in_filter=args.use_gt_context,
+            context_R_eps=args.context_R_eps,
+            alpha=args.ab_alpha,
+            beta=args.ab_beta,
+            sigma_a=args.kf_sigma_a,
+            n_traj=args.qual_n,
+            pick_seed=args.qual_seed,
+            out_path=out_fig,
+        )
+    print(f"[OK] Plots cualitativos guardados en: {qdir.resolve()}")
 
 if __name__ == "__main__":
     main()
