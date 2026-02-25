@@ -1,5 +1,5 @@
 Postprocess comparison report
-Generated: 2026-02-23T19:51:14
+Generated: 2026-02-24T15:20:53
 Topology=random | context=30% | dt=1.0 | eval_seed=0 | device=auto
 use_gt_context=False | context_R_eps=0.0001
 alpha_beta: alpha=0.85 beta=0.005 | kalman: sigma_a=0.11
@@ -23,11 +23,11 @@ Global mean ar_kalman_rts: 3.5411 | improv_vs_raw=+2.5642 | improv%=+42.00%
    0.3         6.8969         6.4686         5.3928         4.9174         7.1612         6.5790         4.9371         3.6984         0.4282         1.5040         1.9795        -0.2643         0.3179         1.9598         3.1985 
 
 === Global mean time (ms/trajectory) ===
-Global mean time raw          :     3.28 ms | x 1.00 vs raw
-Global mean time alpha_beta   :     3.39 ms | x 1.03 vs raw
-Global mean time kalman_cv    :     5.93 ms | x 1.81 vs raw
-Global mean time kalman_rts   :     7.20 ms | x 2.20 vs raw
-Global mean time ar_raw       :    28.47 ms | x 8.69 vs raw
-Global mean time ar_alpha_beta:    28.59 ms | x 8.73 vs raw
-Global mean time ar_kalman_cv :    31.15 ms | x 9.50 vs raw
-Global mean time ar_kalman_rts:    32.37 ms | x 9.88 vs raw
+Global mean time raw          :     3.30 ms | x 1.00 vs raw
+Global mean time alpha_beta   :     3.41 ms | x 1.03 vs raw
+Global mean time kalman_cv    :     5.87 ms | x 1.78 vs raw
+Global mean time kalman_rts   :     7.08 ms | x 2.15 vs raw
+Global mean time ar_raw       :    27.54 ms | x 8.35 vs raw
+Global mean time ar_alpha_beta:    27.65 ms | x 8.39 vs raw
+Global mean time ar_kalman_cv :    30.16 ms | x 9.15 vs raw
+Global mean time ar_kalman_rts:    31.31 ms | x 9.50 vs raw

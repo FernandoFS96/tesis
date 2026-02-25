@@ -26,7 +26,7 @@ python eval_anp_postprocess_filters_ar.py \
   --out-txt comparativa_postprocesado_ar8.txt \
   --make-boxplot --boxplot-path mae_boxplot_ar8.png --boxplot-showfliers \
   --compare-include-ar \
-  --ar-order closest --ar-block-k 5 --use-mu-as-z --ar-var-thresh 0.01 --ar-force-accept
+  --ar-order closest --ar-block-k 5 --use-mu-as-z --ar-var-thresh 0.01 --ar-force-accept --pareto-hull
 """
 
 from __future__ import annotations
@@ -1045,6 +1045,7 @@ def save_pareto_mae_vs_time(
     order: List[str],
     use_median: bool = False,
     annotate: bool = True,
+    show_supported_hull: bool = False
 ):
     """
     Dibuja Pareto MAE vs tiempo (ms/trajectory).
@@ -1069,20 +1070,21 @@ def save_pareto_mae_vs_time(
     mae_vals = np.asarray(mae_vals)
     time_ms = np.asarray(time_ms)
 
+    # Pareto no dominado (ya lo tienes)
     front = pareto_mask_2d(time_ms, mae_vals)
-
-    # ordenar front por tiempo para dibujar línea bonita
     idx_front = np.where(front)[0]
     idx_front = idx_front[np.argsort(time_ms[idx_front])]
 
     fig, ax = plt.subplots(figsize=(7, 5), constrained_layout=True)
-
-    # todos los puntos
     ax.scatter(time_ms, mae_vals)
-
-    # resaltar front
     ax.scatter(time_ms[front], mae_vals[front])
-    ax.plot(time_ms[idx_front], mae_vals[idx_front])  # línea del front
+    ax.plot(time_ms[idx_front], mae_vals[idx_front], label="Pareto (no dominado)")
+
+    # --- Supported hull (lower convex hull) ---
+    if show_supported_hull and len(time_ms) >= 2:
+        pts = np.column_stack([time_ms, mae_vals])
+        idx_hull = lower_hull_indices(pts)
+        ax.plot(time_ms[idx_hull], mae_vals[idx_hull], linestyle="--", label="Supported hull (lower convex hull)")
 
     if annotate:
         for i, k in enumerate(labels):
@@ -1189,12 +1191,11 @@ def main():
     parser.add_argument("--qual-dir", type=str, default="qualitative_plots")
 
     # boxplot
-    parser.add_argument("--make-boxplot", action="store_true",
-                        help="(mejor con --filter compare) boxplot con MAE de todas las trayectorias")
+    parser.add_argument("--make-boxplot", action="store_true", help="(mejor con --filter compare) boxplot con MAE de todas las trayectorias")
     parser.add_argument("--boxplot-path", type=str, default="mae_boxplot.png")
-    parser.add_argument("--boxplot-showfliers", action="store_true",
-                        help="muestra outliers como puntos (si no, los oculta)")
+    parser.add_argument("--boxplot-showfliers", action="store_true", help="muestra outliers como puntos (si no, los oculta)")
 
+    parser.add_argument("--pareto-hull", action="store_true", help="Dibuja la envolvente convexa inferior (supported hull) en el Pareto.")
     args = parser.parse_args()
 
     device = torch.device(
@@ -1319,6 +1320,7 @@ def main():
         order=keys,
         use_median=False,
         annotate=True,
+        show_supported_hull=args.pareto_hull,
     )
     print("[OK] Pareto guardado en: pareto_mae_vs_time.png")
 
