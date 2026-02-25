@@ -124,6 +124,25 @@ def _save_dict_csv(d: Dict[str, float], path: Path, key_name: str = "param", val
     df.to_csv(path, index=False)
 
 
+def _add_time_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    """Expand user_attrs minutes_per_topology into columns and total minutes."""
+    col = "user_attrs_minutes_per_topology"
+    if col not in df.columns:
+        return df
+
+    def _as_dict(v: Any) -> Dict[str, float]:
+        if isinstance(v, dict):
+            return {str(k): float(vv) for k, vv in v.items()}
+        return {}
+
+    minutes_series = df[col].apply(_as_dict)
+    all_keys = sorted({k for d in minutes_series for k in d.keys()})
+    for k in all_keys:
+        df[f"minutes_{k}"] = minutes_series.apply(lambda d: d.get(k, pd.NA))
+    df["minutes_total"] = minutes_series.apply(lambda d: sum(d.values()) if d else pd.NA)
+    return df
+
+
 def _try_make_plots(study: optuna.Study, outdir: Path, params: Optional[List[str]] = None) -> None:
     """Save a few Optuna interactive plots as HTML (requires plotly)."""
     try:
@@ -168,7 +187,7 @@ def main() -> None:
                     help="Importance evaluator. fanova needs scikit-learn; pedanova is lighter.")
     ap.add_argument("--importance-seed", type=int, default=0,
                     help="Seed for fANOVA (ignored by PED-ANOVA).")
-    ap.add_argument("--min-trials-importance", type=int, default=10,
+    ap.add_argument("--min-trials-importance", type=int, default=7,
                     help="Minimum COMPLETE trials required to compute per-group importances.")
     ap.add_argument("--make-plots", action="store_true",
                     help="If set, save Optuna interactive plots as HTML (requires plotly).")
@@ -190,18 +209,27 @@ def main() -> None:
 
     # Export all trials (including PRUNED/FAIL) to CSV
     df_all = study.trials_dataframe(attrs=("number", "value", "state", "params", "user_attrs"))
+    df_all = _add_time_metrics(df_all)
     all_csv = outdir / f"{args.study_name}_trials_all.csv"
     df_all.to_csv(all_csv, index=False)
     print("\n[export] wrote:", all_csv)
 
     # Complete-only df for analyses
     df = _load_complete_df(study)
+    df = _add_time_metrics(df)
     complete_csv = outdir / f"{args.study_name}_trials_complete.csv"
     df.to_csv(complete_csv, index=False)
     print("[export] wrote:", complete_csv)
 
     print("\nTop-10 COMPLETE trials:")
-    print(df.sort_values("value").head(10)[["number", "value"]].to_string(index=False))
+    top_cols = ["number", "value"]
+    if "minutes_total" in df.columns:
+        top_cols.append("minutes_total")
+    print(df.sort_values("value").head(10)[top_cols].to_string(index=False))
+
+    if "minutes_total" in df.columns:
+        print("\nTop-10 slowest COMPLETE trials:")
+        print(df.sort_values("minutes_total", ascending=False).head(10)[["number", "value", "minutes_total"]].to_string(index=False))
 
     # -----------------------
     # Grouped analysis
@@ -218,6 +246,19 @@ def main() -> None:
     print(f"\n=== Summary by {group_col} ===")
     print(summary.to_string())
     print("[export] wrote:", summary_csv)
+
+    if "minutes_total" in df.columns:
+        time_summary = (
+            df.groupby(group_col)["minutes_total"]
+            .agg(["count", "min", "median", "mean", "max"])
+            .rename(columns={"count": "n_trials"})
+            .sort_values("mean")
+        )
+        time_summary_csv = outdir / f"{args.study_name}_time_summary_by_{args.group_param}.csv"
+        time_summary.to_csv(time_summary_csv)
+        print(f"\n=== Time summary by {group_col} (minutes_total) ===")
+        print(time_summary.to_string())
+        print("[export] wrote:", time_summary_csv)
 
     # Top-N per group
     cols = [
