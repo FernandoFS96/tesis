@@ -122,9 +122,9 @@ def denormalize_y(y_norm: torch.Tensor, y_mean: torch.Tensor, y_std: torch.Tenso
 
 
 def sample_context_indices(total_points: int, n_context: int, g: torch.Generator, device: torch.device) -> torch.Tensor:
-    """Subconjunto aleatorio determinista y ordenado."""
-    perm = torch.randperm(total_points, generator=g, device=device)
-    return perm[:n_context].sort().values
+    """Primeros n_context puntos (ordenados desde el inicio)."""
+    n_context = max(1, min(n_context, total_points))
+    return torch.arange(n_context, device=device, dtype=torch.long)
 
 
 def sample_context_indices_ordered(total_points: int, n_context: int) -> torch.Tensor:
