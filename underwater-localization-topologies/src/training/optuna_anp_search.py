@@ -14,6 +14,7 @@ Run (single process):
     --n-trials 200 \
     --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
     --study-name anp_masked_v2
+    --disable-pruning
 
 Resume:
   python optuna_anp_search.py \
@@ -79,19 +80,21 @@ def make_objective(args):
         hp = {
             # model / optimizer
             "num_hidden": trial.suggest_int("num_hidden", 32, 192, step=32),
-            "lr": trial.suggest_float("lr", 1e-4, 5e-3, log=True),
-            "weight_decay": trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True),
+            "lr": trial.suggest_categorical("lr", [5e-3, 3e-3, 1e-3, 9e-4, 7e-4, 5e-4, 3e-4, 1e-4, 9e-5],
+                                            ),
+            "weight_decay": trial.suggest_categorical("weight_decay", [1e-3, 5e-4, 3e-4, 1e-4, 5e-5, 3e-5, 1e-5, 5e-6, 3e-6, 1e-6],
+                                                      ),
 
             # ANP training dynamics
-            "kl_warmup_epochs": trial.suggest_int("kl_warmup_epochs", 200, 800, step=100),
+            "kl_warmup_epochs": trial.suggest_int("kl_warmup_epochs", 200, 1000, step=200),
 
             # context sampling
             "ctx_sample_mode": trial.suggest_categorical("ctx_sample_mode", ["first"]),#trial.suggest_categorical("ctx_sample_mode", ["first", "random"]),
 
             # masking
             "sensor_drop_mode": trial.suggest_categorical("sensor_drop_mode", ["bernoulli", "k_uniform"]),
-            "sensor_drop_p": trial.suggest_float("sensor_drop_p", 0.1, 0.5),
-            "mask_fill": trial.suggest_categorical("mask_fill", ["train_mean", "zero"]),
+            "sensor_drop_p": trial.suggest_categorical("sensor_drop_p", [0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.6]),
+            "mask_fill": trial.suggest_categorical("mask_fill", ["train_mean"]),#("mask_fill", ["train_mean", "zero"]),
         }
 
         # batch-size often interacts with lr; keep a small menu
@@ -184,6 +187,7 @@ def main():
     p.add_argument("--study-name", type=str, default="anp_masked_hpo")
     p.add_argument("--results-dir", type=str, default="results/optuna")
     p.add_argument("--report-every", type=int, default=50, help="Epoch interval for trial.report() in training (pruning granularity).")
+    p.add_argument("--disable-pruning", action="store_true", help="Disable Optuna pruning so all trials run to completion.")
 
     # For GPU training, keep n_jobs=1 and parallelize with multiple processes (same --storage).
     p.add_argument("--n-jobs", type=int, default=1)
@@ -191,13 +195,15 @@ def main():
     args = p.parse_args()
 
     sampler = TPESampler(seed=args.seed)
-    pruner = MedianPruner(
-        n_startup_trials=10,   # wait for more completed trials before pruning starts
-        n_warmup_steps=1000,   # allow at least 1000 updates before pruning
-        interval_steps=250,    # check every 250 updates
-        n_min_trials=5,        # require at least 5 trials reporting at this step
-    )
-    #pruner = MedianPruner(n_startup_trials=5, n_warmup_steps=max(1, args.report_every), interval_steps=args.report_every)
+    if args.disable_pruning:
+        pruner = optuna.pruners.NopPruner()
+    else:
+        pruner = MedianPruner(
+            n_startup_trials=10,   # wait for more completed trials before pruning starts
+            n_warmup_steps=1000,   # allow at least 1000 updates before pruning
+            interval_steps=250,    # check every 250 updates
+            n_min_trials=5,        # require at least 5 trials reporting at this step
+        )
 
     study = optuna.create_study(
         study_name=args.study_name,
