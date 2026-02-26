@@ -1,10 +1,10 @@
 '''
-Docstring for src.training.train_anp_topologies_masked
+Docstring for src.training.train_r-anp_topologies_masked
 
 This script trains ANP models with sensor masking for each topology and logs detailed diagnostics.
 
 Usage with RNN encoder and masking:
-python train_anp_topologies_masked.py \
+python train_r-anp_topologies_masked.py \
   --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
   --batch-size 16 \
   --epochs 5000 \
