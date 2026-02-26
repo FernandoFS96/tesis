@@ -7,7 +7,7 @@ Usage:
 Using bernoulli dropout with 20% drop probability and filling masked sensors with training mean:
 python train_anp_topologies_masked.py \
   --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-  --batch-size 32 \
+  --batch-size 16 \
   --epochs 3000 \
   --ctx-sample-mode first \
   --patience 300 \
