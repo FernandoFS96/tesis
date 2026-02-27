@@ -11,9 +11,9 @@ Run (single process):
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
     --topologies ellipsoidal \
     --objective-topology ellipsoidal \
-    --n-trials 200 \
+    --n-trials 400 \
     --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
-    --study-name anp_masked_v2
+    --study-name anp_masked_v4 \
     --disable-pruning
 
 Resume:
@@ -23,7 +23,7 @@ Resume:
   --objective-topology ellipsoidal \
   --n-trials 200 \
   --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
-  --study-name anp_masked_v2 \
+  --study-name anp_masked_v4 \
   --device cuda
 
 With nohup and redirect to log:
@@ -33,11 +33,11 @@ With nohup and redirect to log:
         --objective-topology ellipsoidal \
         --n-trials 200 \
         --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
-        --study-name anp_masked_v2 \
-        > optuna_anp_masked_v2_$(date +%F_%H%M%S)_$$.log 2>&1 &
+        --study-name anp_masked_v4 \
+        > optuna_anp_masked_v4_$(date +%F_%H%M%S)_$$.log 2>&1 &
 
     monitor with:
-    tail -f optuna_anp_masked_v2_$(date +%F_%H%M%S)_$$.log 2>&1 &
+    tail -f optuna_anp_masked_v4_$(date +%F_%H%M%S)_$$.log 2>&1 &
 
 Parallel: start multiple processes pointing to the same storage+study:
   # terminal 1
@@ -80,9 +80,9 @@ def make_objective(args):
         hp = {
             # model / optimizer
             "num_hidden": trial.suggest_int("num_hidden", 32, 192, step=32),
-            "lr": trial.suggest_categorical("lr", [5e-3, 3e-3, 1e-3, 9e-4, 7e-4, 5e-4, 3e-4, 1e-4, 9e-5],
+            "lr": trial.suggest_categorical("lr", [5e-3, 3e-3, 1e-3, 9e-4, 7e-4, 5e-4, 3e-4, 1e-4],
                                             ),
-            "weight_decay": trial.suggest_categorical("weight_decay", [1e-3, 5e-4, 3e-4, 1e-4, 5e-5, 3e-5, 1e-5, 5e-6, 3e-6, 1e-6],
+            "weight_decay": trial.suggest_categorical("weight_decay", [1e-3, 5e-4, 1e-4, 5e-5, 1e-5, 5e-6, 1e-6],
                                                       ),
 
             # ANP training dynamics
@@ -93,7 +93,7 @@ def make_objective(args):
 
             # masking
             "sensor_drop_mode": trial.suggest_categorical("sensor_drop_mode", ["bernoulli", "k_uniform"]),
-            "sensor_drop_p": trial.suggest_categorical("sensor_drop_p", [0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.6]),
+            "sensor_drop_p": trial.suggest_categorical("sensor_drop_p", [0.1, 0.15, 0.2, 0.3, 0.4, 0.5]),
             "mask_fill": trial.suggest_categorical("mask_fill", ["train_mean"]),#("mask_fill", ["train_mean", "zero"]),
         }
 
@@ -171,7 +171,7 @@ def main():
 
     # training settings (keep these fixed during HPO; tune them only if you really need)
     p.add_argument("--epochs", type=int, default=3000)
-    p.add_argument("--patience", type=int, default=200)
+    p.add_argument("--patience", type=int, default=150)
     p.add_argument("--device", type=str, default="cuda")
 
     # data/model sizes needed by masking layout
