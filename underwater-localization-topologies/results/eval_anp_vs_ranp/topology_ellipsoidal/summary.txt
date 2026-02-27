@@ -1,0 +1,18 @@
+Topology: ellipsoidal
+Baseline ckpt: /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies_masked/masked_dropbernoulli_p0.2_train_mean_first/topology_ellipsoidal/best_checkpoint.pth.tar
+Recurrent ckpt: /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies_masked/masked_dropbernoulli_p0.2_train_mean_first_rnn-lstm_h128_l1_d0.0/topology_ellipsoidal/best_checkpoint.pth.tar
+Heatmap context: 0.3
+Target mode: all_points
+
+Theta-wise MAE (ANP vs RANP)
+============================================================
+theta=0.0      ANP=4.8661 | RANP=7.4051 | delta=+2.5390
+theta=0.1000000015 ANP=4.8401 | RANP=7.4410 | delta=+2.6008
+theta=0.200000003 ANP=4.8720 | RANP=7.4512 | delta=+2.5792
+theta=0.3000000119 ANP=6.0588 | RANP=7.5200 | delta=+1.4612
+
+Best improvements (ANP - RANP)
+theta=0.3000000119: improvement=-1.4612 (ANP 6.0588 -> RANP 7.5200)
+theta=0.0: improvement=-2.5390 (ANP 4.8661 -> RANP 7.4051)
+theta=0.200000003: improvement=-2.5792 (ANP 4.8720 -> RANP 7.4512)
+theta=0.1000000015: improvement=-2.6008 (ANP 4.8401 -> RANP 7.4410)

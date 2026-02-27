@@ -22,10 +22,10 @@ Assumptions aligned with your training pipeline:
 Examples
 --------
 python evaluate_anp_vs_ranp.py \
-  --data-dir /path/to/data_processed_topologies_low_variance \
-  --baseline-root /path/to/results/ANP_topologies_masked/masked_dropbernoulli_p0.2_train_mean_first \
-  --recurrent-root /path/to/results/ANP_topologies_masked/masked_dropbernoulli_p0.2_train_mean_first_rnnlstm_h128_L1_d0.0 \
-  --output-dir /path/to/results/eval_anp_vs_ranp \
+  --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+  --baseline-root /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies_masked/masked_dropbernoulli_p0.2_train_mean_first \
+  --recurrent-root /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies_masked/masked_dropbernoulli_p0.2_train_mean_first_rnn-lstm_h128_l1_d0.0 \
+  --output-dir /home/fernando/tesis/underwater-localization-topologies/results/eval_anp_vs_ranp \
   --device cuda
 
 Optional forecasting-only evaluation:

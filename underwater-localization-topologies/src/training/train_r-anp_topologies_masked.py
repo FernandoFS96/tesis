@@ -20,7 +20,7 @@ python train_r-anp_topologies_masked.py \
   --rnn-hidden-dim 128 \
   --rnn-layers 1 \
   --rnn-dropout 0.0 \
-  --topologies aligned,ellipsoidal,random
+  --topologies random,aligned,ellipsoidal
 '''
 
 import csv
@@ -278,6 +278,7 @@ def train_anp_topology_masked(
     rnn_hidden_dim: int = 128,
     rnn_layers: int = 1,
     rnn_dropout: float = 0.0,
+    dry_run: bool = False,
 ):
     os.makedirs(save_dir, exist_ok=True)
 
@@ -311,6 +312,8 @@ def train_anp_topology_masked(
     x_means_SP = torch.tensor(x_means_np, dtype=torch.float32, device=device)
 
     # model
+    rnn_encoder = None
+    anp_input_dim = input_dim_new
     if use_rnn_encoder:
         rnn_encoder = TemporalEncoder(
             input_dim=input_dim_new,
@@ -322,7 +325,7 @@ def train_anp_topology_masked(
         ).to(device)
         anp_input_dim = rnn_hidden_dim
 
-    model = LatentModel(num_hidden=num_hidden, input_dim=anp_input_dim, output_dim=output_dim).to(device) #model = LatentModel(num_hidden=num_hidden, input_dim=input_dim_new, output_dim=output_dim).to(device)
+    model = LatentModel(num_hidden=num_hidden, input_dim=anp_input_dim, output_dim=output_dim).to(device)
     
     params = list(model.parameters())
     if rnn_encoder is not None:
@@ -362,6 +365,7 @@ def train_anp_topology_masked(
         train_nll_nonctx = 0.0
         train_k_active = 0.0  # avg active sensors (debug)
 
+        train_batches_seen = 0
         for x_batch, y_batch in train_loader:
             x_batch = x_batch.to(device)
             y_batch = y_batch.to(device)
@@ -440,6 +444,10 @@ def train_anp_topology_masked(
             train_loss += loss.item()
             train_mae  += mae
 
+            train_batches_seen += 1
+            if dry_run and train_batches_seen >= 1:
+                break
+
         # avg over batches
         train_loss /= len(train_loader)
         train_mae  /= len(train_loader)
@@ -476,6 +484,7 @@ def train_anp_topology_masked(
         val_var_min, val_var_mean, val_var_max = 0.0, 0.0, 0.0
         val_nll_nonctx = 0.0
 
+        val_batches_seen = 0
         with torch.no_grad():
             for x_batch, y_batch in val_loader:
                 x_batch = x_batch.to(device)
@@ -546,6 +555,10 @@ def train_anp_topology_masked(
                 val_loss += (batch_loss / len(val_fracs))
                 val_mae  += (batch_mae  / len(val_fracs))
 
+                val_batches_seen += 1
+                if dry_run and val_batches_seen >= 1:
+                    break
+
         val_loss /= len(val_loader)
         val_mae  /= len(val_loader)
 
@@ -566,6 +579,10 @@ def train_anp_topology_masked(
         val_var_mean_list.append(val_var_mean)
         val_var_max_list.append(val_var_max)
         val_nll_nonctx_list.append(val_nll_nonctx)
+
+        if dry_run:
+            best_val_mae = val_mae
+            break
 
         # Optuna pruning
         steps_per_epoch = len(train_loader)   # number of gradient updates per epoch
@@ -607,84 +624,87 @@ def train_anp_topology_masked(
             'ES': f"{early_stop_counter}"
         })
 
-    # save final
-    if save_checkpoints:
-        ckpt = {'model': model.state_dict(), 'optimizer': optimizer.state_dict()}
-        if rnn_encoder is not None:
-            ckpt['rnn_encoder'] = rnn_encoder.state_dict()
-        torch.save(ckpt, os.path.join(save_dir, 'last_checkpoint.pth.tar'))
+    if not dry_run:
+        # save final
+        if save_checkpoints:
+            ckpt = {'model': model.state_dict(), 'optimizer': optimizer.state_dict()}
+            if rnn_encoder is not None:
+                ckpt['rnn_encoder'] = rnn_encoder.state_dict()
+            torch.save(ckpt, os.path.join(save_dir, 'last_checkpoint.pth.tar'))
 
-    save_all_metrics(
-        train_loss_list, val_loss_list, train_mae_list, val_mae_list, save_dir,
-        train_nll=train_nll_list, val_nll=val_nll_list,
-        train_kl=train_kl_list, val_kl=val_kl_list,
-        train_beta=train_beta_list,
-        train_var_min=train_var_min_list, train_var_mean=train_var_mean_list, train_var_max=train_var_max_list,
-        val_var_min=val_var_min_list, val_var_mean=val_var_mean_list, val_var_max=val_var_max_list,
-        train_nll_nonctx=train_nll_nonctx_list, val_nll_nonctx=val_nll_nonctx_list
-    )
+        save_all_metrics(
+            train_loss_list, val_loss_list, train_mae_list, val_mae_list, save_dir,
+            train_nll=train_nll_list, val_nll=val_nll_list,
+            train_kl=train_kl_list, val_kl=val_kl_list,
+            train_beta=train_beta_list,
+            train_var_min=train_var_min_list, train_var_mean=train_var_mean_list, train_var_max=train_var_max_list,
+            val_var_min=val_var_min_list, val_var_mean=val_var_mean_list, val_var_max=val_var_max_list,
+            train_nll_nonctx=train_nll_nonctx_list, val_nll_nonctx=val_nll_nonctx_list
+        )
 
-    plot_anp_diagnostics(
-        save_dir,
-        train_nll_list, val_nll_list,
-        train_kl_list, val_kl_list,
-        train_beta_list,
-        train_var_mean_list, val_var_mean_list,
-        train_var_min=train_var_min_list, train_var_max=train_var_max_list,
-        val_var_min=val_var_min_list, val_var_max=val_var_max_list,
-        train_nll_nonctx=train_nll_nonctx_list, val_nll_nonctx=val_nll_nonctx_list
-    )
+        plot_anp_diagnostics(
+            save_dir,
+            train_nll_list, val_nll_list,
+            train_kl_list, val_kl_list,
+            train_beta_list,
+            train_var_mean_list, val_var_mean_list,
+            train_var_min=train_var_min_list, train_var_max=train_var_max_list,
+            val_var_min=val_var_min_list, val_var_max=val_var_max_list,
+            train_nll_nonctx=train_nll_nonctx_list, val_nll_nonctx=val_nll_nonctx_list
+        )
 
-    # CSV log
-    csv_path = os.path.join(save_dir, "training_log.csv")
-    with open(csv_path, "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow([
-            "epoch",
-            "train_loss","train_nll","train_nll_nonctx","train_kl","beta","train_var_min","train_var_mean","train_var_max","train_mae",
-            "val_loss","val_nll","val_nll_nonctx","val_kl","val_var_min","val_var_mean","val_var_max","val_mae"
-        ])
-        for e in range(len(train_loss_list)):
+        # CSV log
+        csv_path = os.path.join(save_dir, "training_log.csv")
+        with open(csv_path, "w", newline="") as f:
+            w = csv.writer(f)
             w.writerow([
-                e+1,
-                train_loss_list[e], train_nll_list[e], train_nll_nonctx_list[e], train_kl_list[e], train_beta_list[e],
-                train_var_min_list[e], train_var_mean_list[e], train_var_max_list[e], train_mae_list[e],
-                val_loss_list[e], val_nll_list[e], val_nll_nonctx_list[e], val_kl_list[e],
-                val_var_min_list[e], val_var_mean_list[e], val_var_max_list[e], val_mae_list[e],
+                "epoch",
+                "train_loss","train_nll","train_nll_nonctx","train_kl","beta","train_var_min","train_var_mean","train_var_max","train_mae",
+                "val_loss","val_nll","val_nll_nonctx","val_kl","val_var_min","val_var_mean","val_var_max","val_mae"
             ])
+            for e in range(len(train_loss_list)):
+                w.writerow([
+                    e+1,
+                    train_loss_list[e], train_nll_list[e], train_nll_nonctx_list[e], train_kl_list[e], train_beta_list[e],
+                    train_var_min_list[e], train_var_mean_list[e], train_var_max_list[e], train_mae_list[e],
+                    val_loss_list[e], val_nll_list[e], val_nll_nonctx_list[e], val_kl_list[e],
+                    val_var_min_list[e], val_var_mean_list[e], val_var_max_list[e], val_mae_list[e],
+                ])
 
-    # plot training curves
-    metrics_file = os.path.join(save_dir, 'metrics.pkl')
-    output_plot = os.path.join(save_dir, 'training_curves.png')
-    plot_training_metrics(metrics_file, output_plot)
+        # plot training curves
+        metrics_file = os.path.join(save_dir, 'metrics.pkl')
+        output_plot = os.path.join(save_dir, 'training_curves.png')
+        plot_training_metrics(metrics_file, output_plot)
 
-    # summary
-    with open(os.path.join(save_dir, 'training_summary.txt'), 'w') as f:
-        f.write(f"ANP MASKED Training Summary - Topology: {topology_name}\n")
-        f.write("="*60 + "\n")
-        f.write(f"Training samples: {len(train_data)} trajectories\n")
-        f.write(f"Validation samples: {len(val_data)} trajectories\n")
-        f.write(f"Best validation MAE: {best_val_mae:.6f}\n")
-        f.write(f"Final epoch: {min(epoch+1, epochs)}\n")
-        f.write(f"Early stopping counter: {early_stop_counter}/{patience}\n")
-        f.write(f"Training time: {(time.time() - t_init)/60:.2f} minutes\n")
-        f.write("\nMasking config:\n")
-        f.write(f"  num_sensors: {num_sensors}\n")
-        f.write(f"  num_time_points: {num_time_points}\n")
-        f.write(f"  sensor_drop_mode: {sensor_drop_mode}\n")
-        f.write(f"  sensor_drop_p: {sensor_drop_p}\n")
-        f.write(f"  mask_fill: {mask_fill}\n")
-        f.write(f"  mask_in_val: {mask_in_val}\n")
-        f.write(f"  kl_warmup_epochs: {kl_warmup_epochs}\n")
-        f.write(f"\nuse_rnn_encoder: {use_rnn_encoder}\n")
-        if use_rnn_encoder:
-            f.write("\nRNN Encoder config:\n")
-            f.write(f"  rnn_type: {rnn_type}\n")
-            f.write(f"  rnn_hidden_dim: {rnn_hidden_dim}\n")
-            f.write(f"  rnn_layers: {rnn_layers}\n")
-            f.write(f"  rnn_dropout: {rnn_dropout}\n")
+        # summary
+        with open(os.path.join(save_dir, 'training_summary.txt'), 'w') as f:
+            f.write(f"ANP MASKED Training Summary - Topology: {topology_name}\n")
+            f.write("="*60 + "\n")
+            f.write(f"Training samples: {len(train_data)} trajectories\n")
+            f.write(f"Validation samples: {len(val_data)} trajectories\n")
+            f.write(f"Best validation MAE: {best_val_mae:.6f}\n")
+            f.write(f"Final epoch: {min(epoch+1, epochs)}\n")
+            f.write(f"Early stopping counter: {early_stop_counter}/{patience}\n")
+            f.write(f"Training time: {(time.time() - t_init)/60:.2f} minutes\n")
+            f.write("\nMasking config:\n")
+            f.write(f"  num_sensors: {num_sensors}\n")
+            f.write(f"  num_time_points: {num_time_points}\n")
+            f.write(f"  sensor_drop_mode: {sensor_drop_mode}\n")
+            f.write(f"  sensor_drop_p: {sensor_drop_p}\n")
+            f.write(f"  mask_fill: {mask_fill}\n")
+            f.write(f"  mask_in_val: {mask_in_val}\n")
+            f.write(f"  kl_warmup_epochs: {kl_warmup_epochs}\n")
+            f.write(f"\nuse_rnn_encoder: {use_rnn_encoder}\n")
+            if use_rnn_encoder:
+                f.write("\nRNN Encoder config:\n")
+                f.write(f"  rnn_type: {rnn_type}\n")
+                f.write(f"  rnn_hidden_dim: {rnn_hidden_dim}\n")
+                f.write(f"  rnn_layers: {rnn_layers}\n")
+                f.write(f"  rnn_dropout: {rnn_dropout}\n")
 
-    print(f"  Best validation MAE: {best_val_mae:.6f}")
+        print(f"  Best validation MAE: {best_val_mae:.6f}")
+    else:
+        print("Dry run complete: one train batch and one val batch.")
     return best_val_mae
 
 
@@ -718,6 +738,7 @@ def main():
     parser.add_argument("--rnn-hidden-dim", type=int, default=128)
     parser.add_argument("--rnn-layers", type=int, default=1)
     parser.add_argument("--rnn-dropout", type=float, default=0.0)
+    parser.add_argument("--dry-run", action="store_true", help="Run one train batch and one val batch, then exit.")
 
     args = parser.parse_args()
 
@@ -763,6 +784,7 @@ def main():
             rnn_hidden_dim=args.rnn_hidden_dim,
             rnn_layers=args.rnn_layers,
             rnn_dropout=args.rnn_dropout,
+            dry_run=args.dry_run,
         )
         results[topo] = best_mae
 
