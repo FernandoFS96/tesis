@@ -25,7 +25,7 @@ python evaluate_anp_vs_ranp.py \
   --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
   --baseline-root /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies_masked/masked_dropbernoulli_p0.2_train_mean_first \
   --recurrent-root /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies_masked/masked_dropbernoulli_p0.2_train_mean_first_rnn-lstm_h128_l1_d0.0 \
-  --output-dir /home/fernando/tesis/underwater-localization-topologies/results/eval_anp_vs_ranp \
+  --output-dir /home/fernando/tesis/underwater-localization-topologies/results/eval_anp_vs_ranp_2 \
   --device cuda
 
 Optional forecasting-only evaluation:
@@ -754,7 +754,7 @@ def parse_args():
     p.add_argument("--baseline-root", type=str, required=True, help="Root dir of baseline ANP experiment")
     p.add_argument("--recurrent-root", type=str, required=True, help="Root dir of recurrent ANP experiment")
     p.add_argument("--output-dir", type=str, required=True)
-    p.add_argument("--topologies", type=str, default="aligned,ellipsoidal,random")
+    p.add_argument("--topologies", type=str, default="random")
     p.add_argument("--device", type=str, default="cuda")
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--num-sensors", type=int, default=10)
