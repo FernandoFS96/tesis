@@ -8,7 +8,7 @@ python train_r-anp_topologies_masked.py \
   --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
   --batch-size 16 \
   --epochs 5000 \
-  --patience 500 \
+  --patience 200 \
   --ctx-sample-mode first \
   --num-sensors 10 \
   --num-time-points 201 \
@@ -19,7 +19,7 @@ python train_r-anp_topologies_masked.py \
   --rnn-type lstm \
   --rnn-hidden-dim 128 \
   --rnn-layers 1 \
-  --rnn-dropout 0.0 \
+  --rnn-dropout 0.1 \
   --topologies random,aligned,ellipsoidal
 '''
 
@@ -268,7 +268,7 @@ def train_anp_topology_masked(
     mask_in_val=False,
     kl_warmup_epochs=500,
     num_hidden=128,
-    lr=8e-4,
+    lr=9e-4,
     weight_decay=1e-4,
     trial=None,
     report_every=25,
