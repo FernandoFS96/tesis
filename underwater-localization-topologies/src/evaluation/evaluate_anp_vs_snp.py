@@ -11,10 +11,10 @@ Produces per topology:
 
 Usage example:
   cd /home/fernando/tesis/underwater-localization-topologies
-  python -m src.evaluation.evaluate_anp_vs_snp \
-    --data-dir  data/data/data_processed_topologies_low_variance \
-    --anp-dir   src/training/results/ANP_topologies_masked/masked_dropbernoulli_p0.2_train_mean_first \
-    --snp-dir   src/training/results/ANP_topologies_masked/masked_dropbernoulli_p0.2_train_mean_first_snp-lstm_l1_d0.1 \
+  python evaluate_anp_vs_snp.py \
+    --data-dir  /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+    --anp-dir   /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies_masked/masked_dropbernoulli_p0.2_train_mean_first \
+    --snp-dir   /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies_masked/masked_dropbernoulli_p0.2_train_mean_first_snp-lstm_l1_d0.1 \
     --output-dir results/eval_anp_vs_snp \
     --topologies random aligned ellipsoidal
 """
@@ -237,10 +237,10 @@ class ANPvsSNPEvaluator:
         return pred, var_real
 
     @torch.no_grad()
-    def _predict_snp(self, model, x_aug, y, y_mean, y_std):
-        """Sequential ANP: full-sequence inference (prior only)."""
+    def _predict_snp(self, model, x_aug, y, y_mean, y_std, n_context: int):
+        """Sequential ANP: autoregressive inference (no teacher forcing beyond context)."""
         y_norm = self._norm_y(y, y_mean, y_std)
-        pred_norm, var_norm, *_ = model(x_aug, y_norm, target_y=None)
+        pred_norm, var_norm = model.infer_autoregressive(x_aug, y_norm, n_context)
         pred = self._denorm_y(pred_norm, y_mean, y_std)
         var_real = var_norm * (y_std.view(1, 1, -1) ** 2)
         return pred, var_real
@@ -274,9 +274,10 @@ class ANPvsSNPEvaluator:
                 x, y = x.to(self.device), y.to(self.device)
                 T = x.size(1)
                 n_ctx = max(1, min(T - 1, int(context_percent / 100 * T)))
-                ctx_idx = _sample_context_indices(T, n_ctx, g, self.device)
-                non_ctx = torch.ones(T, dtype=torch.bool, device=self.device)
-                non_ctx[ctx_idx] = False
+                # First-N context for fair comparison (both models see same GT steps)
+                ctx_idx = torch.arange(n_ctx, device=self.device)
+                non_ctx = torch.zeros(T, dtype=torch.bool, device=self.device)
+                non_ctx[n_ctx:] = True
 
                 x_aug = _apply_mask_all_sensors(x, None, self.P, self.S, self.device)
 
@@ -284,7 +285,7 @@ class ANPvsSNPEvaluator:
                 mae_anp = F.l1_loss(pred_anp[:, non_ctx], y[:, non_ctx], reduction="none").mean(dim=[1, 2])
                 errs["ANP (set-based)"].extend(mae_anp.cpu().numpy())
 
-                pred_snp, _ = self._predict_snp(snp_model, x_aug, y, y_mean, y_std)
+                pred_snp, _ = self._predict_snp(snp_model, x_aug, y, y_mean, y_std, n_ctx)
                 mae_snp = F.l1_loss(pred_snp[:, non_ctx], y[:, non_ctx], reduction="none").mean(dim=[1, 2])
                 errs["Sequential ANP"].extend(mae_snp.cpu().numpy())
 
@@ -341,16 +342,17 @@ class ANPvsSNPEvaluator:
                     x, y = x.to(self.device), y.to(self.device)
                     T = x.size(1)
                     n_ctx = max(1, min(T - 1, int(ctx_pct / 100 * T)))
-                    ctx_idx = _sample_context_indices(T, n_ctx, g, self.device)
-                    non_ctx = torch.ones(T, dtype=torch.bool, device=self.device)
-                    non_ctx[ctx_idx] = False
+                    # First-N context for fair comparison
+                    ctx_idx = torch.arange(n_ctx, device=self.device)
+                    non_ctx = torch.zeros(T, dtype=torch.bool, device=self.device)
+                    non_ctx[n_ctx:] = True
                     x_aug = _apply_mask_all_sensors(x, None, self.P, self.S, self.device)
 
                     pred_anp, _ = self._predict_anp(anp_model, x_aug, y, y_mean, y_std, ctx_idx)
                     mae_a = F.l1_loss(pred_anp[:, non_ctx], y[:, non_ctx], reduction="none").mean(dim=[1, 2])
                     results["ANP (set-based)"][ctx_pct].extend(mae_a.cpu().numpy())
 
-                    pred_snp, _ = self._predict_snp(snp_model, x_aug, y, y_mean, y_std)
+                    pred_snp, _ = self._predict_snp(snp_model, x_aug, y, y_mean, y_std, n_ctx)
                     mae_s = F.l1_loss(pred_snp[:, non_ctx], y[:, non_ctx], reduction="none").mean(dim=[1, 2])
                     results["Sequential ANP"][ctx_pct].extend(mae_s.cpu().numpy())
 
@@ -403,12 +405,13 @@ class ANPvsSNPEvaluator:
                 y = torch.FloatTensor(y_np).unsqueeze(0).to(self.device)
                 T = x.size(1)
                 n_ctx = max(1, min(T - 1, int(context_percent / 100 * T)))
-                ctx_idx = _sample_context_indices(T, n_ctx, g, self.device)
+                # First-N context
+                ctx_idx = torch.arange(n_ctx, device=self.device)
 
                 x_aug = _apply_mask_all_sensors(x, None, self.P, self.S, self.device)
 
                 pred_anp, _ = self._predict_anp(anp_model, x_aug, y, y_mean, y_std, ctx_idx)
-                pred_snp, _ = self._predict_snp(snp_model, x_aug, y, y_mean, y_std)
+                pred_snp, _ = self._predict_snp(snp_model, x_aug, y, y_mean, y_std, n_ctx)
 
                 gt  = y.squeeze(0).cpu().numpy()[:, :2]
                 anp = pred_anp.squeeze(0).cpu().numpy()[:, :2]
@@ -466,12 +469,13 @@ class ANPvsSNPEvaluator:
             y = torch.FloatTensor(y_np).unsqueeze(0).to(self.device)
             T = x.size(1)
             n_ctx = max(1, min(T - 1, int(context_percent / 100 * T)))
-            ctx_idx = _sample_context_indices(T, n_ctx, g, self.device)
+            # First-N context
+            ctx_idx = torch.arange(n_ctx, device=self.device)
 
             x_aug = _apply_mask_all_sensors(x, None, self.P, self.S, self.device)
 
             pred_anp, var_anp = self._predict_anp(anp_model, x_aug, y, y_mean, y_std, ctx_idx)
-            pred_snp, var_snp = self._predict_snp(snp_model, x_aug, y, y_mean, y_std)
+            pred_snp, var_snp = self._predict_snp(snp_model, x_aug, y, y_mean, y_std, n_ctx)
 
             gt_np   = y.squeeze(0).cpu().numpy()
             anp_np  = pred_anp.squeeze(0).cpu().numpy()
@@ -540,11 +544,12 @@ class ANPvsSNPEvaluator:
                     snp_step_sum = torch.zeros(T, device=self.device)
 
                 n_ctx = max(1, min(T - 1, int(context_percent / 100 * T)))
-                ctx_idx = _sample_context_indices(T, n_ctx, g, self.device)
+                # First-N context
+                ctx_idx = torch.arange(n_ctx, device=self.device)
                 x_aug = _apply_mask_all_sensors(x, None, self.P, self.S, self.device)
 
                 pred_anp, _ = self._predict_anp(anp_model, x_aug, y, y_mean, y_std, ctx_idx)
-                pred_snp, _ = self._predict_snp(snp_model, x_aug, y, y_mean, y_std)
+                pred_snp, _ = self._predict_snp(snp_model, x_aug, y, y_mean, y_std, n_ctx)
 
                 # MAE per step, averaged over output dims, then over batch
                 mae_anp_step = (pred_anp - y).abs().mean(dim=-1).mean(dim=0)  # (T,)
@@ -606,9 +611,10 @@ class ANPvsSNPEvaluator:
                     x, y = x.to(self.device), y.to(self.device)
                     T = x.size(1)
                     n_ctx = max(1, min(T - 1, int(ctx_pct / 100 * T)))
-                    ctx_idx = _sample_context_indices(T, n_ctx, g, self.device)
-                    non_ctx = torch.ones(T, dtype=torch.bool, device=self.device)
-                    non_ctx[ctx_idx] = False
+                    # First-N context for fair comparison
+                    ctx_idx = torch.arange(n_ctx, device=self.device)
+                    non_ctx = torch.zeros(T, dtype=torch.bool, device=self.device)
+                    non_ctx[n_ctx:] = True
                     x_aug = _apply_mask_all_sensors(x, None, self.P, self.S, self.device)
 
                     pred_a, _ = self._predict_anp(anp_model, x_aug, y, y_mean, y_std, ctx_idx)
@@ -616,7 +622,7 @@ class ANPvsSNPEvaluator:
                         F.l1_loss(pred_a[:, non_ctx], y[:, non_ctx], reduction="none")
                         .mean(dim=[1, 2]).cpu().numpy()
                     )
-                    pred_s, _ = self._predict_snp(snp_model, x_aug, y, y_mean, y_std)
+                    pred_s, _ = self._predict_snp(snp_model, x_aug, y, y_mean, y_std, n_ctx)
                     snp_maes.extend(
                         F.l1_loss(pred_s[:, non_ctx], y[:, non_ctx], reduction="none")
                         .mean(dim=[1, 2]).cpu().numpy()
@@ -901,7 +907,7 @@ def main():
     parser.add_argument("--snp-rnn-layers", type=int, default=1)
     parser.add_argument("--snp-rnn-dropout", type=float, default=0.1)
     parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--seed", type=int, default=18)
 
     args = parser.parse_args()
 

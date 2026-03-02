@@ -435,3 +435,105 @@ class SequentialLatentModel(nn.Module):
              - 1.0 + (prior_log_var - post_log_var)              # (B, T, latent)
         kl = 0.5 * kl.sum(dim=-1)                                # (B, T)
         return kl.mean()                                          # scalar
+
+    # -----------------------------------------------------------------
+    # Autoregressive inference (no teacher forcing beyond context)
+    # -----------------------------------------------------------------
+
+    @t.no_grad()
+    def infer_autoregressive(self, x_seq, y_context_norm, n_context):
+        """
+        Proper test-time inference for Sequential ANP.
+
+        Phase 1 (context):  steps 0 … n_context-1
+            • Shifted GT y is fed to the encoders (same as training).
+            • RNN hidden states are accumulated.
+
+        Phase 2 (autoregressive):  steps n_context … T-1
+            • Each step receives the model's OWN predicted ŷ_{t-1}
+              instead of the ground-truth y_{t-1}.
+            • RNN hidden states carry over from the context phase.
+
+        All inputs / outputs are in **normalised** y-space.
+
+        Args:
+            x_seq:          (B, T, Dx)  full input sequence
+            y_context_norm: (B, T, Dy)  normalised GT y — only the first
+                            n_context columns are used; the rest are ignored.
+            n_context:      int, number of context (observed) steps
+
+        Returns:
+            y_pred_mean  (B, T, Dy)   predicted means  (normalised space)
+            y_pred_var   (B, T, Dy)   predicted variances (normalised space)
+        """
+        B, T, Dx = x_seq.shape
+        Dy = self.output_dim
+        device = x_seq.device
+
+        # ── Phase 1: context chunk ────────────────────────────────────
+        # Build shifted y for context → [0, y_0, y_1, …, y_{C-2}]
+        y_shifted_ctx = t.zeros(B, n_context, Dy, device=device)
+        if n_context > 1:
+            y_shifted_ctx[:, 1:, :] = y_context_norm[:, :n_context - 1, :]
+
+        x_ctx = x_seq[:, :n_context, :]
+
+        # Latent encoder — context
+        lat_inp = t.cat([x_ctx, y_shifted_ctx], dim=-1)
+        lat_inp = self.latent_encoder.input_projection(lat_inp)
+        lat_h, lat_hidden = self.latent_encoder.rnn(lat_inp)
+        lat_h = self.latent_encoder.norm(lat_h)
+        lat_hp = t.relu(self.latent_encoder.penultimate(lat_h))
+        mu_ctx = self.latent_encoder.mu(lat_hp)
+        lv_ctx = 3 * t.tanh(self.latent_encoder.log_var(lat_hp))
+        std_ctx = t.exp(0.5 * lv_ctx).clamp(1e-6, 1e6)
+        z_ctx = mu_ctx + std_ctx * t.randn_like(std_ctx)         # (B, C, latent)
+
+        # Deterministic encoder — context
+        det_inp = t.cat([x_ctx, y_shifted_ctx], dim=-1)
+        det_inp = self.det_encoder.input_projection(det_inp)
+        det_h, det_hidden = self.det_encoder.rnn(det_inp)
+        r_ctx = self.det_encoder.norm(det_h)                     # (B, C, H)
+
+        # Decode context steps (batch)
+        mean_ctx, var_ctx = self.decoder(r_ctx, z_ctx, x_ctx)    # (B, C, Dy)
+
+        if n_context >= T:
+            return mean_ctx, var_ctx
+
+        # ── Phase 2: autoregressive rollout ───────────────────────────
+        all_means = [mean_ctx]
+        all_vars  = [var_ctx]
+
+        # First y_prev is the LAST GT context value (normalised)
+        y_prev = y_context_norm[:, n_context - 1:n_context, :]   # (B, 1, Dy)
+
+        for step in range(n_context, T):
+            x_t = x_seq[:, step:step + 1, :]                     # (B, 1, Dx)
+
+            # Latent encoder — single step
+            inp_lat = t.cat([x_t, y_prev], dim=-1)
+            inp_lat = self.latent_encoder.input_projection(inp_lat)
+            h_lat, lat_hidden = self.latent_encoder.rnn(inp_lat, lat_hidden)
+            h_lat = self.latent_encoder.norm(h_lat)
+            h_lat = t.relu(self.latent_encoder.penultimate(h_lat))
+            mu_t = self.latent_encoder.mu(h_lat)
+            lv_t = 3 * t.tanh(self.latent_encoder.log_var(h_lat))
+            std_t = t.exp(0.5 * lv_t).clamp(1e-6, 1e6)
+            z_t = mu_t + std_t * t.randn_like(std_t)
+
+            # Deterministic encoder — single step
+            inp_det = t.cat([x_t, y_prev], dim=-1)
+            inp_det = self.det_encoder.input_projection(inp_det)
+            h_det, det_hidden = self.det_encoder.rnn(inp_det, det_hidden)
+            r_t = self.det_encoder.norm(h_det)
+
+            # Decode
+            mean_t, var_t = self.decoder(r_t, z_t, x_t)          # (B, 1, Dy)
+            all_means.append(mean_t)
+            all_vars.append(var_t)
+
+            # Feed own prediction as next y_prev (autoregressive)
+            y_prev = mean_t                                       # (B, 1, Dy)
+
+        return t.cat(all_means, dim=1), t.cat(all_vars, dim=1)
