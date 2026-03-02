@@ -659,8 +659,7 @@ def train_anp_topology_masked(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", type=str, required=True)
-    parser.add_argument("--save-dir", type=str, default=None,
-                        help="Base output directory. If None, uses <cwd>/results/ANP_topologies_masked/<run_name>")
+    parser.add_argument("--save-dir", type=str, default=None, help="Base output directory. If None, uses <cwd>/results/ANP_topologies_masked/<run_name>")
     parser.add_argument("--topologies", type=str, default="aligned,ellipsoidal,random")
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--epochs", type=int, default=5000)
