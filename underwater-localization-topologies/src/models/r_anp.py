@@ -2,7 +2,6 @@ import math
 import torch as t
 import torch.nn as nn
 import torch.nn.functional as F
-# src/models/anp.py: Define ANP components
 
 class Linear(nn.Module):
     def __init__(self, in_dim, out_dim, bias=True, w_init='linear'):
@@ -23,7 +22,7 @@ class LatentEncoder(nn.Module):
         self.self_attentions = nn.ModuleList([Attention(num_hidden) for _ in range(2)])
         self.penultimate_layer = Linear(num_hidden, num_hidden, w_init='relu')
         self.mu = Linear(num_hidden, num_latent)
-        self.log_sigma = Linear(num_hidden, num_latent)
+        self.log_var = Linear(num_hidden, num_latent)
 
     def forward(self, x, y):
         encoder_input = t.cat([x, y], dim=-1)
@@ -34,14 +33,14 @@ class LatentEncoder(nn.Module):
         hidden = encoder_input.mean(dim=1)
         hidden = t.relu(self.penultimate_layer(hidden))
         mu = self.mu(hidden)
-        log_sigma = self.log_sigma(hidden)
-        log_sigma = 3 * t.tanh(log_sigma)
+        log_var = self.log_var(hidden)
+        log_var = 3 * t.tanh(log_var)
 
-        std = t.exp(0.5 * log_sigma)
+        std = t.exp(0.5 * log_var)
         std = t.clamp(std, min=1e-6, max=1e6)
         eps = t.randn_like(std)
         z = eps.mul(std).add_(mu)
-        return mu, log_sigma, z
+        return mu, log_var, z
 
 class DeterministicEncoder(nn.Module):
     def __init__(self, num_hidden, num_latent, input_dim, output_dim):
@@ -152,29 +151,6 @@ class Attention(nn.Module):
         result = result + residual
         result = self.layer_norm(result)
         return result, attns
-
-class LocalSensorEncoder(nn.Module):
-    """
-    Encodes the 1D feature vector of a single sensor into a low-dimensional embedding.
-    """
-    def __init__(self, in_dim: int = 401, emb_dim: int = 64):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(in_dim, 128),
-            nn.ReLU(),
-            nn.Linear(128, emb_dim),
-            nn.ReLU(),
-        )
-
-    def forward(self, x: t.Tensor) -> t.Tensor:
-        """
-        x: (B, T, S, in_dim)
-        returns: (B, T, S, emb_dim)
-        """
-        B, T, S, D = x.shape
-        x = x.view(B * T * S, D)
-        e = self.net(x)               # (B*T*S, emb_dim)
-        return e.view(B, T, S, -1)    # (B, T, S, emb_dim)
 
 # TemporalEncoder: Causal temporal encoder (LSTM/GRU) for sequences.
 class TemporalEncoder(nn.Module):
