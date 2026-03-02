@@ -1,0 +1,18 @@
+ANP vs Sequential ANP — Topology: ELLIPSOIDAL
+======================================================================
+
+MAE per theta:
+Model                 θ=0.0    θ=0.1    θ=0.2    θ=0.3    Mean
+----------------------------------------------------------------------
+ANP (set-based)       4.9623   3.9533   3.8877   6.4499   4.8133
+Sequential ANP        1.5569   1.5986   1.5684   1.5943   1.5796
+
+Winner: Sequential ANP  (Δ = 67.2%)
+
+Best context % (overall):
+  ANP (set-based): 90% (MAE=4.0460)
+  Sequential ANP: 5% (MAE=1.3885)
+
+Per-step MAE (mean over all steps):
+  ANP:  4.6978
+  SNP:  1.3643

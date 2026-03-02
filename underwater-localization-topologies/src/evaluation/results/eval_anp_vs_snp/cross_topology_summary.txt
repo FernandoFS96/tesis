@@ -1,0 +1,6 @@
+Cross-Topology Comparison: ANP vs Sequential ANP
+======================================================================
+
+RANDOM           ANP=6.1155  SNP=1.6702  → SNP wins (Δ=72.7%)
+ALIGNED          ANP=6.8051  SNP=1.9992  → SNP wins (Δ=70.6%)
+ELLIPSOIDAL      ANP=4.8133  SNP=1.5796  → SNP wins (Δ=67.2%)

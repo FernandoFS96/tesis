@@ -1,0 +1,18 @@
+ANP vs Sequential ANP — Topology: ALIGNED
+======================================================================
+
+MAE per theta:
+Model                 θ=0.0    θ=0.1    θ=0.2    θ=0.3    Mean
+----------------------------------------------------------------------
+ANP (set-based)       9.9580   10.3383  9.7354   10.9855  10.2543
+Sequential ANP        34.7130  33.9048  34.6364  35.2551  34.6273
+
+Winner: ANP (set-based)  (Δ = 70.4%)
+
+Best context % (overall):
+  ANP (set-based): 55% (MAE=9.0915)
+  Sequential ANP: 90% (MAE=6.0527)
+
+Per-step MAE (mean over all steps):
+  ANP:  8.1845
+  SNP:  24.4263
