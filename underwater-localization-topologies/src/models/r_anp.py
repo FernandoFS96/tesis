@@ -249,3 +249,189 @@ class LatentModel(nn.Module):
              + (prior_var - posterior_var) # (B, latent_dim)
         kl = 0.5 * kl.sum(dim=-1) # (B,)
         return kl.mean() # scalar, stable vs batch size
+
+
+# =========================================================================
+# Sequential (Recurrent) ANP  —  SNP with per-step latent updates
+# =========================================================================
+
+class SequentialLatentEncoder(nn.Module):
+    """
+    RNN-based latent encoder for Sequential ANP.
+    Processes (x_t, y_t) pairs step-by-step via an LSTM/GRU.
+    Returns per-step latent distribution parameters (mu_t, log_var_t).
+    """
+    def __init__(self, input_dim, output_dim, num_hidden, num_latent,
+                 rnn_type="lstm", num_layers=1, dropout=0.0):
+        super().__init__()
+        self.input_projection = Linear(input_dim + output_dim, num_hidden)
+        rnn_cls = nn.LSTM if rnn_type.lower() == "lstm" else nn.GRU
+        rnn_dropout = dropout if num_layers > 1 else 0.0
+        self.rnn = rnn_cls(
+            input_size=num_hidden,
+            hidden_size=num_hidden,
+            num_layers=num_layers,
+            dropout=rnn_dropout,
+            batch_first=True,
+        )
+        self.norm = nn.LayerNorm(num_hidden)
+        self.penultimate = Linear(num_hidden, num_hidden, w_init='relu')
+        self.mu = Linear(num_hidden, num_latent)
+        self.log_var = Linear(num_hidden, num_latent)
+
+    def forward(self, x_seq, y_seq):
+        """
+        x_seq: (B, T, Dx)
+        y_seq: (B, T, Dy)  — shifted y for prior, actual y for posterior
+        Returns: mu (B, T, latent), log_var (B, T, latent)
+        """
+        inp = t.cat([x_seq, y_seq], dim=-1)   # (B, T, Dx+Dy)
+        inp = self.input_projection(inp)       # (B, T, H)
+        h_seq, _ = self.rnn(inp)               # (B, T, H)
+        h_seq = self.norm(h_seq)
+        h_seq = t.relu(self.penultimate(h_seq))
+        mu = self.mu(h_seq)                    # (B, T, latent)
+        log_var = self.log_var(h_seq)          # (B, T, latent)
+        log_var = 3 * t.tanh(log_var)          # bound log-variance
+        return mu, log_var
+
+
+class SequentialDeterministicEncoder(nn.Module):
+    """
+    RNN-based deterministic encoder for Sequential ANP.
+    Processes (x_t, y_t) pairs sequentially to produce per-step
+    deterministic representations r_t.
+    """
+    def __init__(self, input_dim, output_dim, num_hidden,
+                 rnn_type="lstm", num_layers=1, dropout=0.0):
+        super().__init__()
+        self.input_projection = Linear(input_dim + output_dim, num_hidden)
+        rnn_cls = nn.LSTM if rnn_type.lower() == "lstm" else nn.GRU
+        rnn_dropout = dropout if num_layers > 1 else 0.0
+        self.rnn = rnn_cls(
+            input_size=num_hidden,
+            hidden_size=num_hidden,
+            num_layers=num_layers,
+            dropout=rnn_dropout,
+            batch_first=True,
+        )
+        self.norm = nn.LayerNorm(num_hidden)
+
+    def forward(self, x_seq, y_seq):
+        """
+        x_seq: (B, T, Dx)
+        y_seq: (B, T, Dy)
+        Returns: r_seq (B, T, H)
+        """
+        inp = t.cat([x_seq, y_seq], dim=-1)
+        inp = self.input_projection(inp)
+        r_seq, _ = self.rnn(inp)
+        r_seq = self.norm(r_seq)
+        return r_seq
+
+
+class SequentialLatentModel(nn.Module):
+    """
+    Sequential (Recurrent) ANP that processes time series step-by-step.
+
+    Prior path:     conditions on (x_t, y_{t-1})  — shifted y, no peek at current y_t
+    Posterior path:  conditions on (x_t, y_t)      — sees current y_t (training only)
+    Deterministic:   conditions on (x_t, y_{t-1})  — same as prior
+
+    At each step t the model forms:
+        prior     p(z_t | x_{1:t}, y_{1:t-1})
+        posterior  q(z_t | x_{1:t}, y_{1:t})
+    and decodes  ŷ_t = Decoder(r_t, z_t, x_t).
+
+    Loss = mean_t[NLL_t] + β · mean_t[KL_t]
+    """
+    def __init__(self, num_hidden, input_dim, output_dim,
+                 rnn_type="lstm", rnn_layers=1, rnn_dropout=0.0):
+        super().__init__()
+        self.num_hidden = num_hidden
+        self.output_dim = output_dim
+
+        self.latent_encoder = SequentialLatentEncoder(
+            input_dim=input_dim, output_dim=output_dim,
+            num_hidden=num_hidden, num_latent=num_hidden,
+            rnn_type=rnn_type, num_layers=rnn_layers, dropout=rnn_dropout,
+        )
+        self.det_encoder = SequentialDeterministicEncoder(
+            input_dim=input_dim, output_dim=output_dim,
+            num_hidden=num_hidden,
+            rnn_type=rnn_type, num_layers=rnn_layers, dropout=rnn_dropout,
+        )
+        self.decoder = Decoder(num_hidden, input_dim=input_dim, output_dim=output_dim)
+
+    @staticmethod
+    def _shift_y(y_seq):
+        """Shift y right by 1: y_shifted[:,0]=0, y_shifted[:,t]=y[:,t-1]."""
+        y_shifted = t.zeros_like(y_seq)
+        y_shifted[:, 1:, :] = y_seq[:, :-1, :]
+        return y_shifted
+
+    def forward(self, x_seq, y_seq, target_y=None, beta: float = 1.0):
+        """
+        Sequential ANP forward pass with teacher forcing.
+
+        Args:
+            x_seq:    (B, T, Dx)  input features (already masked / augmented)
+            y_seq:    (B, T, Dy)  ground-truth y used to build the shifted prior
+                                  input AND (when target_y is given) the posterior.
+            target_y: (B, T, Dy)  if provided → training mode: compute posterior & loss.
+                                  if None    → inference mode: sample from prior only.
+            beta:     KL weight
+
+        Returns:
+            y_pred_mean  (B, T, Dy)
+            y_pred_var   (B, T, Dy)
+            loss, kl, nll  (scalars or None)
+        """
+        y_shifted = self._shift_y(y_seq)                          # (B, T, Dy)
+
+        # Prior: conditions on (x_t, y_{t-1})
+        prior_mu, prior_log_var = self.latent_encoder(x_seq, y_shifted)
+
+        # Deterministic path: same prior conditioning
+        r_seq = self.det_encoder(x_seq, y_shifted)                # (B, T, H)
+
+        if target_y is not None:
+            # Training: compute posterior and sample z from it
+            post_mu, post_log_var = self.latent_encoder(x_seq, target_y)
+            std = t.exp(0.5 * post_log_var)
+            std = t.clamp(std, min=1e-6, max=1e6)
+            eps = t.randn_like(std)
+            z = eps * std + post_mu                               # (B, T, latent)
+        else:
+            # Inference: sample z from prior
+            std = t.exp(0.5 * prior_log_var)
+            std = t.clamp(std, min=1e-6, max=1e6)
+            eps = t.randn_like(std)
+            z = eps * std + prior_mu
+
+        # Decode all steps at once (teacher-forced)
+        y_pred_mean, y_pred_var = self.decoder(r_seq, z, x_seq)  # (B, T, Dy)
+
+        if target_y is not None:
+            # Per-step NLL, averaged over B, T, Dy
+            nll = 0.5 * t.log(2 * math.pi * y_pred_var) \
+                  + 0.5 * ((target_y - y_pred_mean) ** 2) / y_pred_var
+            nll = nll.mean()
+
+            # Per-step KL, summed over latent dim, averaged over B and T
+            kl = self.kl_div(prior_mu, prior_log_var, post_mu, post_log_var)
+
+            loss = nll + beta * kl
+        else:
+            nll = None
+            kl = None
+            loss = None
+
+        return y_pred_mean, y_pred_var, loss, kl, nll
+
+    def kl_div(self, prior_mu, prior_log_var, post_mu, post_log_var):
+        """KL(q || p) for diagonal Gaussians, per step, averaged over B & T."""
+        kl = (t.exp(post_log_var) + (post_mu - prior_mu) ** 2) / t.exp(prior_log_var) \
+             - 1.0 + (prior_log_var - post_log_var)              # (B, T, latent)
+        kl = 0.5 * kl.sum(dim=-1)                                # (B, T)
+        return kl.mean()                                          # scalar
