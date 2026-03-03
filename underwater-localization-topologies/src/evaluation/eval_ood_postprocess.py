@@ -79,8 +79,8 @@ ALL_METHODS = [
 METHOD_LABELS = {
     "raw":               "Raw",
     "alpha_beta":        "Alpha-Beta",
-    "kalman_cv_I":       "Kalman CV (R=I)",
-    "kalman_cv_var":     "Kalman CV (R=σ²)",
+    "kalman_cv_I":       "Kal CV (R=I)",
+    "kalman_cv_var":     "Kal CV (R=σ²)",
     "kalman_rts_I":      "RTS (R=I)",
     "kalman_rts_var":    "RTS (R=σ²)",
     "ar_raw":            "AR raw",
@@ -688,7 +688,7 @@ def build_summary_txt(
     lines.append("\n" + "-" * 72)
     lines.append("[Per-θ breakdown — degraded model only]\n")
     thetas = sorted(all_results[degraded_key].keys())
-    col_w = 8
+    col_w = 13
     header = f"{'θ':>5}" + "".join(f"  {METHOD_LABELS[m][:col_w]:>{col_w}}" for m in ALL_METHODS)
     lines.append(header)
     for theta in thetas:

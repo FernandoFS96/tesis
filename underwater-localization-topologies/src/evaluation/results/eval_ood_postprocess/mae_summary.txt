@@ -9,8 +9,8 @@ OoD Post-Processing Evaluation Summary
   OoD gap (baseline)  :  6.83 m
 
   Alpha-Beta                :  11.37 m   (gap=+6.48 m, 5.2% closed)
-  Kalman CV (R=I)           :  11.42 m   (gap=+6.54 m, 4.4% closed)
-  Kalman CV (R=σ²)          :  13.03 m   (gap=+8.14 m, -19.1% closed)
+  Kal CV (R=I)              :  11.42 m   (gap=+6.54 m, 4.4% closed)
+  Kal CV (R=σ²)             :  13.03 m   (gap=+8.14 m, -19.1% closed)
   RTS (R=I)                 :  10.62 m   (gap=+5.73 m, 16.1% closed)
   RTS (R=σ²)                :  9.71 m   (gap=+4.82 m, 29.4% closed)
   AR raw                    :  11.20 m   (gap=+6.32 m, 7.6% closed)
@@ -20,8 +20,8 @@ OoD Post-Processing Evaluation Summary
 ------------------------------------------------------------------------
 [Per-θ breakdown — degraded model only]
 
-    θ       Raw  Alpha-Be  Kalman C  Kalman C  RTS (R=I  RTS (R=σ    AR raw  AR+RTS (  AR+RTS (
-  0.0     11.49     11.22     11.26     12.68     10.52      9.54     11.17     10.22      8.91
-  0.1     11.69     11.36     11.42     13.00     10.64      9.66     11.00     10.01      8.68
-  0.2     11.45     11.10     11.17     12.94     10.34      9.46     11.07     10.01      8.70
-  0.3     12.25     11.80     11.84     13.48     10.97     10.19     11.56     10.19      8.99
+    θ            Raw     Alpha-Beta   Kal CV (R=I)  Kal CV (R=σ²)      RTS (R=I)     RTS (R=σ²)         AR raw   AR+RTS (R=I)  AR+RTS (R=σ²)
+  0.0          11.49          11.22          11.26          12.68          10.52           9.54          11.17          10.22           8.91
+  0.1          11.69          11.36          11.42          13.00          10.64           9.66          11.00          10.01           8.68
+  0.2          11.45          11.10          11.17          12.94          10.34           9.46          11.07          10.01           8.70
+  0.3          12.25          11.80          11.84          13.48          10.97          10.19          11.56          10.19           8.99
