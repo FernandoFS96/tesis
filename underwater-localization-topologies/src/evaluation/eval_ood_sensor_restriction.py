@@ -8,34 +8,38 @@ Evaluates masked ANP models under two stress axes:
 Experiments
 -----------
   1.1  Bidirectional OoD matrix:
-         rows = {low-var model, high-var model}
-         cols = {low-var test data, high-var test data}
-         metric = mean MAE over all thetas in each domain
+            rows = {low-var model, high-var model}
+            cols = {low-var test data, high-var test data}
+            metric = mean MAE over all thetas in each domain
 
   1.2  Per-theta MAE degradation curve:
-         both models evaluated on every individual theta level
-         (uses test_thetas from metadata.pkl to group test samples)
+            both models evaluated on every individual theta level
+            (uses test_thetas from metadata.pkl to group test samples)
 
   1.3  Context-fraction sweep (OoD mitigator analysis):
-         context_frac in [0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 0.9]
-         both models x both domains, all sensors available
+            context_frac in [0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 0.9]
+            both models x both domains, all sensors available
+
+  1.4º  Trajectory prediction plots per theta:
+            for each theta, plot GT + predictions from all available models
+            (uses test_thetas from metadata.pkl to group test samples)
 
   2.1  Sensor restriction modes on ellipsoidal topology:
-         a) Bernoulli dropout: p_drop sweep
-         b) k-uniform: fixed k_active sweep
-         c) Cluster dropout: cluster_size sweep (uses circular index distance)
-         evaluated on the model's in-distribution test data
+            a) Bernoulli dropout: p_drop sweep
+            b) k-uniform: fixed k_active sweep
+            c) Cluster dropout: cluster_size sweep (uses circular index distance)
+            evaluated on the model's in-distribution test data
 
 Usage
 -----
-python eval_ood_sensor_restriction.py \\
-  --lowvar-ckpt  results/ANP_topologies_masked/lowvar/.../topology_ellipsoidal/best_checkpoint.pth.tar \\
-  --highvar-ckpt results/ANP_topologies_masked/highvar/.../topology_ellipsoidal/best_checkpoint.pth.tar \\
-  --lowvar-data-dir  data/data/data_processed_topologies_low_variance \\
-  --highvar-data-dir data/data/data_processed_topologies_high_variance \\
-  --topology ellipsoidal \\
-  --output-dir results/eval_ood_sensor_restriction \\
-  --experiments 1.1,1.2,1.3,2.1
+python eval_ood_sensor_restriction.py \
+  --lowvar-ckpt  /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies_masked/lowvar/masked_dropbernoulli_p0.2_train_mean_first/topology_ellipsoidal/best_checkpoint.pth.tar \
+  --highvar-ckpt /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies_masked/highvar/masked_dropbernoulli_p0.2_train_mean_first/topology_ellipsoidal/best_checkpoint.pth.tar \
+  --lowvar-data-dir  /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+  --highvar-data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
+  --topology ellipsoidal \
+  --output-dir results/eval_ood_sensor_restriction \
+  --experiments 1.1,1.2,1.3,1.4,2.1
 """
 
 import os
@@ -58,26 +62,23 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 from src.models.anp import LatentModel
 from src.utils.nav_dataset import NavigationTrajectoryDataset
 
-
 # =============================================================================
 # Constants
 # =============================================================================
-NUM_SENSORS     = 10
+NUM_SENSORS = 10
 NUM_TIME_POINTS = 201
-OUTPUT_DIM      = 3
-NUM_HIDDEN      = 128
-INPUT_DIM_BASE  = NUM_TIME_POINTS * NUM_SENSORS          # 2010
-INPUT_DIM_AUG   = INPUT_DIM_BASE + NUM_SENSORS           # 2020  (base + mask features)
-MASK_FILL       = "train_mean"
-EVAL_SEED       = 42
+OUTPUT_DIM = 3
+NUM_HIDDEN = 128
+INPUT_DIM_BASE = NUM_TIME_POINTS * NUM_SENSORS # 2010
+INPUT_DIM_AUG = INPUT_DIM_BASE + NUM_SENSORS # 2020  (base + mask features)
+MASK_FILL = "train_mean"
+EVAL_SEED = 18
 CONTEXT_FRAC_DEFAULT = 0.3
-
 # Sweeps
-CONTEXT_FRACS       = [0.05, 0.10, 0.20, 0.30, 0.50, 0.70, 0.90]
-BERNOULLI_P_DROPS   = [0.0, 0.1, 0.2, 0.4, 0.6, 0.8]   # 0.0 = all sensors
-K_ACTIVE_VALUES     = [10, 9, 8, 7, 5, 3, 1]            # sensors kept
-CLUSTER_SIZES       = [1, 2, 3, 4, 5]                    # sensors REMOVED
-
+CONTEXT_FRACS = [0.05, 0.10, 0.20, 0.30, 0.50, 0.70, 0.90]
+BERNOULLI_P_DROPS = [0.0, 0.1, 0.2, 0.4, 0.6, 0.8] # 0.0 = all sensors
+K_ACTIVE_VALUES = [10, 9, 8, 7, 5, 3, 1] # sensors kept
+CLUSTER_SIZES = [1, 2, 3, 4, 5] # sensors REMOVED
 
 # =============================================================================
 # I/O helpers
@@ -87,7 +88,6 @@ def load_pickle(path: Path):
     with open(path, "rb") as f:
         return pickle.load(f)
 
-
 def save_csv(path: Path, rows: list, header: list):
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="") as f:
@@ -95,7 +95,6 @@ def save_csv(path: Path, rows: list, header: list):
         w.writerow(header)
         w.writerows(rows)
     print(f"  Saved CSV → {path}")
-
 
 # =============================================================================
 # Model loading
@@ -116,7 +115,6 @@ def load_masked_anp(ckpt_path: Path, device: torch.device) -> LatentModel:
     print(f"  Loaded model from {ckpt_path}")
     return model
 
-
 # =============================================================================
 # Data / statistics
 # =============================================================================
@@ -129,7 +127,6 @@ def load_topology_split(data_dir: Path, topology: str):
     test_data  = load_pickle(tdir / "test_data.pkl")
     metadata   = load_pickle(tdir / "metadata.pkl")
     return train_data, val_data, test_data, metadata
-
 
 def compute_train_stats(train_data, device: torch.device):
     """
@@ -154,14 +151,12 @@ def compute_train_stats(train_data, device: torch.device):
 
     return y_mean, y_std, x_means_SP
 
-
 def group_test_data_by_theta(test_data, metadata):
     """Returns dict {theta_value: [(X,y), ...]}."""
     groups = {}
     for sample, theta in zip(test_data, metadata["test_thetas"]):
         groups.setdefault(theta, []).append(sample)
     return groups
-
 
 # =============================================================================
 # Sensor masking (evaluation-time)
@@ -170,7 +165,6 @@ def group_test_data_by_theta(test_data, metadata):
 def make_all_sensors_mask(B: int, device: torch.device) -> torch.Tensor:
     """All-ones mask: all S sensors available."""
     return torch.ones(B, NUM_SENSORS, device=device)
-
 
 def make_bernoulli_mask(B: int, p_drop: float, device: torch.device,
                         rng: torch.Generator) -> torch.Tensor:
@@ -186,7 +180,6 @@ def make_bernoulli_mask(B: int, p_drop: float, device: torch.device,
         keep[all_off, idx] = True
     return keep.float()
 
-
 def make_k_uniform_mask(B: int, k_active: int, device: torch.device,
                         rng: torch.Generator) -> torch.Tensor:
     """Exactly k_active sensors kept (random subset per sample)."""
@@ -196,7 +189,6 @@ def make_k_uniform_mask(B: int, k_active: int, device: torch.device,
         idx = torch.randperm(NUM_SENSORS, generator=rng, device=device)[:k]
         keep[b, idx] = True
     return keep.float()
-
 
 def make_cluster_mask(B: int, cluster_size: int, device: torch.device,
                       rng: torch.Generator) -> torch.Tensor:
@@ -229,7 +221,6 @@ def make_cluster_mask(B: int, cluster_size: int, device: torch.device,
 
     return keep.float()
 
-
 def augment_with_mask(
     x_batch: torch.Tensor,      # (B, T, Dx)
     sensor_mask: torch.Tensor,  # (B, S)
@@ -254,7 +245,6 @@ def augment_with_mask(
     mask_feat = sensor_mask.view(B, 1, S).expand(B, T, S)
     return torch.cat([x_masked, mask_feat], dim=-1)  # (B, T, Dx+S)
 
-
 # =============================================================================
 # Core evaluation routine
 # =============================================================================
@@ -270,11 +260,17 @@ def evaluate_model(
     sensor_mask_fn=None,          # callable(B, device, rng) -> (B,S) mask
     batch_size: int = 16,
     seed: int = EVAL_SEED,
+    eval_on_all_points: bool = False,
 ) -> float:
     """
     Returns mean MAE (denormalised, metres) over the test set.
 
     sensor_mask_fn: if None, all sensors are available.
+
+    eval_on_all_points: if True, compute MAE over ALL T target points (including context points). 
+        This is the correct mode for a context fraction sweep: the denominator stays fixed across fractions, 
+        so differences in MAE reflect purely the benefit of more context, not a shift in which (potentially harder) points are being evaluated.
+        If False (default), MAE is computed only on non-context points, which is appropriate when context_frac is fixed across conditions.
     """
     rng = torch.Generator(device=device)
     rng.manual_seed(seed)
@@ -312,22 +308,26 @@ def evaluate_model(
 
             y_pred_norm, _, _, _, _ = model(ctx_x, ctx_y, tar_x)
 
-            # denormalise and compute MAE on non-context points
-            non_ctx = torch.ones(T, dtype=torch.bool, device=device)
-            non_ctx[ctx_idx] = False
-
             y_pred = y_pred_norm * y_std + y_mean
-            mae = F.l1_loss(
-                y_pred[:, non_ctx, :],
-                y_batch[:, non_ctx, :],
-                reduction="mean",
-            ).item()
+
+            if eval_on_all_points:
+                # MAE over the entire trajectory — denominator is fixed regardless
+                # of context_frac, isolating the pure effect of context size.
+                mae = F.l1_loss(y_pred, y_batch, reduction="mean").item()
+            else:
+                # MAE only on non-context points (default for fixed-context exps).
+                non_ctx = torch.ones(T, dtype=torch.bool, device=device)
+                non_ctx[ctx_idx] = False
+                mae = F.l1_loss(
+                    y_pred[:, non_ctx, :],
+                    y_batch[:, non_ctx, :],
+                    reduction="mean",
+                ).item()
 
             total_mae += mae
             n_batches += 1
 
     return total_mae / max(n_batches, 1)
-
 
 def evaluate_by_theta(
     model: LatentModel,
@@ -353,7 +353,6 @@ def evaluate_by_theta(
         )
         results[theta] = mae
     return results
-
 
 # =============================================================================
 # Experiment 1.1 — Bidirectional OoD matrix
@@ -492,7 +491,6 @@ def run_exp_12(
     plt.close(fig)
     print(f"  Saved → {exp_dir}")
 
-
 # =============================================================================
 # Experiment 1.3 — Context fraction sweep
 # =============================================================================
@@ -528,6 +526,7 @@ def run_exp_13(
                     model, test_data[d_domain],
                     y_mean, y_std, xm,
                     device, context_frac=frac,
+                    eval_on_all_points=True, # fixed denominator for fair comparison
                 )
                 maes.append(mae)
                 rows.append([m_domain, d_domain, frac, mae])
@@ -558,15 +557,14 @@ def run_exp_13(
             )
 
     ax.set_xlabel("Context fraction (%)")
-    ax.set_ylabel("MAE (m)")
-    ax.set_title("MAE vs context size — OoD mitigator analysis")
+    ax.set_ylabel("MAE (m) — all T points")
+    ax.set_title("MAE vs context size — OoD mitigator analysis\n(MAE computed over all trajectory points, denominator fixed)")
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=9)
     plt.tight_layout()
     fig.savefig(exp_dir / "context_sweep.png", dpi=150)
     plt.close(fig)
     print(f"  Saved → {exp_dir}")
-
 
 # =============================================================================
 # Experiment 2.1 — Sensor restriction modes
@@ -590,7 +588,7 @@ def run_exp_21(
     Modes:
       a) Bernoulli: p_drop ∈ bernoulli_p_drops
       b) k-uniform: k_active ∈ k_active_values
-      c) Cluster:   cluster_size (sensors removed) ∈ cluster_sizes
+      c) Cluster: cluster_size (sensors removed) ∈ cluster_sizes
     """
     print("\n[Exp 2.1] Sensor restriction sweep")
     exp_dir = output_dir / "exp_2.1_sensor_restriction"
@@ -702,7 +700,6 @@ def run_exp_21(
 
     print(f"  Saved → {exp_dir}")
 
-
 def _plot_combined_restriction(curves, domains, p_drops, k_actives, cluster_sizes,
                                 context_frac, exp_dir):
     """Overlaid comparison between two models for all three restriction modes."""
@@ -742,6 +739,147 @@ def _plot_combined_restriction(curves, domains, p_drops, k_actives, cluster_size
     fig.savefig(exp_dir / "sensor_restriction_combined.png", dpi=150)
     plt.close(fig)
 
+# =============================================================================
+# Experiment 1.4 — Trajectory prediction plots per theta
+# =============================================================================
+
+def _predict_trajectory(
+    model: LatentModel,
+    x: np.ndarray,           # (T, Dx)
+    y: np.ndarray,           # (T, 3)
+    y_mean: torch.Tensor,
+    y_std: torch.Tensor,
+    x_means_SP: torch.Tensor,
+    device: torch.device,
+    context_frac: float,
+) -> tuple:                  # returns (y_pred: ndarray (T,3), n_ctx: int)
+    """Run a single trajectory through the model and return denormalised predictions."""
+    x_t = torch.tensor(x, dtype=torch.float32, device=device).unsqueeze(0)  # (1,T,Dx)
+    y_t = torch.tensor(y, dtype=torch.float32, device=device).unsqueeze(0)  # (1,T,3)
+    T   = x_t.shape[1]
+
+    sensor_mask = make_all_sensors_mask(1, device)                 # all sensors on
+    x_aug = augment_with_mask(x_t, sensor_mask, x_means_SP)       # (1,T,Dx+S)
+
+    n_ctx   = max(1, min(T - 1, int(round(context_frac * T))))
+    ctx_idx = torch.arange(n_ctx, device=device)
+    tar_idx = torch.arange(T,     device=device)
+
+    ctx_x = x_aug[:, ctx_idx, :]
+    ctx_y = ((y_t - y_mean) / y_std)[:, ctx_idx, :]
+    tar_x = x_aug[:, tar_idx, :]
+
+    with torch.no_grad():
+        y_pred_norm, _, _, _, _ = model(ctx_x, ctx_y, tar_x)
+
+    y_pred = (y_pred_norm * y_std + y_mean).squeeze(0).cpu().numpy()  # (T, 3)
+    return y_pred, n_ctx
+
+
+def run_exp_15(
+    models: dict,         # {"lowvar": model, "highvar": model}
+    stats: dict,          # {"lowvar": (y_mean, y_std, x_means_SP), ...}
+    theta_groups: dict,   # {"lowvar": {theta: [samples]}, "highvar": {theta: [samples]}}
+    output_dir: Path,
+    device: torch.device,
+    context_frac: float = CONTEXT_FRAC_DEFAULT,
+    n_traj: int = 4,
+    seed: int = EVAL_SEED,
+):
+    """
+    For each theta level, plot n_traj randomly selected trajectories.
+    Each subplot shows ground truth + predictions from all available models.
+    Produces one figure per theta, saved as theta_{theta:.1f}.png.
+    """
+    print("\n[Exp 1.4] Trajectory prediction plots per theta")
+    exp_dir = output_dir / "exp_1.4_trajectory_plots"
+    exp_dir.mkdir(parents=True, exist_ok=True)
+
+    rng = np.random.default_rng(seed)
+
+    # Build a flat {theta: [samples]} dict spanning both domains
+    all_theta_groups: dict = {}
+    for domain_groups in theta_groups.values():
+        for theta, samples in domain_groups.items():
+            all_theta_groups.setdefault(theta, []).extend(samples)
+
+    model_colors = {"lowvar": "#2196F3", "highvar": "#F44336"}
+    model_labels = {"lowvar": "ANP low-var", "highvar": "ANP high-var"}
+    domain_names = sorted(models.keys())   # models available
+
+    for theta in sorted(all_theta_groups.keys()):
+        pool = all_theta_groups[theta]
+        chosen_idx = rng.choice(len(pool),
+                                size=min(n_traj, len(pool)),
+                                replace=False)
+        chosen = [pool[i] for i in chosen_idx]
+
+        ncols = 2
+        nrows = (len(chosen) + ncols - 1) // ncols
+        fig, axes = plt.subplots(nrows, ncols,
+                                 figsize=(7 * ncols, 6 * nrows),
+                                 squeeze=False)
+        fig.suptitle(
+            f"Trajectory predictions — θ={theta:.1f}  (context={context_frac*100:.0f}%)",
+            fontsize=14, y=1.01,
+        )
+
+        for k, (x_np, y_np) in enumerate(chosen):
+            ax  = axes[k // ncols][k % ncols]
+            row = k // ncols
+            col = k % ncols
+
+            # Compute n_ctx for reference lines
+            T     = y_np.shape[0]
+            n_ctx = max(1, min(T - 1, int(round(context_frac * T))))
+
+            # Ground truth
+            ax.plot(y_np[:, 0], y_np[:, 1],
+                    color="black", linewidth=1.8, zorder=3, label="Ground truth")
+            # Context region
+            ax.plot(y_np[:n_ctx, 0], y_np[:n_ctx, 1],
+                    color="black", linewidth=4.0, alpha=0.35, zorder=2,
+                    label=f"Context ({context_frac*100:.0f}%)")
+            # Start / end markers
+            ax.plot(y_np[0,  0], y_np[0,  1], "go", markersize=8,  zorder=5, label="Start")
+            ax.plot(y_np[-1, 0], y_np[-1, 1], "ks", markersize=8,  zorder=5, label="End")
+
+            # Model predictions
+            for m_domain in domain_names:
+                y_mean, y_std, xm = stats[m_domain]
+                y_pred, _         = _predict_trajectory(
+                    models[m_domain], x_np, y_np,
+                    y_mean, y_std, xm,
+                    device, context_frac,
+                )
+                # MAE for this trajectory
+                mae_traj = float(np.mean(np.abs(y_pred - y_np)))
+                ax.plot(
+                    y_pred[:, 0], y_pred[:, 1],
+                    color=model_colors.get(m_domain, "gray"),
+                    linewidth=1.5, linestyle="--", zorder=4,
+                    label=f"{model_labels.get(m_domain, m_domain)}  (MAE={mae_traj:.2f} m)",
+                )
+
+            ax.set_xlabel("x (m)", fontsize=9)
+            ax.set_ylabel("y (m)", fontsize=9)
+            ax.set_title(f"Trajectory {k+1}", fontsize=10)
+            ax.set_aspect("equal", adjustable="datalim")
+            ax.grid(True, alpha=0.3)
+            ax.legend(fontsize=7.5, loc="best")
+
+        # Hide any unused axes
+        for k in range(len(chosen), nrows * ncols):
+            axes[k // ncols][k % ncols].set_visible(False)
+
+        plt.tight_layout()
+        fname = exp_dir / f"theta_{theta:.1f}.png"
+        fig.savefig(fname, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  theta={theta:.1f} → {fname}")
+
+    print(f"  Saved → {exp_dir}")
+
 
 # =============================================================================
 # Main
@@ -753,30 +891,18 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    p.add_argument("--lowvar-ckpt",      type=Path, default=None,
-                   help="Path to best_checkpoint.pth.tar of the low-variance masked ANP.")
-    p.add_argument("--highvar-ckpt",     type=Path, default=None,
-                   help="Path to best_checkpoint.pth.tar of the high-variance masked ANP.")
-    p.add_argument("--lowvar-data-dir",  type=Path, default=None,
-                   help="Root data dir for low-variance (contains topology_<X>/ subdirs).")
-    p.add_argument("--highvar-data-dir", type=Path, default=None,
-                   help="Root data dir for high-variance.")
-    p.add_argument("--topology",         type=str,  default="ellipsoidal",
-                   choices=["ellipsoidal", "aligned", "random"])
-    p.add_argument("--output-dir",       type=Path,
-                   default=Path("results/eval_ood_sensor_restriction"))
-    p.add_argument("--context-frac",     type=float, default=CONTEXT_FRAC_DEFAULT)
-    p.add_argument("--batch-size",       type=int,   default=16)
-    p.add_argument("--device",           type=str,   default="cuda")
-    p.add_argument("--seed",             type=int,   default=EVAL_SEED)
-    p.add_argument(
-        "--experiments",
-        type=str,
-        default="1.1,1.2,1.3,2.1",
-        help="Comma-separated list of experiments to run: 1.1 1.2 1.3 2.1",
-    )
+    p.add_argument("--lowvar-ckpt", type=Path, default=None, help="Path to best_checkpoint.pth.tar of the low-variance masked ANP.")
+    p.add_argument("--highvar-ckpt", type=Path, default=None, help="Path to best_checkpoint.pth.tar of the high-variance masked ANP.")
+    p.add_argument("--lowvar-data-dir", type=Path, default=None, help="Root data dir for low-variance (contains topology_<X>/ subdirs).")
+    p.add_argument("--highvar-data-dir", type=Path, default=None, help="Root data dir for high-variance.")
+    p.add_argument("--topology", type=str,  default="ellipsoidal", choices=["ellipsoidal", "aligned", "random"])
+    p.add_argument("--output-dir", type=Path, default=Path("results/eval_ood_sensor_restriction"))
+    p.add_argument("--context-frac", type=float, default=CONTEXT_FRAC_DEFAULT)
+    p.add_argument("--batch-size", type=int, default=16)
+    p.add_argument("--device", type=str, default="cuda")
+    p.add_argument("--seed", type=int, default=EVAL_SEED)
+    p.add_argument("--experiments", type=str, default="1.1,1.2,1.3,2.1", help="Comma-separated list of experiments to run: 1.1 1.2 1.3 1.4 2.1",)
     return p.parse_args()
-
 
 def main():
     args = parse_args()
@@ -859,8 +985,10 @@ def main():
     if "2.1" in experiments:
         run_exp_21(models, stats, test_data, args.output_dir, device, context_frac=ctx)
 
-    print(f"\nAll results saved to: {args.output_dir}")
+    if "1.4" in experiments:
+        run_exp_15(models, stats, theta_groups, args.output_dir, device, context_frac=ctx)
 
+    print(f"\nAll results saved to: {args.output_dir}")
 
 if __name__ == "__main__":
     main()
