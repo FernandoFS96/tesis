@@ -1,9 +1,16 @@
 '''
-Docstring for src.training.train_r-anp_topologies_masked
+Docstring for src.training.train_s-anp_topologies_masked
 
-This script trains ANP models with sensor masking for each topology and logs detailed diagnostics.
+This script trains ANP models with sensor masking for each topology.
+When --use-rnn-encoder is set, it uses a proper Sequential (Recurrent) ANP:
+  - RNN-based latent and deterministic encoders process (x_t, y_{t-1}) step-by-step
+  - Prior conditions on shifted y (no peek at current step)
+  - Posterior conditions on actual y (training only)
+  - Per-step KL divergence with beta-warmup
+  - Teacher-forced training on full sequences
+Without --use-rnn-encoder, it uses the standard set-based ANP.
 
-Usage with RNN encoder and masking:
+Usage with Sequential ANP and masking:
 python train_r-anp_topologies_masked.py \
   --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
   --batch-size 16 \
@@ -17,7 +24,6 @@ python train_r-anp_topologies_masked.py \
   --mask-fill train_mean \
   --use-rnn-encoder \
   --rnn-type lstm \
-  --rnn-hidden-dim 128 \
   --rnn-layers 1 \
   --rnn-dropout 0.1 \
   --topologies random,aligned,ellipsoidal
@@ -37,7 +43,7 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 
-from src.models.r_anp import LatentModel, TemporalEncoder
+from src.models.s_anp import LatentModel, SequentialLatentModel
 from src.utils.nav_dataset import NavigationTrajectoryDataset
 from src.utils.plots import plot_training_metrics
 
@@ -312,26 +318,21 @@ def train_anp_topology_masked(
     x_means_SP = torch.tensor(x_means_np, dtype=torch.float32, device=device)
 
     # model
-    rnn_encoder = None
-    anp_input_dim = input_dim_new
     if use_rnn_encoder:
-        rnn_encoder = TemporalEncoder(
+        # Sequential ANP: RNN-based encoders process (x_t, y_t) step-by-step
+        model = SequentialLatentModel(
+            num_hidden=num_hidden,
             input_dim=input_dim_new,
-            hidden_dim=rnn_hidden_dim,
-            num_layers=rnn_layers,
-            dropout=rnn_dropout,
+            output_dim=output_dim,
             rnn_type=rnn_type,
-            layer_norm=True,
+            rnn_layers=rnn_layers,
+            rnn_dropout=rnn_dropout,
         ).to(device)
-        anp_input_dim = rnn_hidden_dim
+    else:
+        # Regular (set-based) ANP
+        model = LatentModel(num_hidden=num_hidden, input_dim=input_dim_new, output_dim=output_dim).to(device)
 
-    model = LatentModel(num_hidden=num_hidden, input_dim=anp_input_dim, output_dim=output_dim).to(device)
-    
-    params = list(model.parameters())
-    if rnn_encoder is not None:
-        params += list(rnn_encoder.parameters())
-
-    optimizer = torch.optim.Adam(params, lr=lr, weight_decay=weight_decay)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
     # logs
     best_val_mae = float("inf")
@@ -357,8 +358,6 @@ def train_anp_topology_masked(
         # Train
         # -------------------
         model.train()
-        if rnn_encoder is not None:
-            rnn_encoder.train()
         train_loss, train_mae = 0.0, 0.0
         train_nll, train_kl = 0.0, 0.0
         train_var_min, train_var_mean, train_var_max = 0.0, 0.0, 0.0
@@ -386,34 +385,42 @@ def train_anp_topology_masked(
                 fill=mask_fill
             )  # (B,T,Dx+S)
 
-            # RANP-style: encode sequence with causal RNN before ANP
-            x_features = rnn_encoder(x_batch_aug) if rnn_encoder is not None else x_batch_aug
+            # normalize Y
+            y_batch_raw = y_batch
+            y_batch_norm = (y_batch - y_mean) / y_std
 
-            # dynamic context size
+            # dynamic context boundary (for MAE reporting on non-context steps)
             total_points = T
             min_context = max(1, int(0.05 * total_points))
             max_context = min(int(0.95 * total_points), total_points - 1)
             context_size = torch.randint(min_context, max_context + 1, (1,), device=device).item() \
                 if max_context > min_context else min_context
 
-            context_indices = sample_context_indices(
-                total_points, context_size, mode=ctx_sample_mode, device=device
-            )
-            target_indices = torch.arange(total_points, device=device)
+            if use_rnn_encoder:
+                # Sequential ANP: full-sequence teacher-forced forward
+                y_pred_mean_norm, y_pred_var_norm, loss, kl, nll = model(
+                    x_batch_aug, y_batch_norm, target_y=y_batch_norm, beta=beta
+                )
+                # context boundary for MAE diagnostics (first C steps are "context")
+                non_ctx_mask = torch.zeros(total_points, dtype=torch.bool, device=device)
+                non_ctx_mask[context_size:] = True
+            else:
+                # Regular ANP: set-based context/target split
+                context_indices = sample_context_indices(
+                    total_points, context_size, mode=ctx_sample_mode, device=device
+                )
+                target_indices = torch.arange(total_points, device=device)
 
-            # normalize Y
-            y_batch_raw = y_batch
-            y_batch_norm = (y_batch - y_mean) / y_std
+                context_x = x_batch_aug[:, context_indices, :]
+                context_y = y_batch_norm[:, context_indices, :]
+                target_x  = x_batch_aug[:, target_indices, :]
+                target_y  = y_batch_norm[:, target_indices, :]
 
-            context_x = x_features[:, context_indices, :]
-            context_y = y_batch_norm[:, context_indices, :]
-            target_x  = x_features[:, target_indices, :]
-            target_y  = y_batch_norm[:, target_indices, :]
-
-            # forward
-            y_pred_mean_norm, y_pred_var_norm, loss, kl, nll = model(
-                context_x, context_y, target_x, target_y, beta=beta
-            )
+                y_pred_mean_norm, y_pred_var_norm, loss, kl, nll = model(
+                    context_x, context_y, target_x, target_y, beta=beta
+                )
+                non_ctx_mask = torch.ones(total_points, dtype=torch.bool, device=device)
+                non_ctx_mask[context_indices] = False
 
             optimizer.zero_grad()
             loss.backward()
@@ -429,11 +436,8 @@ def train_anp_topology_masked(
                 train_nll += nll.item()
                 train_kl  += kl.item()
 
-                non_ctx_mask = torch.ones(total_points, dtype=torch.bool, device=device)
-                non_ctx_mask[context_indices] = False
-
                 nll_pointwise = 0.5 * torch.log(2 * torch.pi * y_pred_var_norm) \
-                                + 0.5 * ((target_y - y_pred_mean_norm) ** 2) / y_pred_var_norm
+                                + 0.5 * ((y_batch_norm - y_pred_mean_norm) ** 2) / y_pred_var_norm
                 train_nll_nonctx += nll_pointwise[:, non_ctx_mask, :].mean().item()
 
                 y_pred_mean = y_pred_mean_norm * y_std + y_mean
@@ -479,8 +483,6 @@ def train_anp_topology_masked(
         g = torch.Generator(device=device)
         g.manual_seed(1)
         model.eval()
-        if rnn_encoder is not None:
-            rnn_encoder.eval()
         val_loss, val_mae = 0.0, 0.0
         val_nll, val_kl = 0.0, 0.0
         val_var_min, val_var_mean, val_var_max = 0.0, 0.0, 0.0
@@ -505,8 +507,6 @@ def train_anp_topology_masked(
                     num_time_points=num_time_points, num_sensors=num_sensors,
                     fill=mask_fill
                 )
-                # RANP-style: encode sequence with causal RNN before ANP
-                x_features = rnn_encoder(x_batch_aug) if rnn_encoder is not None else x_batch_aug
 
                 y_batch_raw = y_batch
                 y_batch_norm = (y_batch - y_mean) / y_std
@@ -515,44 +515,76 @@ def train_anp_topology_masked(
                 batch_loss = 0.0
                 batch_mae = 0.0
 
-                for frac in val_fracs:
-                    context_size = max(1, min(total_points - 1, int(round(frac * total_points))))
-                    ctx_idx = sample_context_indices(
-                        total_points, context_size, mode=ctx_sample_mode, device=device, generator=g
-                    )
-                    tar_idx = torch.arange(total_points, device=device)
-
-                    context_x = x_features[:, ctx_idx, :]
-                    context_y = y_batch_norm[:, ctx_idx, :]
-                    target_x  = x_features[:, tar_idx, :]
-                    target_y  = y_batch_norm[:, tar_idx, :]
-
+                if use_rnn_encoder:
+                    # Sequential ANP: forward once, measure MAE at different context boundaries
                     y_pred_mean_norm, y_pred_var_norm, loss, kl, nll = model(
-                        context_x, context_y, target_x, target_y, beta=1.0
+                        x_batch_aug, y_batch_norm, target_y=y_batch_norm, beta=1.0
                     )
-
-                    non_ctx_mask = torch.ones(total_points, dtype=torch.bool, device=device)
-                    non_ctx_mask[ctx_idx] = False
-
                     y_pred_mean = y_pred_mean_norm * y_std + y_mean
-                    mae = F.l1_loss(
-                        y_pred_mean[:, non_ctx_mask, :],
-                        y_batch_raw[:, non_ctx_mask, :],
-                        reduction="mean"
-                    ).item()
 
-                    batch_loss += loss.item()
-                    batch_mae  += mae
+                    for frac in val_fracs:
+                        context_size = max(1, min(total_points - 1, int(round(frac * total_points))))
+                        non_ctx_mask = torch.zeros(total_points, dtype=torch.bool, device=device)
+                        non_ctx_mask[context_size:] = True
 
-                    val_nll += nll.item()
-                    val_kl  += kl.item()
-                    val_var_min  += y_pred_var_norm.min().item()
-                    val_var_mean += y_pred_var_norm.mean().item()
-                    val_var_max  += y_pred_var_norm.max().item()
+                        mae = F.l1_loss(
+                            y_pred_mean[:, non_ctx_mask, :],
+                            y_batch_raw[:, non_ctx_mask, :],
+                            reduction="mean"
+                        ).item()
 
-                    nll_pointwise = 0.5 * torch.log(2 * torch.pi * y_pred_var_norm) \
-                                    + 0.5 * ((target_y - y_pred_mean_norm) ** 2) / y_pred_var_norm
-                    val_nll_nonctx += nll_pointwise[:, non_ctx_mask, :].mean().item()
+                        batch_loss += loss.item()
+                        batch_mae  += mae
+
+                        val_nll += nll.item()
+                        val_kl  += kl.item()
+                        val_var_min  += y_pred_var_norm.min().item()
+                        val_var_mean += y_pred_var_norm.mean().item()
+                        val_var_max  += y_pred_var_norm.max().item()
+
+                        nll_pointwise = 0.5 * torch.log(2 * torch.pi * y_pred_var_norm) \
+                                        + 0.5 * ((y_batch_norm - y_pred_mean_norm) ** 2) / y_pred_var_norm
+                        val_nll_nonctx += nll_pointwise[:, non_ctx_mask, :].mean().item()
+                else:
+                    # Regular ANP: forward per context fraction
+                    for frac in val_fracs:
+                        context_size = max(1, min(total_points - 1, int(round(frac * total_points))))
+                        ctx_idx = sample_context_indices(
+                            total_points, context_size, mode=ctx_sample_mode, device=device, generator=g
+                        )
+                        tar_idx = torch.arange(total_points, device=device)
+
+                        context_x = x_batch_aug[:, ctx_idx, :]
+                        context_y = y_batch_norm[:, ctx_idx, :]
+                        target_x  = x_batch_aug[:, tar_idx, :]
+                        target_y  = y_batch_norm[:, tar_idx, :]
+
+                        y_pred_mean_norm, y_pred_var_norm, loss, kl, nll = model(
+                            context_x, context_y, target_x, target_y, beta=1.0
+                        )
+
+                        non_ctx_mask = torch.ones(total_points, dtype=torch.bool, device=device)
+                        non_ctx_mask[ctx_idx] = False
+
+                        y_pred_mean = y_pred_mean_norm * y_std + y_mean
+                        mae = F.l1_loss(
+                            y_pred_mean[:, non_ctx_mask, :],
+                            y_batch_raw[:, non_ctx_mask, :],
+                            reduction="mean"
+                        ).item()
+
+                        batch_loss += loss.item()
+                        batch_mae  += mae
+
+                        val_nll += nll.item()
+                        val_kl  += kl.item()
+                        val_var_min  += y_pred_var_norm.min().item()
+                        val_var_mean += y_pred_var_norm.mean().item()
+                        val_var_max  += y_pred_var_norm.max().item()
+
+                        nll_pointwise = 0.5 * torch.log(2 * torch.pi * y_pred_var_norm) \
+                                        + 0.5 * ((y_batch_norm - y_pred_mean_norm) ** 2) / y_pred_var_norm
+                        val_nll_nonctx += nll_pointwise[:, non_ctx_mask, :].mean().item()
 
                 val_loss += (batch_loss / len(val_fracs))
                 val_mae  += (batch_mae  / len(val_fracs))
@@ -601,11 +633,8 @@ def train_anp_topology_masked(
             best_val_mae = val_mae
             early_stop_counter = 0
             if save_checkpoints:
-                ckpt = {'model': model.state_dict(), 'optimizer': optimizer.state_dict()}
-                if rnn_encoder is not None:
-                    ckpt['rnn_encoder'] = rnn_encoder.state_dict()
-                torch.save(ckpt, os.path.join(save_dir, 'best_checkpoint.pth.tar'))
-                #torch.save({'model': model.state_dict(), 'optimizer': optimizer.state_dict()}, os.path.join(save_dir, 'best_checkpoint.pth.tar'))
+                torch.save({'model': model.state_dict(), 'optimizer': optimizer.state_dict()},
+                           os.path.join(save_dir, 'best_checkpoint.pth.tar'))
         else:
             early_stop_counter += 1
 
@@ -629,10 +658,8 @@ def train_anp_topology_masked(
     if not dry_run:
         # save final
         if save_checkpoints:
-            ckpt = {'model': model.state_dict(), 'optimizer': optimizer.state_dict()}
-            if rnn_encoder is not None:
-                ckpt['rnn_encoder'] = rnn_encoder.state_dict()
-            torch.save(ckpt, os.path.join(save_dir, 'last_checkpoint.pth.tar'))
+            torch.save({'model': model.state_dict(), 'optimizer': optimizer.state_dict()},
+                       os.path.join(save_dir, 'last_checkpoint.pth.tar'))
 
         save_all_metrics(
             train_loss_list, val_loss_list, train_mae_list, val_mae_list, save_dir,
@@ -679,9 +706,11 @@ def train_anp_topology_masked(
         plot_training_metrics(metrics_file, output_plot)
 
         # summary
+        model_type = "Sequential ANP" if use_rnn_encoder else "ANP (set-based)"
         with open(os.path.join(save_dir, 'training_summary.txt'), 'w') as f:
-            f.write(f"ANP MASKED Training Summary - Topology: {topology_name}\n")
+            f.write(f"{model_type} MASKED Training Summary - Topology: {topology_name}\n")
             f.write("="*60 + "\n")
+            f.write(f"Model type: {model_type}\n")
             f.write(f"Training samples: {len(train_data)} trajectories\n")
             f.write(f"Validation samples: {len(val_data)} trajectories\n")
             f.write(f"Best validation MAE: {best_val_mae:.6f}\n")
@@ -696,11 +725,11 @@ def train_anp_topology_masked(
             f.write(f"  mask_fill: {mask_fill}\n")
             f.write(f"  mask_in_val: {mask_in_val}\n")
             f.write(f"  kl_warmup_epochs: {kl_warmup_epochs}\n")
-            f.write(f"\nuse_rnn_encoder: {use_rnn_encoder}\n")
+            f.write(f"\nuse_rnn_encoder (Sequential ANP): {use_rnn_encoder}\n")
             if use_rnn_encoder:
-                f.write("\nRNN Encoder config:\n")
+                f.write("\nSequential ANP RNN config:\n")
                 f.write(f"  rnn_type: {rnn_type}\n")
-                f.write(f"  rnn_hidden_dim: {rnn_hidden_dim}\n")
+                f.write(f"  rnn_hidden_dim: (num_hidden={num_hidden})\n")
                 f.write(f"  rnn_layers: {rnn_layers}\n")
                 f.write(f"  rnn_dropout: {rnn_dropout}\n")
 
@@ -734,10 +763,10 @@ def main():
     parser.add_argument("--mask-in-val", action="store_true")
     parser.add_argument("--kl-warmup-epochs", type=int, default=500)
 
-    # RNN encoder params (optional)
-    parser.add_argument("--use-rnn-encoder", action="store_true", help="If set, apply a causal LSTM/GRU encoder to x_seq before feeding ANP.")
+    # Sequential ANP params (activated by --use-rnn-encoder)
+    parser.add_argument("--use-rnn-encoder", action="store_true", help="If set, use a proper Sequential (Recurrent) ANP with RNN-based encoders instead of the set-based ANP.")
     parser.add_argument("--rnn-type", type=str, default="lstm", choices=["lstm", "gru"])
-    parser.add_argument("--rnn-hidden-dim", type=int, default=128)
+    parser.add_argument("--rnn-hidden-dim", type=int, default=128, help="(unused in Sequential ANP; num_hidden is used instead)")
     parser.add_argument("--rnn-layers", type=int, default=1)
     parser.add_argument("--rnn-dropout", type=float, default=0.0)
     parser.add_argument("--dry-run", action="store_true", help="Run one train batch and one val batch, then exit.")
@@ -747,7 +776,7 @@ def main():
     topologies = [t.strip() for t in args.topologies.split(",") if t.strip()]
     run_name = f"masked_drop{args.sensor_drop_mode}_p{args.sensor_drop_p}_{args.mask_fill}_{args.ctx_sample_mode}"
     if args.use_rnn_encoder:
-        run_name += f"_rnn-{args.rnn_type}_h{args.rnn_hidden_dim}_l{args.rnn_layers}_d{args.rnn_dropout}"
+        run_name += f"_snp-{args.rnn_type}_l{args.rnn_layers}_d{args.rnn_dropout}"
 
     if args.save_dir is None:
         base = os.path.join(os.getcwd(), "results", "ANP_topologies_masked", run_name)
