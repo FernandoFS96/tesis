@@ -30,6 +30,20 @@ python train_anp_topologies_masked.py \
   --sensor-drop-mode k_uniform \
   --mask-fill train_mean \
   --topologies aligned,ellipsoidal,random
+
+Using bernoulli dropout with 20% drop probability and filling masked sensors with training mean but for high variance data:
+python train_anp_topologies_masked.py \
+  --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
+  --batch-size 16 \
+  --epochs 3000 \
+  --ctx-sample-mode first \
+  --patience 150 \
+  --num-sensors 10 \
+  --num-time-points 201 \
+  --sensor-drop-mode bernoulli \
+  --sensor-drop-p 0.2 \
+  --mask-fill train_mean \
+  --topologies random,ellipsoidal,aligned
 '''
 
 import csv
@@ -679,10 +693,18 @@ def main():
     args = parser.parse_args()
 
     topologies = [t.strip() for t in args.topologies.split(",") if t.strip()]
+    # denote level of data variance
+    if "low_variance" in args.data_dir:
+        variance_tag = "lowvar"
+    elif "high_variance" in args.data_dir:
+        variance_tag = "highvar"
+    else:
+        variance_tag = "varunknown"
+
     run_name = f"masked_drop{args.sensor_drop_mode}_p{args.sensor_drop_p}_{args.mask_fill}_{args.ctx_sample_mode}"
 
     if args.save_dir is None:
-        base = os.path.join(os.getcwd(), "results", "ANP_topologies_masked", run_name)
+        base = os.path.join(os.getcwd(), "results", "ANP_topologies_masked", variance_tag, run_name)
     else:
         base = os.path.join(args.save_dir, run_name)
 
