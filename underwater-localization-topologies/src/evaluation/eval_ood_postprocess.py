@@ -884,6 +884,100 @@ def make_latency_plot(
 
 
 # ---------------------------------------------------------------------------
+# MAE vs theta line plot (best methods comparison)
+# ---------------------------------------------------------------------------
+
+def make_mae_vs_theta_plot(
+    all_results:  Dict[str, Dict[float, Dict[str, float]]],
+    oracle_key:   str,
+    degraded_key: str,
+    output_dir:   Path,
+) -> None:
+    """
+    Line plot: MAE (m) vs θ for the four key series:
+      - Oracle raw              (reference ceiling)
+      - HV raw                  (OoD baseline)
+      - HV RTS (R=σ²)           (best single-pass filter)
+      - HV AR+RTS (R=σ²)        (best overall)
+    Shaded gap between oracle and each HV series for visual clarity.
+    """
+    thetas = sorted(all_results[degraded_key].keys())
+    x = np.array(thetas)
+
+    series = {
+        "oracle_raw":       ("Oracle (lowvar) – Raw",   "#2c3e50", "-",  "o"),
+        "hv_raw":           ("HV – Raw (OoD baseline)", "#e74c3c", "--", "s"),
+        "hv_rts_var":       ("HV – RTS (R=σ²)",         "#27ae60", "-.", "^"),
+        "hv_ar_rts_var":    ("HV – AR+RTS (R=σ²)",      "#6c3483", ":",  "D"),
+    }
+
+    def get_vals(model_key: str, method: str) -> np.ndarray:
+        return np.array([
+            all_results[model_key].get(t, {}).get(method, float("nan"))
+            for t in thetas
+        ])
+
+    oracle_vals    = get_vals(oracle_key,   "raw")
+    hv_raw_vals    = get_vals(degraded_key, "raw")
+    hv_rts_vals    = get_vals(degraded_key, "kalman_rts_var")
+    hv_ar_rts_vals = get_vals(degraded_key, "ar_kalman_rts_var")
+
+    data = {
+        "oracle_raw":    oracle_vals,
+        "hv_raw":        hv_raw_vals,
+        "hv_rts_var":    hv_rts_vals,
+        "hv_ar_rts_var": hv_ar_rts_vals,
+    }
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    # Shaded gap: hv_raw → oracle (red fill), improvements narrow this
+    ax.fill_between(x, oracle_vals, hv_raw_vals,
+                    alpha=0.08, color="#e74c3c", label="_nolegend_")
+    ax.fill_between(x, oracle_vals, hv_rts_vals,
+                    alpha=0.10, color="#27ae60", label="_nolegend_")
+    ax.fill_between(x, oracle_vals, hv_ar_rts_vals,
+                    alpha=0.12, color="#6c3483", label="_nolegend_")
+
+    for key, (label, color, ls, marker) in series.items():
+        ax.plot(x, data[key], color=color, ls=ls, marker=marker,
+                markersize=7, lw=2, label=label)
+
+    # Annotate % gap closed for best method at each theta
+    for i, theta in enumerate(thetas):
+        gap_total = hv_raw_vals[i] - oracle_vals[i]
+        gap_closed = hv_raw_vals[i] - hv_ar_rts_vals[i]
+        if gap_total > 0:
+            pct = 100.0 * gap_closed / gap_total
+            ax.annotate(
+                f"{pct:.0f}%",
+                xy=(theta, hv_ar_rts_vals[i]),
+                xytext=(0, -14), textcoords="offset points",
+                ha="center", fontsize=8, color="#6c3483",
+                fontweight="bold",
+            )
+
+    ax.set_xlabel("θ (channel variability)", fontsize=11)
+    ax.set_ylabel("MAE (m)", fontsize=11)
+    ax.set_title(
+        "MAE vs θ — Oracle / HV raw / Best post-processing\n"
+        "(% labels = gap closed by AR+RTS(R=σ²) vs oracle)",
+        fontsize=10,
+    )
+    ax.set_xticks(thetas)
+    ax.set_xticklabels([f"{t:.1f}" for t in thetas])
+    ax.legend(fontsize=9, loc="upper left")
+    ax.grid(alpha=0.35)
+    ax.set_ylim(bottom=0)
+
+    plt.tight_layout()
+    path = output_dir / "mae_vs_theta_best_methods.png"
+    plt.savefig(path, dpi=160)
+    plt.close()
+    print(f"[✓] Saved {path}")
+
+
+# ---------------------------------------------------------------------------
 # Box-plot
 # ---------------------------------------------------------------------------
 
@@ -1162,6 +1256,7 @@ def main() -> None:
     build_summary_txt(all_results, "oracle", "highvar", args.output_dir)
     make_boxplot(all_per_sample, "oracle", "highvar", args.output_dir)
     make_heatmap(all_results, "oracle", "highvar", args.output_dir)
+    make_mae_vs_theta_plot(all_results, "oracle", "highvar", args.output_dir)
     save_latency_csv(hv_latencies_by_theta, args.output_dir)
     make_latency_plot(hv_latencies_by_theta, args.output_dir)
 

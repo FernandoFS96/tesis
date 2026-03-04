@@ -15,6 +15,16 @@ class Linear(nn.Module):
     def forward(self, x):
         return self.linear_layer(x)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# [CAMBIO 1] LatentEncoder: sustituir mean-pooling por last-step pooling
+#
+# ANTES: hidden = encoder_input.mean(dim=1)
+#
+# PROBLEMA: cuando la entrada ya son estados ocultos del RNN (h_t), el promedio uniforme destruye la estructura temporal acumulada por el RNN. 
+# El último estado h_{T_ctx} ya contiene un resumen causal de todo el contexto.
+#
+# AHORA: se toma el último paso temporal del contexto como representación global.
+# ─────────────────────────────────────────────────────────────────────────────
 class LatentEncoder(nn.Module):
     def __init__(self, num_hidden, num_latent, input_dim, output_dim):
         super(LatentEncoder, self).__init__()
@@ -30,7 +40,7 @@ class LatentEncoder(nn.Module):
         for attention in self.self_attentions:
             encoder_input, _ = attention(encoder_input, encoder_input, encoder_input)
 
-        hidden = encoder_input.mean(dim=1)
+        hidden = encoder_input[:, -1, :]
         hidden = t.relu(self.penultimate_layer(hidden))
         mu = self.mu(hidden)
         log_var = self.log_var(hidden)
@@ -201,24 +211,77 @@ class TemporalEncoder(nn.Module):
         h_seq = self.norm(h_seq)
         return h_seq
 
-# LatentModel:
-
+# ─────────────────────────────────────────────────────────────────────────────
+# [CAMBIO 2] LatentModel: integra TemporalEncoder como componente interno
+#
+# ANTES: El TemporalEncoder vivía fuera, gestionado manualmente en el script de entrenamiento. Esto implicaba:
+#        - Que importar LatentModel de r_anp.py daba un ANP puro (sin RNN)
+#        - Gestión externa del estado train/eval del rnn_encoder
+#        - Gradient clipping aplicado solo a model.parameters(), sin el RNN
+#
+# AHORA: LatentModel contiene el TemporalEncoder. El forward recibe x_seq completo (B, T, Dx) y los índices de contexto/target, 
+#        aplica el RNN internamente, y hace el split dentro del modelo.
+#
+# FIRMA DEL FORWARD CAMBIA:
+#   ANTES: forward(context_x, context_y, target_x, target_y, beta)
+#   AHORA: forward(x_seq, context_indices, context_y, target_indices, target_y, beta)
+# ─────────────────────────────────────────────────────────────────────────────
 class LatentModel(nn.Module):
-    def __init__(self, num_hidden, input_dim, output_dim):
+    def __init__(
+        self,
+        num_hidden: int,
+        input_dim: int,        # dimensión de x_seq ANTES del RNN (Dx+S)
+        output_dim: int,
+        rnn_type: str = "lstm",
+        rnn_layers: int = 1,
+        rnn_dropout: float = 0.0,
+        ):
         super(LatentModel, self).__init__()
-        self.latent_encoder = LatentEncoder(num_hidden, num_latent=num_hidden,
-                                            input_dim=input_dim,
-                                            output_dim=output_dim)
-        self.deterministic_encoder = DeterministicEncoder(num_hidden,
-                                                          num_latent=num_hidden,
-                                                          input_dim=input_dim,
-                                                          output_dim=output_dim)
-        self.decoder = Decoder(num_hidden,
-                               input_dim=input_dim,
-                               output_dim=output_dim)
+        # [CAMBIO 2a] RNN integrado: input_dim → num_hidden
+        self.temporal_encoder = TemporalEncoder(
+            input_dim=input_dim,
+            hidden_dim=num_hidden,
+            num_layers=rnn_layers,
+            dropout=rnn_dropout,
+            rnn_type=rnn_type,
+            layer_norm=True,
+        )
 
-    def forward(self, context_x, context_y, target_x, target_y=None, beta: float = 1.0):
+        # El input de los encoders ANP ahora es num_hidden (salida del RNN)
+        self.latent_encoder = LatentEncoder(
+            num_hidden, num_latent=num_hidden,
+            input_dim=num_hidden,
+            output_dim=output_dim,
+        )
+        self.deterministic_encoder = DeterministicEncoder(
+            num_hidden, num_latent=num_hidden,
+            input_dim=num_hidden,
+            output_dim=output_dim,
+        )
+        self.decoder = Decoder(
+            num_hidden,
+            input_dim=num_hidden,
+            output_dim=output_dim,
+        )
+
+    def forward(
+        self,
+        x_seq: t.Tensor, # (B, T, Dx+S) — secuencia completa aumentada
+        context_indices: t.Tensor, # (Nc,)  índices del contexto
+        context_y: t.Tensor, # (B, Nc, output_dim)
+        target_indices: t.Tensor, # (Nt,)  índices de los targets (normalmente 0..T-1)
+        target_y: t.Tensor = None, # (B, Nt, output_dim) — None en inferencia
+        beta: float = 1.0,
+        ):
+        # [CAMBIO 2b] RNN aplicado internamente sobre la secuencia completa
+        h_seq = self.temporal_encoder(x_seq) # (B, T, num_hidden)
+
+        # Split context / target sobre los estados ocultos del RNN
+        context_x = h_seq[:, context_indices, :] # (B, Nc, H)
+        target_x  = h_seq[:, target_indices,  :] # (B, Nt, H)
         num_targets = target_x.size(1)
+
+        # Camino latente
         prior_mu, prior_var, prior = self.latent_encoder(context_x, context_y)
 
         if target_y is not None:
@@ -228,19 +291,22 @@ class LatentModel(nn.Module):
             z = prior
 
         z = z.unsqueeze(1).repeat(1, num_targets, 1)
+
+        # Camino determinista (cross-attention)
         r = self.deterministic_encoder(context_x, context_y, target_x)
 
+        # Decoder
         y_pred_mean, y_pred_var = self.decoder(r, z, target_x)
 
         if target_y is not None:
-            nll = 0.5 * t.log(2 * t.pi * y_pred_var) + 0.5 * ((target_y - y_pred_mean) ** 2) / y_pred_var
+            nll = 0.5 * t.log(2 * t.pi * y_pred_var) + \
+                  0.5 * ((target_y - y_pred_mean) ** 2) / y_pred_var
             nll = nll.mean()
             kl = self.kl_div(prior_mu, prior_var, posterior_mu, posterior_var)
             loss = nll + beta * kl
         else:
-            kl = None
-            loss = None
-            nll = None
+            kl = loss = nll = None
+
         return y_pred_mean, y_pred_var, loss, kl, nll
 
     def kl_div(self, prior_mu, prior_var, posterior_mu, posterior_var):
