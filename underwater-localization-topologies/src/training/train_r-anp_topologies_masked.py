@@ -15,7 +15,7 @@ python train_r-anp_topologies_masked.py \
   --sensor-drop-mode bernoulli \
   --sensor-drop-p 0.2 \
   --mask-fill train_mean \
-  ---kl-warmup-epochs 800 \
+  --kl-warmup-epochs 500 \
   --rnn-type lstm \
   --rnn-hidden-dim 128 \
   --rnn-layers 1 \
@@ -257,7 +257,7 @@ def plot_anp_diagnostics(save_dir,
 # Training core
 # ---------------------------
 
-def train_anp_topology_masked(
+def train_ranp_topology_masked(
     train_data, val_data, save_dir, topology_name,
     batch_size=8, epochs=5000, patience=200, device="cuda",
     ctx_sample_mode="first",
@@ -269,12 +269,11 @@ def train_anp_topology_masked(
     mask_in_val=False,
     kl_warmup_epochs=500,
     num_hidden=128,
-    lr=9e-4,
+    lr=8e-4,
     weight_decay=1e-4,
     trial=None,
     report_every=25,
     save_checkpoints: bool = True,
-    use_rnn_encoder: bool = False,
     rnn_type: str = "lstm",
     rnn_hidden_dim: int = 128,
     rnn_layers: int = 1,
@@ -722,7 +721,7 @@ def main():
     parser.add_argument("--sensor-drop-p", type=float, default=0.2)
     parser.add_argument("--mask-fill", type=str, default="train_mean", choices=["train_mean", "zero"])
     parser.add_argument("--mask-in-val", action="store_true")
-    parser.add_argument("--kl-warmup-epochs", type=int, default=500)
+    parser.add_argument("--kl-warmup-epochs", type=int, default=800)
 
     # RNN encoder params
     parser.add_argument("--rnn-type", type=str, default="lstm", choices=["lstm", "gru"])
@@ -734,9 +733,11 @@ def main():
     args = parser.parse_args()
 
     topologies = [t.strip() for t in args.topologies.split(",") if t.strip()]
-    run_name = f"masked_drop{args.sensor_drop_mode}_p{args.sensor_drop_p}_{args.mask_fill}_{args.ctx_sample_mode}"
-    if args.use_rnn_encoder:
-        run_name += f"_rnn-{args.rnn_type}_h{args.rnn_hidden_dim}_l{args.rnn_layers}_d{args.rnn_dropout}"
+    run_name = (
+        f"ranp_drop{args.sensor_drop_mode}_p{args.sensor_drop_p}"
+        f"_{args.mask_fill}_{args.ctx_sample_mode}"
+        f"_rnn-{args.rnn_type}_h{args.rnn_hidden_dim}_l{args.rnn_layers}"
+    )
 
     if args.save_dir is None:
         base = os.path.join(os.getcwd(), "results", "RANP_topologies_masked", run_name)
@@ -753,7 +754,7 @@ def main():
             continue
 
         save_dir = os.path.join(base, f"topology_{topo}")
-        best_mae = train_anp_topology_masked(
+        best_mae = train_ranp_topology_masked(
             train_data=train_data,
             val_data=val_data,
             save_dir=save_dir,
@@ -770,7 +771,6 @@ def main():
             mask_fill=args.mask_fill,
             mask_in_val=args.mask_in_val,
             kl_warmup_epochs=args.kl_warmup_epochs,
-            use_rnn_encoder=args.use_rnn_encoder,
             rnn_type=args.rnn_type,
             rnn_hidden_dim=args.rnn_hidden_dim,
             rnn_layers=args.rnn_layers,

@@ -16,7 +16,7 @@ class Linear(nn.Module):
         return self.linear_layer(x)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# [CAMBIO 1] LatentEncoder: sustituir mean-pooling por last-step pooling
+# LatentEncoder: sustituir mean-pooling por last-step pooling
 #
 # ANTES: hidden = encoder_input.mean(dim=1)
 #
@@ -33,6 +33,7 @@ class LatentEncoder(nn.Module):
         self.penultimate_layer = Linear(num_hidden, num_hidden, w_init='relu')
         self.mu = Linear(num_hidden, num_latent)
         self.log_var = Linear(num_hidden, num_latent)
+        self.pool_attn = nn.Linear(num_hidden, 1)
 
     def forward(self, x, y):
         encoder_input = t.cat([x, y], dim=-1)
@@ -40,7 +41,10 @@ class LatentEncoder(nn.Module):
         for attention in self.self_attentions:
             encoder_input, _ = attention(encoder_input, encoder_input, encoder_input)
 
-        hidden = encoder_input[:, -1, :]
+        #hidden = encoder_input[:, -1, :]
+        scores = self.pool_attn(encoder_input)          # (B, T, 1)
+        weights = t.softmax(scores, dim=1)          # (B, T, 1)
+        hidden = (encoder_input * weights).sum(dim=1)   # (B, H)
         hidden = t.relu(self.penultimate_layer(hidden))
         mu = self.mu(hidden)
         log_var = self.log_var(hidden)
@@ -212,7 +216,7 @@ class TemporalEncoder(nn.Module):
         return h_seq
 
 # ─────────────────────────────────────────────────────────────────────────────
-# [CAMBIO 2] LatentModel: integra TemporalEncoder como componente interno
+# LatentModel: integra TemporalEncoder como componente interno
 #
 # ANTES: El TemporalEncoder vivía fuera, gestionado manualmente en el script de entrenamiento. Esto implicaba:
 #        - Que importar LatentModel de r_anp.py daba un ANP puro (sin RNN)
@@ -237,7 +241,7 @@ class LatentModel(nn.Module):
         rnn_dropout: float = 0.0,
         ):
         super(LatentModel, self).__init__()
-        # [CAMBIO 2a] RNN integrado: input_dim → num_hidden
+        # RNN integrado: input_dim → num_hidden
         self.temporal_encoder = TemporalEncoder(
             input_dim=input_dim,
             hidden_dim=num_hidden,
@@ -273,7 +277,7 @@ class LatentModel(nn.Module):
         target_y: t.Tensor = None, # (B, Nt, output_dim) — None en inferencia
         beta: float = 1.0,
         ):
-        # [CAMBIO 2b] RNN aplicado internamente sobre la secuencia completa
+        # RNN aplicado internamente sobre la secuencia completa
         h_seq = self.temporal_encoder(x_seq) # (B, T, num_hidden)
 
         # Split context / target sobre los estados ocultos del RNN
