@@ -404,12 +404,13 @@ def train_anp_topology_masked(
             target_y  = y_batch_norm[:, target_indices, :]
 
             # forward
+            optimizer.zero_grad()
             y_pred_mean_norm, y_pred_var_norm, loss, kl, nll = model(
                 context_x, context_y, target_x, target_y, beta=beta
             )
-
-            optimizer.zero_grad()
+            
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
             # diagnostics
