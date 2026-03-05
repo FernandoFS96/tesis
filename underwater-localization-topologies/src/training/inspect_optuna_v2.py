@@ -143,6 +143,61 @@ def _add_time_metrics(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _make_mae_by_group_fig(study: optuna.Study, group_param: str) -> Any:
+    """Box + strip chart of objective values (MAE) grouped by *group_param*."""
+    import plotly.graph_objects as go
+    from collections import defaultdict
+
+    groups: Dict[Any, List[float]] = defaultdict(list)
+    for t in study.trials:
+        if t.state.name == "COMPLETE" and group_param in t.params and t.value is not None:
+            groups[t.params[group_param]].append(t.value)
+
+    fig = go.Figure()
+    for gv in sorted(groups.keys()):
+        vals = groups[gv]
+        fig.add_trace(go.Box(
+            y=vals,
+            name=str(gv),
+            boxpoints="all",
+            jitter=0.35,
+            pointpos=-1.8,
+            marker_size=4,
+        ))
+
+    fig.update_layout(
+        title=f"Objective (MAE) distribution by {group_param}  "
+              f"[{len([t for t in study.trials if t.state.name == 'COMPLETE'])} COMPLETE trials]",
+        xaxis_title=group_param,
+        yaxis_title="MAE (objective value)",
+        showlegend=False,
+        height=450,
+    )
+    return fig
+
+
+def _combine_figs_html(figs_with_titles: List[tuple], output_path: Path) -> None:
+    """Write multiple plotly figures to a single self-contained HTML file.
+
+    *figs_with_titles* is a list of (title_str, plotly_figure).
+    The first figure bundles plotly.js; the rest reference the same bundle.
+    """
+    parts: List[str] = []
+    for i, (title, fig) in enumerate(figs_with_titles):
+        include_js = "cdn" if i == 0 else False
+        div = fig.to_html(full_html=False, include_plotlyjs=include_js)
+        parts.append(f"<h3 style='font-family:sans-serif;margin-top:28px'>{title}</h3>\n{div}")
+
+    html = (
+        "<!DOCTYPE html>\n"
+        "<html><head><meta charset='utf-8'></head>\n"
+        "<body style='background:#fff'>\n"
+        + "\n".join(parts)
+        + "\n</body></html>"
+    )
+    output_path.write_text(html, encoding="utf-8")
+
+
 def _try_make_plots(
     study: optuna.Study,
     outdir: Path,
@@ -183,7 +238,19 @@ def _try_make_plots(
         slice_params.insert(0, group_param)
 
     if slice_params:
-        _save(plot_slice(study, params=slice_params), "slice.html")
+        try:
+            slice_fig = plot_slice(study, params=slice_params)
+            figs: List[tuple] = [("Slice plot", slice_fig)]
+            if group_param:
+                try:
+                    mae_fig = _make_mae_by_group_fig(study, group_param)
+                    figs.append((f"MAE distribution by {group_param}", mae_fig))
+                except Exception as e:
+                    print(f"[plots] could not build MAE-by-group chart: {e}")
+            _combine_figs_html(figs, outdir / "slice.html")
+            print("[plots] wrote slice.html")
+        except Exception as e:
+            print(f"[plots] failed to save slice.html: {e}")
         _save(plot_parallel_coordinate(study, params=slice_params), "parallel_coordinate.html")
 
     # Per-group slice plots (one per batch_size value)
