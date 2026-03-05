@@ -208,12 +208,14 @@ class TemporalEncoder(nn.Module):
             )
 
         self.norm = nn.LayerNorm(hidden_dim) if layer_norm else nn.Identity()
+        self.input_proj = nn.Linear(input_dim, hidden_dim)
 
     def forward(self, x_seq: t.Tensor) -> t.Tensor:
         # x_seq: (B, T, Dx)
+
         h_seq, _ = self.rnn(x_seq)      # (B, T, Dh)
         h_seq = self.norm(h_seq)
-        return h_seq
+        return h_seq + self.input_proj(x_seq)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LatentModel: integra TemporalEncoder como componente interno
