@@ -11,9 +11,9 @@ Run (single process):
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
     --topologies ellipsoidal \
     --objective-topology ellipsoidal \
-    --n-trials 400 \
+    --n-trials 100 \
     --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
-    --study-name anp_masked_v4 \
+    --study-name anp_masked_v5 \
     --disable-pruning
 
 Resume:
@@ -23,7 +23,7 @@ Resume:
   --objective-topology ellipsoidal \
   --n-trials 200 \
   --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
-  --study-name anp_masked_v4 \
+  --study-name anp_masked_v5 \
   --device cuda
 
 With nohup and redirect to log:
@@ -33,11 +33,11 @@ With nohup and redirect to log:
         --objective-topology ellipsoidal \
         --n-trials 200 \
         --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
-        --study-name anp_masked_v4 \
-        > optuna_anp_masked_v4_$(date +%F_%H%M%S)_$$.log 2>&1 &
+        --study-name anp_masked_v5 \
+        > optuna_anp_masked_v5_$(date +%F_%H%M%S)_$$.log 2>&1 &
 
     monitor with:
-    tail -f optuna_anp_masked_v4_$(date +%F_%H%M%S)_$$.log 2>&1 &
+    tail -f optuna_anp_masked_v5_$(date +%F_%H%M%S)_$$.log 2>&1 &
 
 Parallel: start multiple processes pointing to the same storage+study:
   # terminal 1
@@ -79,26 +79,24 @@ def make_objective(args):
         # ---------------------------
         hp = {
             # model / optimizer
-            "num_hidden": trial.suggest_int("num_hidden", 32, 192, step=32),
-            "lr": trial.suggest_categorical("lr", [5e-3, 3e-3, 1e-3, 9e-4, 7e-4, 5e-4, 3e-4, 1e-4],
-                                            ),
-            "weight_decay": trial.suggest_categorical("weight_decay", [1e-3, 5e-4, 1e-4, 5e-5, 1e-5, 5e-6, 1e-6],
-                                                      ),
+            "num_hidden": trial.suggest_int("num_hidden", 160, 288, step=32),
+            "lr": trial.suggest_categorical("lr", [5e-4, 3e-4, 1e-4]),
+            "weight_decay": trial.suggest_categorical("weight_decay", [1e-2, 7e-3, 3e-3, 1e-3]),
 
             # ANP training dynamics
-            "kl_warmup_epochs": trial.suggest_int("kl_warmup_epochs", 200, 1000, step=200),
+            "kl_warmup_epochs": trial.suggest_int("kl_warmup_epochs", 1000, 1800, step=400),
 
             # context sampling
             "ctx_sample_mode": trial.suggest_categorical("ctx_sample_mode", ["first"]),#trial.suggest_categorical("ctx_sample_mode", ["first", "random"]),
 
             # masking
             "sensor_drop_mode": trial.suggest_categorical("sensor_drop_mode", ["bernoulli", "k_uniform"]),
-            "sensor_drop_p": trial.suggest_categorical("sensor_drop_p", [0.1, 0.15, 0.2, 0.3, 0.4, 0.5]),
+            "sensor_drop_p": trial.suggest_categorical("sensor_drop_p", [0.1, 0.15, 0.2]),
             "mask_fill": trial.suggest_categorical("mask_fill", ["train_mean"]),#("mask_fill", ["train_mean", "zero"]),
         }
 
         # batch-size often interacts with lr; keep a small menu
-        hp["batch_size"] = trial.suggest_categorical("batch_size", [8, 16, 32])
+        hp["batch_size"] = trial.suggest_categorical("batch_size", [4, 8])
 
         # ---------------------------
         # 2) Per-trial output folder
