@@ -14,7 +14,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
-from src.models.anp import LatentModel, DistributedLatentModel
+from src.models.anp import LatentModel
 from src.utils.nav_dataset import NavigationTrajectoryDataset
 
 '''
@@ -231,17 +231,9 @@ class TopologyEvaluator:
         
         sensor_emb_dim = 64 # MUST match the value used during training
         n_sensors = 10
-        sensor_feature_dim = 401
+        sensor_feature_dim = 201
         
-        if distributed:
-            base_anp = LatentModel(num_hidden=128, input_dim=sensor_emb_dim, output_dim=output_dim)
-            anp_model = DistributedLatentModel(base_anp=base_anp,
-                                               n_sensors=n_sensors,
-                                               in_dim_per_sensor=sensor_feature_dim,
-                                               emb_dim=sensor_emb_dim,
-                                               fusion="mean",)
-        else:
-            anp_model = LatentModel(num_hidden=128, input_dim=input_dim, output_dim=output_dim)
+        anp_model = LatentModel(num_hidden=128, input_dim=input_dim, output_dim=output_dim)
         checkpoint = torch.load(anp_path, map_location=self.device)
         anp_model.load_state_dict(checkpoint['model'])
         model = anp_model.to(self.device).eval()
