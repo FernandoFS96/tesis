@@ -7,7 +7,7 @@ Usage:
 Using bernoulli dropout with 20% drop probability and filling masked sensors with training mean:
 python train_anp_topologies_masked.py \
   --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-  --batch-size 16 \
+  --batch-size 8 \
   --epochs 3000 \
   --ctx-sample-mode first \
   --patience 150 \
@@ -16,7 +16,7 @@ python train_anp_topologies_masked.py \
   --sensor-drop-mode bernoulli \
   --sensor-drop-p 0.2 \
   --mask-fill train_mean \
-  --topologies ellipsoidal,aligned,random \
+  --topologies random,ellipsoidal,aligned \
 
   Using k-uniform dropout with random k:
 python train_anp_topologies_masked.py \
@@ -421,17 +421,19 @@ def train_anp_topology_masked(
                 train_nll += nll.item()
                 train_kl  += kl.item()
 
-                non_ctx_mask = torch.ones(total_points, dtype=torch.bool, device=device)
-                non_ctx_mask[context_indices] = False
+                # Fixed held-out tail (last 20%) for consistent MAE tracking
+                n_holdout = max(1, int(round(0.20 * total_points)))
+                holdout_mask = torch.zeros(total_points, dtype=torch.bool, device=device)
+                holdout_mask[total_points - n_holdout:] = True
 
                 nll_pointwise = 0.5 * torch.log(2 * torch.pi * y_pred_var_norm) \
                                 + 0.5 * ((target_y - y_pred_mean_norm) ** 2) / y_pred_var_norm
-                train_nll_nonctx += nll_pointwise[:, non_ctx_mask, :].mean().item()
+                train_nll_nonctx += nll_pointwise[:, holdout_mask, :].mean().item()
 
                 y_pred_mean = y_pred_mean_norm * y_std + y_mean
                 mae = F.l1_loss(
-                    y_pred_mean[:, non_ctx_mask, :],
-                    y_batch_raw[:, non_ctx_mask, :],
+                    y_pred_mean[:, holdout_mask, :],
+                    y_batch_raw[:, holdout_mask, :],
                     reduction="mean"
                 ).item()
 
@@ -495,6 +497,11 @@ def train_anp_topology_masked(
                 y_batch_norm = (y_batch - y_mean) / y_std
                 total_points = T
 
+                # Fixed held-out tail (last 20%) for consistent MAE/early-stopping
+                n_holdout = max(1, int(round(0.20 * total_points)))
+                holdout_mask = torch.zeros(total_points, dtype=torch.bool, device=device)
+                holdout_mask[total_points - n_holdout:] = True
+
                 batch_loss = 0.0
                 batch_mae = 0.0
 
@@ -514,13 +521,10 @@ def train_anp_topology_masked(
                         context_x, context_y, target_x, target_y, beta=1.0
                     )
 
-                    non_ctx_mask = torch.ones(total_points, dtype=torch.bool, device=device)
-                    non_ctx_mask[ctx_idx] = False
-
                     y_pred_mean = y_pred_mean_norm * y_std + y_mean
                     mae = F.l1_loss(
-                        y_pred_mean[:, non_ctx_mask, :],
-                        y_batch_raw[:, non_ctx_mask, :],
+                        y_pred_mean[:, holdout_mask, :],
+                        y_batch_raw[:, holdout_mask, :],
                         reduction="mean"
                     ).item()
 
@@ -535,7 +539,7 @@ def train_anp_topology_masked(
 
                     nll_pointwise = 0.5 * torch.log(2 * torch.pi * y_pred_var_norm) \
                                     + 0.5 * ((target_y - y_pred_mean_norm) ** 2) / y_pred_var_norm
-                    val_nll_nonctx += nll_pointwise[:, non_ctx_mask, :].mean().item()
+                    val_nll_nonctx += nll_pointwise[:, holdout_mask, :].mean().item()
 
                 val_loss += (batch_loss / len(val_fracs))
                 val_mae  += (batch_mae  / len(val_fracs))
