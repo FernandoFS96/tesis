@@ -8,14 +8,14 @@ python train_r-anp_topologies_masked.py \
   --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
   --batch-size 8 \
   --epochs 5000 \
-  --patience 200 \
+  --patience 400 \
   --ctx-sample-mode first \
   --num-sensors 10 \
   --num-time-points 201 \
   --sensor-drop-mode bernoulli \
   --sensor-drop-p 0.2 \
   --mask-fill train_mean \
-  --kl-warmup-epochs 800 \
+  --kl-warmup-epochs 1000 \
   --rnn-type lstm \
   --rnn-hidden-dim 128 \
   --rnn-layers 1 \
@@ -267,9 +267,9 @@ def train_ranp_topology_masked(
     sensor_drop_p=0.2,
     mask_fill="train_mean",
     mask_in_val=False,
-    kl_warmup_epochs=500,
+    kl_warmup_epochs=800,
     num_hidden=128,
-    lr=9e-4,
+    lr=5e-4,
     weight_decay=1e-4,
     trial=None,
     report_every=25,
@@ -340,7 +340,7 @@ def train_ranp_topology_masked(
     train_nll_nonctx_list, val_nll_nonctx_list = [], []
 
     # fixed context fractions for validation
-    val_fracs = [0.1, 0.3, 0.5]
+    val_fracs = [0.3]#[0.1, 0.3, 0.5]
 
     t_init = time.time()
     pbar = tqdm(range(epochs), desc=f"[RANP-MASKED-{topology_name}]", unit="epoch", ncols=200)

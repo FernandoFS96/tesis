@@ -346,7 +346,7 @@ def train_anp_topology_masked(
     train_nll_nonctx_list, val_nll_nonctx_list = [], []
 
     # fixed context fractions for validation
-    val_fracs = [0.1, 0.3, 0.5]
+    val_fracs = [0.3]#[0.1, 0.3, 0.5]
 
     t_init = time.time()
     pbar = tqdm(range(epochs), desc=f"[ANP-MASKED-{topology_name}]", unit="epoch", ncols=200)
