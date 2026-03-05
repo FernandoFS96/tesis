@@ -1,0 +1,22 @@
+method,label,group,mae_mean_m,latency_total_ms
+raw,FT decoder – Raw,FT decoder,10.0860,4.6260
+kalman_rts_var,FT decoder – RTS (R=σ²),FT decoder,7.7564,8.7140
+ar_kalman_rts_var,FT decoder – AR+RTS (R=σ²),FT decoder,6.5011,39.6560
+raw,HV – Raw,HV baseline,11.7209,4.4600
+alpha_beta,HV – Alpha-Beta,HV baseline,11.3686,4.5800
+kalman_cv_var,HV – Kal CV (R=σ²),HV baseline,13.0255,6.9500
+kalman_cv_I,HV – Kal CV (R=I),HV baseline,11.4229,7.2400
+kalman_rts_var,HV – RTS (R=σ²),HV baseline,9.7097,8.3100
+kalman_rts_I,HV – RTS (R=I),HV baseline,10.6195,8.4300
+ar_raw,HV – AR raw,HV baseline,11.2034,34.7600
+ar_kalman_rts_var,HV – AR+RTS (R=σ²),HV baseline,8.8194,38.5200
+ar_kalman_rts_I,HV – AR+RTS (R=I),HV baseline,10.1061,38.8000
+raw,Oracle – Raw,Oracle,4.8867,4.4600
+alpha_beta,Oracle – Alpha-Beta,Oracle,4.6638,4.5800
+kalman_cv_var,Oracle – Kal CV (R=σ²),Oracle,4.6114,6.9500
+kalman_cv_I,Oracle – Kal CV (R=I),Oracle,4.5980,7.2400
+kalman_rts_var,Oracle – RTS (R=σ²),Oracle,3.4763,8.3100
+kalman_rts_I,Oracle – RTS (R=I),Oracle,4.0165,8.4300
+ar_raw,Oracle – AR raw,Oracle,4.7601,34.7600
+ar_kalman_rts_var,Oracle – AR+RTS (R=σ²),Oracle,3.2182,38.5200
+ar_kalman_rts_I,Oracle – AR+RTS (R=I),Oracle,3.8764,38.8000

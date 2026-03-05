@@ -15,7 +15,7 @@ Adds to your current inspect script:
 Usage:
   python inspect_optuna_v2.py \
     --storage "sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db" \
-    --study-name anp_masked_v3 \
+    --study-name anp_masked_v4 \
     --output-dir results/optuna \
     --group-param batch_size \
     --top-n 5 \
@@ -143,8 +143,19 @@ def _add_time_metrics(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _try_make_plots(study: optuna.Study, outdir: Path, params: Optional[List[str]] = None) -> None:
-    """Save a few Optuna interactive plots as HTML (requires plotly)."""
+def _try_make_plots(
+    study: optuna.Study,
+    outdir: Path,
+    params: Optional[List[str]] = None,
+    group_param: Optional[str] = None,
+    group_trials: Optional[Dict[Any, List[optuna.trial.FrozenTrial]]] = None,
+) -> None:
+    """Save a few Optuna interactive plots as HTML (requires plotly).
+
+    When *group_param* and *group_trials* are provided, an additional
+    ``slice_<group_param>_<value>.html`` is written for each group so you
+    can compare the hyperparameter-response surface across batch sizes.
+    """
     try:
         from optuna.visualization import (
             plot_optimization_history,
@@ -166,9 +177,39 @@ def _try_make_plots(study: optuna.Study, outdir: Path, params: Optional[List[str
     _save(plot_optimization_history(study), "opt_history.html")
     _save(plot_param_importances(study), "param_importances.html")
 
-    if params:
-        _save(plot_slice(study, params=params), "slice.html")
-        _save(plot_parallel_coordinate(study, params=params), "parallel_coordinate.html")
+    # Include the group param (e.g. batch_size) in the global slice plot
+    slice_params = list(params) if params else []
+    if group_param and group_param not in slice_params:
+        slice_params.insert(0, group_param)
+
+    if slice_params:
+        _save(plot_slice(study, params=slice_params), "slice.html")
+        _save(plot_parallel_coordinate(study, params=slice_params), "parallel_coordinate.html")
+
+    # Per-group slice plots (one per batch_size value)
+    if group_param and group_trials:
+        per_group_outdir = outdir / f"slice_by_{group_param}"
+        per_group_outdir.mkdir(parents=True, exist_ok=True)
+        for gv, trials_g in sorted(group_trials.items(), key=lambda x: x[0]):
+            if not trials_g:
+                continue
+            substudy = _make_substudy_from_trials(study, trials_g)
+            # params available in this sub-group
+            available = {k for t in trials_g for k in t.params.keys()}
+            sub_params = [p for p in (params or []) if p in available]
+            if not sub_params:
+                continue
+            fname = f"slice_{group_param}_{gv}.html"
+            try:
+                fig = plot_slice(substudy, params=sub_params)
+                fig.update_layout(
+                    title=f"Slice plot — {group_param}={gv} "
+                          f"({len(trials_g)} COMPLETE trials)"
+                )
+                fig.write_html(str(per_group_outdir / fname))
+                print(f"[plots] wrote slice_by_{group_param}/{fname}")
+            except Exception as e:
+                print(f"[plots] failed slice for {group_param}={gv}: {e}")
 
 
 def main() -> None:
@@ -345,7 +386,26 @@ def main() -> None:
     if args.make_plots:
         candidate_params = ["lr", "num_hidden", "weight_decay", "kl_warmup_epochs", "sensor_drop_p"]
         plot_params = [p for p in candidate_params if p in all_param_names]
-        _try_make_plots(study, outdir, params=plot_params)
+
+        # Build per-group trial lists for per-batch-size slice plots
+        group_trials_map: Optional[Dict[Any, List[optuna.trial.FrozenTrial]]] = None
+        if group_col in df.columns:
+            group_trials_map = {
+                gv: [
+                    t for t in study.trials
+                    if t.state.name == "COMPLETE"
+                    and t.params.get(args.group_param, None) == gv
+                ]
+                for gv in df[group_col].unique()
+            }
+
+        _try_make_plots(
+            study,
+            outdir,
+            params=plot_params,
+            group_param=args.group_param,
+            group_trials=group_trials_map,
+        )
 
 
 if __name__ == "__main__":

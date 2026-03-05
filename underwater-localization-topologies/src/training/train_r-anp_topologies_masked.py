@@ -269,7 +269,7 @@ def train_ranp_topology_masked(
     mask_in_val=False,
     kl_warmup_epochs=500,
     num_hidden=128,
-    lr=8e-4,
+    lr=9e-4,
     weight_decay=1e-4,
     trial=None,
     report_every=25,

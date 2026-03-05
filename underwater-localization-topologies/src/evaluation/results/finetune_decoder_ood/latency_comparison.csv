@@ -1,0 +1,7 @@
+model,method,label,theta_0.0_ms,theta_0.1_ms,theta_0.2_ms,theta_0.3_ms,mean_ms
+HV baseline,raw,Raw,4.420,4.304,4.381,4.468,4.393
+HV baseline,kalman_rts_var,RTS (R=σ²),3.834,3.975,3.872,3.894,3.894
+HV baseline,ar_kalman_rts_var,AR+RTS (R=σ²),39.335,37.566,38.891,38.383,38.544
+FT decoder,raw,Raw,4.326,4.968,4.856,4.352,4.626
+FT decoder,kalman_rts_var,RTS (R=σ²),3.772,4.391,4.219,3.968,4.088
+FT decoder,ar_kalman_rts_var,AR+RTS (R=σ²),38.118,41.642,40.186,38.681,39.656
