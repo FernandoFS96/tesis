@@ -8,7 +8,7 @@ python train_r-anp_topologies_masked.py \
   --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
   --batch-size 8 \
   --epochs 5000 \
-  --patience 400 \
+  --patience 300 \
   --ctx-sample-mode first \
   --num-sensors 10 \
   --num-time-points 201 \
@@ -21,7 +21,7 @@ python train_r-anp_topologies_masked.py \
   --rnn-layers 1 \
   --rnn-dropout 0.1 \
   --device cuda \
-  --topologies random,aligned,ellipsoidal
+  --topologies ellipsoidal,random,aligned
 '''
 
 import csv
