@@ -10,7 +10,7 @@ python train_anp_topologies_masked.py \
   --batch-size 8 \
   --epochs 3000 \
   --ctx-sample-mode first \
-  --patience 150 \
+  --patience 200 \
   --num-sensors 10 \
   --num-time-points 201 \
   --sensor-drop-mode bernoulli \
@@ -37,7 +37,7 @@ python train_anp_topologies_masked.py \
   --batch-size 16 \
   --epochs 3000 \
   --ctx-sample-mode first \
-  --patience 150 \
+  --patience 200 \
   --num-sensors 10 \
   --num-time-points 201 \
   --sensor-drop-mode bernoulli \
@@ -291,7 +291,7 @@ def train_anp_topology_masked(
     mask_in_val=False,
     kl_warmup_epochs=500,
     num_hidden=128,
-    lr=9e-4,
+    lr=7e-4,
     weight_decay=1e-4,
     trial=None,
     report_every=25,
