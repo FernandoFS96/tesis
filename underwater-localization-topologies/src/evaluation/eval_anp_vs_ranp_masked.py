@@ -6,11 +6,13 @@ low-variance / random-topology test set.
 
 Tests produced
 --------------
-1. MAE per theta group         - bar chart + CSV table
+1. MAE per theta group         - bar chart + CSV table  (ANP / RANP-LSTM / RANP-GRU)
 2. MAE vs context fraction     - line plot (context sweep from 5 % to 95 %)
 3. NLL vs context fraction     - line plot
-4. Predicted trajectories      - one figure per theta value, showing GT, ANP, RANP with ±1σ shading for all three output dimensions (x, y, z)
+4. Predicted trajectories      - one figure per theta value, showing GT, ANP, RANP-LSTM, RANP-GRU with ±1σ shading
 5. Summary statistics table    - printed and saved as a .txt
+
+RANP-GRU is optional: pass --ranp-gru-ckpt to include it; omit to skip.
 
 Usage
 -----
@@ -35,6 +37,7 @@ python eval_anp_vs_ranp_masked.py \
     --topology ellipsoidal \
     --anp-ckpt /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies_masked/lowvar/masked_dropbernoulli_p0.2_train_mean_first/topology_ellipsoidal/best_checkpoint.pth.tar \
     --ranp-ckpt /home/fernando/tesis/underwater-localization-topologies/src/training/results/RANP_topologies_masked/ranp_dropbernoulli_p0.2_train_mean_first_rnn-lstm_h128_l1/topology_ellipsoidal/best_checkpoint.pth.tar \
+    --ranp-gru-ckpt /home/fernando/tesis/underwater-localization-topologies/src/training/results/RANP_topologies_masked/ranp_dropbernoulli_p0.2_train_mean_first_rnn-gru_h128_l1/topology_ellipsoidal/best_checkpoint.pth.tar \
     --output-dir results/eval_anp_vs_ranp/lowvar_ellipsoidal \
     --ctx-fracs 0.05,0.10,0.20,0.30,0.50,0.70,0.90 \
     --fixed-ctx-frac 0.40 \
@@ -84,6 +87,12 @@ _DEFAULT_RANP_CKPT = str(
     _REPO_ROOT
     / "src/training/results/RANP_topologies_masked"
     / "ranp_dropbernoulli_p0.2_train_mean_first_rnn-lstm_h128_l1"
+    / "topology_random/best_checkpoint.pth.tar"
+)
+_DEFAULT_RANP_GRU_CKPT = str(
+    _REPO_ROOT
+    / "src/training/results/RANP_topologies_masked"
+    / "ranp_dropbernoulli_p0.2_train_mean_first_rnn-gru_h128_l1"
     / "topology_random/best_checkpoint.pth.tar"
 )
 _DEFAULT_OUTPUT_DIR = str(
@@ -182,20 +191,26 @@ def load_anp(ckpt_path: str, device: torch.device) -> torch.nn.Module:
     return model
 
 
-def load_ranp(ckpt_path: str, device: torch.device) -> torch.nn.Module:
-    """Load the recurrent ANP (src.models.r_anp.LatentModel)."""
+def load_ranp(
+    ckpt_path: str,
+    device: torch.device,
+    rnn_type: str = "lstm",
+    rnn_layers: int = 1,
+    rnn_dropout: float = 0.0,
+) -> torch.nn.Module:
+    """Load a recurrent ANP (src.models.r_anp.LatentModel) with the given RNN type."""
     model = ranp_module.LatentModel(
         num_hidden=NUM_HIDDEN,
         input_dim=INPUT_DIM,
         output_dim=OUTPUT_DIM,
-        rnn_type="lstm",
-        rnn_layers=1,
-        rnn_dropout=0.0,
+        rnn_type=rnn_type,
+        rnn_layers=rnn_layers,
+        rnn_dropout=rnn_dropout,
     ).to(device)
     ckpt = torch.load(ckpt_path, map_location=device)
     model.load_state_dict(ckpt["model"])
     model.eval()
-    print(f"[RANP] loaded from {ckpt_path}")
+    print(f"[RANP-{rnn_type.upper()}] loaded from {ckpt_path}")
     return model
 
 
@@ -262,18 +277,21 @@ def eval_mae_per_theta(
     ctx_frac: float,
     device: torch.device,
     batch_size: int = 8,
+    ranp_gru_model: torch.nn.Module = None,
 ) -> Dict[str, Dict[float, float]]:
-    """Compute non-context MAE for ANP and RANP for each theta group.
+    """Compute non-context MAE for ANP, RANP-LSTM (and optionally RANP-GRU) per theta group.
 
     Returns nested dict: results[model_name][theta] = mae_value
     """
     results = {"ANP": {}, "RANP": {}}
+    if ranp_gru_model is not None:
+        results["RANP-GRU"] = {}
 
     for theta, group in sorted(theta_groups.items()):
         ds     = NavigationTrajectoryDataset(group)
         loader = DataLoader(ds, batch_size=batch_size, shuffle=False)
 
-        anp_maes, ranp_maes = [], []
+        anp_maes, ranp_maes, gru_maes = [], [], []
         for x_raw, y_raw in loader:
             x_raw, y_raw = x_raw.to(device), y_raw.to(device)
             B, T, _ = x_raw.shape
@@ -293,13 +311,21 @@ def eval_mae_per_theta(
             pred_anp = mean_anp * y_std + y_mean
             anp_maes.append(F.l1_loss(pred_anp, y_raw[:, tar_idx, :], reduction="mean").item())
 
-            # RANP
+            # RANP-LSTM
             mean_ranp, _, _, _ = predict_ranp(ranp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
             pred_ranp = mean_ranp * y_std + y_mean
             ranp_maes.append(F.l1_loss(pred_ranp, y_raw[:, tar_idx, :], reduction="mean").item())
 
+            # RANP-GRU (optional)
+            if ranp_gru_model is not None:
+                mean_gru, _, _, _ = predict_ranp(ranp_gru_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
+                pred_gru = mean_gru * y_std + y_mean
+                gru_maes.append(F.l1_loss(pred_gru, y_raw[:, tar_idx, :], reduction="mean").item())
+
         results["ANP"][theta]  = float(np.mean(anp_maes))
         results["RANP"][theta] = float(np.mean(ranp_maes))
+        if ranp_gru_model is not None:
+            results["RANP-GRU"][theta] = float(np.mean(gru_maes))
 
     return results
 
@@ -319,6 +345,7 @@ def eval_vs_context_fraction(
     device: torch.device,
     batch_size: int = 8,
     holdout_frac: float = 0.20,
+    ranp_gru_model: torch.nn.Module = None,
 ) -> Dict[str, Dict[str, List[float]]]:
     """Sweep context fractions and record MAE + NLL for each model.
 
@@ -339,12 +366,14 @@ def eval_vs_context_fraction(
         "ANP":  {"mae": [], "nll": []},
         "RANP": {"mae": [], "nll": []},
     }
+    if ranp_gru_model is not None:
+        out["RANP-GRU"] = {"mae": [], "nll": []}
     ds     = NavigationTrajectoryDataset(test_data)
     loader = DataLoader(ds, batch_size=batch_size, shuffle=False)
 
     for frac in tqdm(ctx_fracs, desc="Context fraction sweep"):
-        anp_maes, ranp_maes = [], []
-        anp_nlls, ranp_nlls = [], []
+        anp_maes, ranp_maes, gru_maes = [], [], []
+        anp_nlls, ranp_nlls, gru_nlls = [], [], []
 
         for x_raw, y_raw in loader:
             x_raw, y_raw = x_raw.to(device), y_raw.to(device)
@@ -378,10 +407,20 @@ def eval_vs_context_fraction(
             ranp_maes.append(F.l1_loss(pred_r[:, holdout_idx, :], y_raw[:, holdout_idx, :], reduction="mean").item())
             ranp_nlls.append(nll_r.item())
 
+            # RANP-GRU (optional)
+            if ranp_gru_model is not None:
+                mean_g, _, _, nll_g = predict_ranp(ranp_gru_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
+                pred_g = mean_g * y_std + y_mean
+                gru_maes.append(F.l1_loss(pred_g[:, holdout_idx, :], y_raw[:, holdout_idx, :], reduction="mean").item())
+                gru_nlls.append(nll_g.item())
+
         out["ANP"]["mae"].append(float(np.mean(anp_maes)))
         out["ANP"]["nll"].append(float(np.mean(anp_nlls)))
         out["RANP"]["mae"].append(float(np.mean(ranp_maes)))
         out["RANP"]["nll"].append(float(np.mean(ranp_nlls)))
+        if ranp_gru_model is not None:
+            out["RANP-GRU"]["mae"].append(float(np.mean(gru_maes)))
+            out["RANP-GRU"]["nll"].append(float(np.mean(gru_nlls)))
 
     return out
 
@@ -402,6 +441,7 @@ def plot_trajectories_for_theta(
     num_traj_plots: int,
     device: torch.device,
     seed: int = 42,
+    ranp_gru_model: torch.nn.Module = None,
 ) -> None:
     """For each theta value, plot up to num_traj_plots trajectories.
 
@@ -415,7 +455,7 @@ def plot_trajectories_for_theta(
     # Only x and y; z is always 0 in this dataset.
     dim_indices = [0, 1]
     dim_labels  = ["x (m)", "y (m)"]
-    colors = {"ANP": "#1f77b4", "RANP": "#ff7f0e"}
+    colors = {"ANP": "#1f77b4", "RANP": "#ff7f0e", "RANP-GRU": "#2ca02c"}
 
     traj_dir = output_dir / "trajectories"
     traj_dir.mkdir(parents=True, exist_ok=True)
@@ -443,12 +483,17 @@ def plot_trajectories_for_theta(
 
             mean_a, var_a, _, _ = predict_anp(anp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
             mean_r, var_r, _, _ = predict_ranp(ranp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
+            if ranp_gru_model is not None:
+                mean_g, var_g, _, _ = predict_ranp(ranp_gru_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
 
             # denormalise
             pred_a  = (mean_a * y_std + y_mean).squeeze(0).cpu().numpy()   # (T,3)
             std_a   = (torch.sqrt(var_a) * y_std).squeeze(0).cpu().numpy()
             pred_r  = (mean_r * y_std + y_mean).squeeze(0).cpu().numpy()
             std_r   = (torch.sqrt(var_r) * y_std).squeeze(0).cpu().numpy()
+            if ranp_gru_model is not None:
+                pred_g = (mean_g * y_std + y_mean).squeeze(0).cpu().numpy()
+                std_g  = (torch.sqrt(var_g) * y_std).squeeze(0).cpu().numpy()
             gt      = y_raw_np                                               # (T,3)
             t_axis  = np.arange(T)
 
@@ -469,22 +514,33 @@ def plot_trajectories_for_theta(
                 # ANP
                 ax.plot(t_axis, pred_a[:, dim_idx], color=colors["ANP"], lw=1.3,
                         label="ANP" if row == 0 else "_")
-                ax.fill_between(
-                    t_axis,
-                    pred_a[:, dim_idx] - std_a[:, dim_idx],
-                    pred_a[:, dim_idx] + std_a[:, dim_idx],
-                    alpha=0.2, color=colors["ANP"],
-                )
+                #ax.fill_between(
+                #    t_axis,
+                #    pred_a[:, dim_idx] - std_a[:, dim_idx],
+                #    pred_a[:, dim_idx] + std_a[:, dim_idx],
+                #    alpha=0.2, color=colors["ANP"],
+                #)
 
-                # RANP
+                # RANP-LSTM
                 ax.plot(t_axis, pred_r[:, dim_idx], color=colors["RANP"], lw=1.3,
-                        label="RANP" if row == 0 else "_")
-                ax.fill_between(
-                    t_axis,
-                    pred_r[:, dim_idx] - std_r[:, dim_idx],
-                    pred_r[:, dim_idx] + std_r[:, dim_idx],
-                    alpha=0.2, color=colors["RANP"],
-                )
+                        label="RANP-LSTM" if row == 0 else "_")
+                #ax.fill_between(
+                #    t_axis,
+                #    pred_r[:, dim_idx] - std_r[:, dim_idx],
+                #    pred_r[:, dim_idx] + std_r[:, dim_idx],
+                #    alpha=0.2, color=colors["RANP"],
+                #)
+
+                # RANP-GRU (optional)
+                if ranp_gru_model is not None:
+                    ax.plot(t_axis, pred_g[:, dim_idx], color=colors["RANP-GRU"], lw=1.3,
+                            label="RANP-GRU" if row == 0 else "_")
+                    #ax.fill_between(
+                    #    t_axis,
+                    #    pred_g[:, dim_idx] - std_g[:, dim_idx],
+                    #    pred_g[:, dim_idx] + std_g[:, dim_idx],
+                    #    alpha=0.2, color=colors["RANP-GRU"],
+                    #)
 
                 ax.set_ylabel(dim_labels[row])
                 ax.grid(True, alpha=0.3)
@@ -516,10 +572,11 @@ def plot_2d_paths_per_theta(
     num_traj_plots: int,
     device: torch.device,
     seed: int = 42,
+    ranp_gru_model: torch.nn.Module = None,
 ) -> None:
     """XY-plane trajectory paths for both models vs ground truth."""
     rng = np.random.default_rng(seed)
-    colors = {"ANP": "#1f77b4", "RANP": "#ff7f0e"}
+    colors = {"ANP": "#1f77b4", "RANP": "#ff7f0e", "RANP-GRU": "#2ca02c"}
 
     path_dir = output_dir / "paths_xy"
     path_dir.mkdir(parents=True, exist_ok=True)
@@ -551,14 +608,20 @@ def plot_2d_paths_per_theta(
 
             mean_a, _, _, _ = predict_anp(anp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
             mean_r, _, _, _ = predict_ranp(ranp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
+            if ranp_gru_model is not None:
+                mean_g, _, _, _ = predict_ranp(ranp_gru_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
 
             pred_a = (mean_a * y_std + y_mean).squeeze(0).cpu().numpy()
             pred_r = (mean_r * y_std + y_mean).squeeze(0).cpu().numpy()
+            if ranp_gru_model is not None:
+                pred_g = (mean_g * y_std + y_mean).squeeze(0).cpu().numpy()
             gt     = y_raw_np
 
             ax.plot(gt[:, 0], gt[:, 1], "k-", lw=1.5, label="GT")
             ax.plot(pred_a[:, 0], pred_a[:, 1], color=colors["ANP"], lw=1.3, linestyle="--", label="ANP")
-            ax.plot(pred_r[:, 0], pred_r[:, 1], color=colors["RANP"], lw=1.3, linestyle="--", label="RANP")
+            ax.plot(pred_r[:, 0], pred_r[:, 1], color=colors["RANP"], lw=1.3, linestyle="--", label="RANP-LSTM")
+            if ranp_gru_model is not None:
+                ax.plot(pred_g[:, 0], pred_g[:, 1], color=colors["RANP-GRU"], lw=1.3, linestyle=":", label="RANP-GRU")
             # mark context
             ax.scatter(gt[:n_ctx, 0], gt[:n_ctx, 1], c="red", s=10, zorder=5, label="Context pts")
 
@@ -588,14 +651,18 @@ def plot_mae_per_theta(
 ) -> None:
     thetas = sorted(results["ANP"].keys())
     x      = np.arange(len(thetas))
-    width  = 0.35
 
-    anp_vals  = [results["ANP"][t]  for t in thetas]
-    ranp_vals = [results["RANP"][t] for t in thetas]
+    model_names  = list(results.keys())
+    model_colors = {"ANP": "#1f77b4", "RANP": "#ff7f0e", "RANP-GRU": "#2ca02c"}
+    n_models = len(model_names)
+    width    = 0.8 / n_models
+    offsets  = np.linspace(-(n_models - 1) / 2 * width, (n_models - 1) / 2 * width, n_models)
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.bar(x - width/2, anp_vals,  width, label="ANP",  color="#1f77b4", alpha=0.85)
-    ax.bar(x + width/2, ranp_vals, width, label="RANP", color="#ff7f0e", alpha=0.85)
+    for name, offset in zip(model_names, offsets):
+        vals = [results[name][t] for t in thetas]
+        ax.bar(x + offset, vals, width, label=name,
+               color=model_colors.get(name, "grey"), alpha=0.85)
 
     ax.set_xlabel("θ (sensor orientation)")
     ax.set_ylabel("MAE (m)")
@@ -616,6 +683,11 @@ def plot_mae_vs_context(
     output_dir: Path,
     holdout_frac: float = 0.20,
 ) -> None:
+    model_styles = {
+        "ANP":      ("o-", "#1f77b4"),
+        "RANP":     ("s-", "#ff7f0e"),
+        "RANP-GRU": ("^-", "#2ca02c"),
+    }
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
     for ax, metric, ylabel in zip(
@@ -623,18 +695,19 @@ def plot_mae_vs_context(
         ["mae", "nll"],
         ["MAE (m)", "NLL (nats)"],
     ):
-        ax.plot([f * 100 for f in ctx_fracs], sweep["ANP"][metric],
-                "o-", color="#1f77b4", label="ANP",  lw=2)
-        ax.plot([f * 100 for f in ctx_fracs], sweep["RANP"][metric],
-                "s-", color="#ff7f0e", label="RANP", lw=2)
+        for name, data in sweep.items():
+            marker, color = model_styles.get(name, ("x-", "grey"))
+            ax.plot([f * 100 for f in ctx_fracs], data[metric],
+                    marker, color=color, label=name, lw=2)
         ax.set_xlabel("Context fraction (%)")
         ax.set_ylabel(ylabel)
         ax.legend()
         ax.grid(True, alpha=0.3)
         ax.set_title(f"{ylabel} vs context fraction")
 
+    model_names_str = " vs ".join(sweep.keys())
     plt.suptitle(
-        f"ANP vs RANP — performance across context sizes\n"
+        f"{model_names_str} — performance across context sizes\n"
         f"(MAE evaluated on fixed last {holdout_frac*100:.0f}% of trajectory)",
         fontsize=11,
     )
@@ -655,44 +728,60 @@ def save_summary(
     fixed_ctx_frac: float,
     output_dir: Path,
 ) -> None:
+    model_names = list(mae_per_theta.keys())   # e.g. ["ANP", "RANP"] or [..., "RANP-GRU"]
+    col_w = 12
+
+    header_cols  = "  ".join(f"{n:>{col_w}}" for n in model_names)
+    delta_header = "  ".join(
+        f"{'Δ('+n+'-ANP)':>{col_w}}" for n in model_names if n != "ANP"
+    )
+
     lines = [
-        "=" * 62,
-        "  ANP vs RANP — Evaluation Summary",
-        f"  Topology: random | Data: low variance",
+        "=" * 70,
+        "  Models: " + " / ".join(model_names) + " — Evaluation Summary",
         f"  Fixed context fraction: {fixed_ctx_frac*100:.0f}%",
-        "=" * 62,
+        "=" * 70,
         "",
         "MAE per θ group (non-context points)",
-        "-" * 44,
-        f"{'θ':>6}  {'ANP (m)':>10}  {'RANP (m)':>10}  {'Δ (RANP-ANP)':>14}",
+        "-" * 60,
+        f"{'θ':>6}  {header_cols}  {delta_header}",
     ]
 
     for theta in sorted(mae_per_theta["ANP"]):
-        a = mae_per_theta["ANP"][theta]
-        r = mae_per_theta["RANP"][theta]
-        lines.append(f"{theta:>6.1f}  {a:>10.4f}  {r:>10.4f}  {r-a:>+14.4f}")
+        vals      = [mae_per_theta[n][theta] for n in model_names]
+        val_str   = "  ".join(f"{v:>{col_w}.4f}" for v in vals)
+        delta_str = "  ".join(
+            f"{mae_per_theta[n][theta] - mae_per_theta['ANP'][theta]:>+{col_w}.4f}"
+            for n in model_names if n != "ANP"
+        )
+        lines.append(f"{theta:>6.1f}  {val_str}  {delta_str}")
 
-    avg_anp  = float(np.mean(list(mae_per_theta["ANP"].values())))
-    avg_ranp = float(np.mean(list(mae_per_theta["RANP"].values())))
+    avgs          = {n: float(np.mean(list(mae_per_theta[n].values()))) for n in model_names}
+    avg_val_str   = "  ".join(f"{avgs[n]:>{col_w}.4f}" for n in model_names)
+    avg_delta_str = "  ".join(
+        f"{avgs[n] - avgs['ANP']:>+{col_w}.4f}" for n in model_names if n != "ANP"
+    )
     lines += [
-        "-" * 44,
-        f"{'avg':>6}  {avg_anp:>10.4f}  {avg_ranp:>10.4f}  {avg_ranp-avg_anp:>+14.4f}",
+        "-" * 60,
+        f"{'avg':>6}  {avg_val_str}  {avg_delta_str}",
         "",
         "MAE vs context fraction",
-        "-" * 44,
-        f"{'ctx%':>6}  {'ANP MAE':>10}  {'RANP MAE':>10}",
+        "-" * 60,
+        f"{'ctx%':>6}  " + "  ".join(f"{n+' MAE':>{col_w}}" for n in model_names),
     ]
-    for frac, a_mae, r_mae in zip(ctx_fracs, sweep["ANP"]["mae"], sweep["RANP"]["mae"]):
-        lines.append(f"{frac*100:>5.0f}%  {a_mae:>10.4f}  {r_mae:>10.4f}")
+    for i, frac in enumerate(ctx_fracs):
+        row = "  ".join(f"{sweep[n]['mae'][i]:>{col_w}.4f}" for n in model_names)
+        lines.append(f"{frac*100:>5.0f}%  {row}")
 
     lines += [
         "",
         "NLL vs context fraction",
-        "-" * 44,
-        f"{'ctx%':>6}  {'ANP NLL':>10}  {'RANP NLL':>10}",
+        "-" * 60,
+        f"{'ctx%':>6}  " + "  ".join(f"{n+' NLL':>{col_w}}" for n in model_names),
     ]
-    for frac, a_nll, r_nll in zip(ctx_fracs, sweep["ANP"]["nll"], sweep["RANP"]["nll"]):
-        lines.append(f"{frac*100:>5.0f}%  {a_nll:>10.4f}  {r_nll:>10.4f}")
+    for i, frac in enumerate(ctx_fracs):
+        row = "  ".join(f"{sweep[n]['nll'][i]:>{col_w}.4f}" for n in model_names)
+        lines.append(f"{frac*100:>5.0f}%  {row}")
 
     summary_str = "\n".join(lines)
     print("\n" + summary_str)
@@ -702,23 +791,22 @@ def save_summary(
 
     # CSV for easy import
     import csv
+    non_anp = [n for n in model_names if n != "ANP"]
     with open(output_dir / "mae_per_theta.csv", "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["theta", "ANP_mae", "RANP_mae", "delta"])
+        w.writerow(["theta"] + model_names + ["Δ(" + n + "-ANP)" for n in non_anp])
         for theta in sorted(mae_per_theta["ANP"]):
-            a = mae_per_theta["ANP"][theta]
-            r = mae_per_theta["RANP"][theta]
-            w.writerow([theta, a, r, r - a])
+            vals   = [mae_per_theta[n][theta] for n in model_names]
+            deltas = [mae_per_theta[n][theta] - mae_per_theta["ANP"][theta] for n in non_anp]
+            w.writerow([theta] + vals + deltas)
 
     with open(output_dir / "sweep_vs_context.csv", "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["ctx_frac", "ANP_mae", "RANP_mae", "ANP_nll", "RANP_nll"])
-        for frac, am, rm, an, rn in zip(
-            ctx_fracs,
-            sweep["ANP"]["mae"], sweep["RANP"]["mae"],
-            sweep["ANP"]["nll"], sweep["RANP"]["nll"],
-        ):
-            w.writerow([frac, am, rm, an, rn])
+        w.writerow(["ctx_frac"] + [n + "_mae" for n in model_names] + [n + "_nll" for n in model_names])
+        for i, frac in enumerate(ctx_fracs):
+            maes = [sweep[n]["mae"][i] for n in model_names]
+            nlls = [sweep[n]["nll"][i] for n in model_names]
+            w.writerow([frac] + maes + nlls)
 
     print(f"  Summary written to {output_dir}")
 
@@ -733,6 +821,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--topology",       default="random")
     p.add_argument("--anp-ckpt",       default=_DEFAULT_ANP_CKPT)
     p.add_argument("--ranp-ckpt",      default=_DEFAULT_RANP_CKPT)
+    p.add_argument("--ranp-gru-ckpt",  default=None,
+                   help="Checkpoint for RANP-GRU variant. Omit to skip GRU evaluation.")
     p.add_argument("--output-dir",     default=_DEFAULT_OUTPUT_DIR)
     p.add_argument("--ctx-fracs",      default="0.05,0.10,0.20,0.30,0.50,0.70,0.90", help="Comma-separated list of context fractions for the sweep")
     p.add_argument("--fixed-ctx-frac", type=float, default=0.30, help="Context fraction used for per-theta MAE and trajectory plots")
@@ -766,8 +856,15 @@ def main() -> None:
 
     # ── Load models ──────────────────────────────────────────────────────────
     print("\n[2/6] Loading models …")
-    anp_model  = load_anp(args.anp_ckpt,   device)
-    ranp_model = load_ranp(args.ranp_ckpt, device)
+    anp_model  = load_anp(args.anp_ckpt,  device)
+    ranp_model = load_ranp(args.ranp_ckpt, device, rnn_type="lstm")
+
+    ranp_gru_model = None
+    if args.ranp_gru_ckpt is not None:
+        if os.path.exists(args.ranp_gru_ckpt):
+            ranp_gru_model = load_ranp(args.ranp_gru_ckpt, device, rnn_type="gru")
+        else:
+            print(f"  [WARNING] RANP-GRU checkpoint not found, skipping: {args.ranp_gru_ckpt}")
 
     # ── Test 1: MAE per theta group ──────────────────────────────────────────
     print(f"\n[3/6] MAE per θ group  (ctx = {args.fixed_ctx_frac*100:.0f}%) …")
@@ -777,6 +874,7 @@ def main() -> None:
         ctx_frac=args.fixed_ctx_frac,
         device=device,
         batch_size=args.batch_size,
+        ranp_gru_model=ranp_gru_model,
     )
     plot_mae_per_theta(mae_per_theta, output_dir, args.fixed_ctx_frac)
 
@@ -790,6 +888,7 @@ def main() -> None:
         device=device,
         batch_size=args.batch_size,
         holdout_frac=HOLDOUT_FRAC,
+        ranp_gru_model=ranp_gru_model,
     )
     plot_mae_vs_context(sweep, ctx_fracs, output_dir, holdout_frac=HOLDOUT_FRAC)
 
@@ -803,6 +902,7 @@ def main() -> None:
         num_traj_plots=args.num_traj_plots,
         device=device,
         seed=args.seed,
+        ranp_gru_model=ranp_gru_model,
     )
 
     # ── Test 4: XY path plots ────────────────────────────────────────────────
@@ -814,6 +914,7 @@ def main() -> None:
         num_traj_plots=args.num_traj_plots,
         device=device,
         seed=args.seed,
+        ranp_gru_model=ranp_gru_model,
     )
 
     # ── Summary ──────────────────────────────────────────────────────────────
