@@ -85,16 +85,28 @@ from src.utils.nav_dataset import NavigationTrajectoryDataset
 # ---------------------------------------------------------------------------
 EVAL_SEED = 18
 
-EVAL_METHODS = [
+# Methods evaluated by default (all online / causal)
+ONLINE_METHODS: List[str] = [
     "raw",
+    "alpha_beta",
+    "kalman_cv_var",
+    "ar_raw",
+    "ar_kalman_cv_var",
+]
+# Offline RTS smoothers — only included when --include-rts is set
+RTS_METHODS: List[str] = [
     "kalman_rts_var",
     "ar_kalman_rts_var",
 ]
 
-METHOD_LABELS = {
+METHOD_LABELS: Dict[str, str] = {
     "raw":               "Raw",
-    "kalman_rts_var":    "RTS (R=σ²)",
-    "ar_kalman_rts_var": "AR+RTS (R=σ²)",
+    "alpha_beta":        "Alpha-Beta",
+    "kalman_cv_var":     "Kal CV (R=σ²)",
+    "ar_raw":            "AR raw",
+    "ar_kalman_cv_var":  "AR+Kal CV (R=σ²)",
+    "kalman_rts_var":    "RTS (R=σ²)  [offline]",
+    "ar_kalman_rts_var": "AR+RTS (R=σ²)  [offline]",
 }
 
 # ---------------------------------------------------------------------------
@@ -513,15 +525,19 @@ def save_efficiency_csv(
 ) -> None:
     path = output_dir / "efficiency_sweep.csv"
     methods = list(next(iter(sweep_results.values())).keys())
+    best_ar = next(
+        (m for m in ["ar_kalman_rts_var", "ar_kalman_cv_var", "ar_raw"] if m in methods),
+        None,
+    )
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["n_finetune", "n_label"] + methods +
-                   ["pct_gap_closed_ar_rts"])
+        col_name = f"pct_gap_closed_{best_ar}" if best_ar else "pct_gap_closed"
+        w.writerow(["n_finetune", "n_label"] + methods + [col_name])
         gap = hv_raw_mae - oracle_mae
         for n in sorted(sweep_results.keys()):
-            label = "all" if n == 0 else str(n)
-            row   = sweep_results[n]
-            ar_mae = row.get("ar_kalman_rts_var", float("nan"))
+            label  = "all" if n == 0 else str(n)
+            row    = sweep_results[n]
+            ar_mae = row.get(best_ar, float("nan")) if best_ar else float("nan")
             pct    = 100.0 * (hv_raw_mae - ar_mae) / max(gap, 1e-6)
             w.writerow(
                 [n, label] +
@@ -537,35 +553,34 @@ def plot_efficiency_curve(
     hv_raw_mae:     float,
     output_dir:     Path,
 ) -> None:
-    """
-    X-axis : number of fine-tuning trajectories (log scale)
-    Y-axis : mean MAE (m) across all θ groups
-    Lines  : FT raw / FT+RTS(R=σ²) / FT+AR+RTS(R=σ²)
-    Bands  : oracle ceiling and OoD baseline as horizontal references
-    Right Y: % of gap closed
-    """
-    # Sort so that n=0 ("all") always appears last on the x-axis
+    """Data-efficiency curve — uses best available filter / AR methods."""
     ns_sorted = sorted((n for n in sweep_results if n != 0)) + \
                 ([0] if 0 in sweep_results else [])
-    # x positions: replace n=0 with actual dataset size for plotting
     x_labels  = ["all" if n == 0 else str(n) for n in ns_sorted]
-    x_pos     = np.arange(len(ns_sorted))   # evenly spaced for log-like feel
+    x_pos     = np.arange(len(ns_sorted))
+
+    all_methods = list(next(iter(sweep_results.values())).keys())
+    flt_m = next((m for m in ["kalman_rts_var", "kalman_cv_var"] if m in all_methods), None)
+    ar_m  = next(
+        (m for m in ["ar_kalman_rts_var", "ar_kalman_cv_var", "ar_raw"] if m in all_methods),
+        None,
+    )
 
     def get_vals(method):
-        return np.array([
-            sweep_results[n].get(method, float("nan")) for n in ns_sorted
-        ])
+        return np.array([sweep_results[n].get(method, float("nan")) for n in ns_sorted])
 
-    raw_v   = get_vals("raw")
-    rts_v   = get_vals("kalman_rts_var")
-    ar_v    = get_vals("ar_kalman_rts_var")
-    gap     = hv_raw_mae - oracle_mae
+    raw_v = get_vals("raw")
+    flt_v = get_vals(flt_m) if flt_m else np.full(len(ns_sorted), float("nan"))
+    ar_v  = get_vals(ar_m)  if ar_m  else np.full(len(ns_sorted), float("nan"))
+    gap   = hv_raw_mae - oracle_mae
+
+    flt_label = METHOD_LABELS.get(flt_m, flt_m) if flt_m else "—"
+    ar_label  = METHOD_LABELS.get(ar_m,  ar_m)  if ar_m  else "—"
 
     fig, ax1 = plt.subplots(figsize=(9, 5))
     ax2 = ax1.twinx()
 
-    # Reference lines
-    ax1.axhline(oracle_mae,  color="#2c3e50", ls="-",  lw=1.5, alpha=0.7,
+    ax1.axhline(oracle_mae, color="#2c3e50", ls="-",  lw=1.5, alpha=0.7,
                 label=f"Oracle ceiling ({oracle_mae:.2f} m)")
     ax1.axhline(hv_raw_mae, color="#e74c3c", ls="--", lw=1.5, alpha=0.7,
                 label=f"HV raw baseline ({hv_raw_mae:.2f} m)")
@@ -573,50 +588,47 @@ def plot_efficiency_curve(
         [-0.5, len(ns_sorted) - 0.5], oracle_mae, hv_raw_mae,
         alpha=0.04, color="#e74c3c"
     )
-
-    # Fine-tuning series
     ax1.plot(x_pos, raw_v, color="#27ae60", ls="-",  marker="o", lw=2,
-             markersize=7, label="FT - Raw")
-    ax1.plot(x_pos, rts_v, color="#1abc9c", ls="-.", marker="^", lw=2,
-             markersize=7, label="FT - RTS(R=σ²)")
-    ax1.plot(x_pos, ar_v,  color="#6c3483", ls=":",  marker="D", lw=2,
-             markersize=7, label="FT - AR+RTS(R=σ²)")
+             markersize=7, label="FT decoder - Raw")
+    if flt_m:
+        ax1.plot(x_pos, flt_v, color="#1abc9c", ls="-.", marker="^", lw=2,
+                 markersize=7, label=f"FT decoder - {flt_label}")
+    if ar_m:
+        ax1.plot(x_pos, ar_v,  color="#6c3483", ls=":",  marker="D", lw=2,
+                 markersize=7, label=f"FT decoder - {ar_label}")
 
-    # % gap closed on right axis (based on AR+RTS series)
     pct_closed = 100.0 * (hv_raw_mae - ar_v) / max(gap, 1e-6)
     ax2.plot(x_pos, pct_closed, color="#6c3483", ls=":", marker="D",
-             lw=2, markersize=7, alpha=0.0)   # invisible — only for axis scaling
-    ax2.set_ylabel("% gap closed  [FT+AR+RTS(R=σ²)]\n(relative to oracle↔HV baseline gap)",
+             lw=2, markersize=7, alpha=0.0)
+    ax2.set_ylabel(f"% gap closed  [FT+{ar_label}]\n(relative to oracle↔HV gap)",
                    fontsize=9, color="#6c3483")
     ax2.tick_params(axis="y", labelcolor="#6c3483")
+    y0, y1 = ax1.get_ylim()
     ax2.set_ylim(
-        100.0 * (hv_raw_mae - ax1.get_ylim()[1]) / max(gap, 1e-6),
-        100.0 * (hv_raw_mae - ax1.get_ylim()[0]) / max(gap, 1e-6),
+        100.0 * (hv_raw_mae - y1) / max(gap, 1e-6),
+        100.0 * (hv_raw_mae - y0) / max(gap, 1e-6),
     )
-
-    # Annotate each AR+RTS point
-    for i, (n, pct) in enumerate(zip(ns_sorted, pct_closed)):
-        label = "all" if n == 0 else str(n)
-        ax1.annotate(
-            f"{pct:.0f}%",
-            xy=(x_pos[i], ar_v[i]),
-            xytext=(0, 10), textcoords="offset points",
-            ha="center", fontsize=8, color="#6c3483", fontweight="bold",
-        )
+    if ar_m:
+        for i, pct in enumerate(pct_closed):
+            ax1.annotate(
+                f"{pct:.0f}%",
+                xy=(x_pos[i], ar_v[i]),
+                xytext=(0, 10), textcoords="offset points",
+                ha="center", fontsize=8, color="#6c3483", fontweight="bold",
+            )
 
     ax1.set_xticks(x_pos)
     ax1.set_xticklabels(x_labels, fontsize=9)
     ax1.set_xlabel("Number of fine-tuning trajectories", fontsize=11)
     ax1.set_ylabel("MAE (m)", fontsize=11)
     ax1.set_title(
-        "Data-efficiency curve — Decoder fine-tuning on lowvar data\n"
-        "(% = gap closed by FT+AR+RTS(R=σ²) vs oracle)",
+        f"Data-efficiency curve — Decoder fine-tuning on lowvar data\n"
+        f"(% = gap closed by FT+{ar_label} vs oracle)",
         fontsize=10,
     )
     ax1.legend(fontsize=8, loc="upper right")
     ax1.grid(alpha=0.35)
     ax1.set_xlim(-0.5, len(ns_sorted) - 0.5)
-
     plt.tight_layout()
     path = output_dir / "efficiency_curve.png"
     plt.savefig(path, dpi=160)
@@ -682,10 +694,34 @@ def _build_R(var_xy: np.ndarray, eps: float = 0.01) -> np.ndarray:
 
 
 def rts_var(z_xy: np.ndarray, var_xy: np.ndarray, dt: float, sigma_a: float) -> np.ndarray:
+    """RTS smoother — OFFLINE (requires full backward pass over the trajectory)."""
     R = _build_R(var_xy)
     xf, Pf, xp_a, Pp_a = _kalman_cv(z_xy, R, dt, sigma_a)
     xs, _ = _rts(xf, Pf, xp_a, Pp_a, dt, sigma_a)
     return xs[:, :2].astype(np.float32)
+
+
+def _ab_filter(z_xy: np.ndarray, dt: float, alpha: float = 0.85, beta: float = 0.005) -> np.ndarray:
+    """Alpha-beta (g-h) 2D filter — online / causal."""
+    T = z_xy.shape[0]
+    out = np.zeros((T, 2), dtype=np.float32)
+    x, y = float(z_xy[0, 0]), float(z_xy[0, 1])
+    vx = vy = 0.0
+    out[0] = [x, y]
+    for k in range(1, T):
+        xp = x + vx * dt;  yp = y + vy * dt
+        rx = z_xy[k, 0] - xp;  ry = z_xy[k, 1] - yp
+        x  = xp + alpha * rx;  y  = yp + alpha * ry
+        vx += (beta / dt) * rx; vy += (beta / dt) * ry
+        out[k] = [x, y]
+    return out
+
+
+def kalman_cv_fwd(z_xy: np.ndarray, var_xy: np.ndarray, dt: float, sigma_a: float) -> np.ndarray:
+    """Kalman constant-velocity FORWARD FILTER only — online / causal (no RTS backward pass)."""
+    R = _build_R(var_xy)
+    xf, _, _, _ = _kalman_cv(z_xy, R, dt, sigma_a)
+    return xf[:, :2].astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -748,28 +784,30 @@ def _ar_rollout(
 
 @torch.no_grad()
 def eval_model_on_groups(
-    model:       LatentModel,
-    lv_groups:   Dict[float, List],
-    y_mean:      torch.Tensor,
-    y_std:       torch.Tensor,
-    ctx_pct:     int,
-    device:      torch.device,
-    dt:          float,
-    sigma_a:     float,
-    ar_block_k:  int,
+    model:         LatentModel,
+    lv_groups:     Dict[float, List],
+    y_mean:        torch.Tensor,
+    y_std:         torch.Tensor,
+    ctx_pct:       int,
+    device:        torch.device,
+    dt:            float,
+    sigma_a:       float,
+    alpha_ab:      float,
+    beta_ab:       float,
+    ar_block_k:    int,
     ar_var_thresh: float,
-    methods:     List[str],
+    methods:       List[str],
 ) -> Tuple[Dict[float, Dict[str, float]], Dict[float, Dict[str, float]]]:
     """
     Returns:
       mae_results     : {theta: {method: mean_mae_m}}
       latency_results : {theta: {method: mean_seconds_per_trajectory}}
 
-    Latency semantics (same as eval_ood_postprocess):
-      raw            — forward pass only (cuda-synced)
-      kalman_rts_var — filter overhead only (no forward pass time)
-      ar_kalman_rts_var — total AR rollout + filter overhead
+    Latency semantics:
+      raw, ar_raw, ar_kalman_cv_var, ar_kalman_rts_var — total latency
+      alpha_beta, kalman_cv_var, kalman_rts_var        — filter overhead only
     """
+    _AR_METHODS = frozenset({"ar_raw", "ar_kalman_cv_var", "ar_kalman_rts_var"})
     results:   Dict[float, Dict[str, float]] = {}
     latencies: Dict[float, Dict[str, float]] = {}
     model.eval()
@@ -789,14 +827,14 @@ def eval_model_on_groups(
             y = torch.tensor(y_np, dtype=torch.float32, device=device).unsqueeze(0)
             x = _augment_x_allsensors(x, model)
 
-            ctx    = first_ctx_idx(T, ctx_pct, device)
-            nc     = np.ones(T, bool)
+            ctx = first_ctx_idx(T, ctx_pct, device)
+            nc  = np.ones(T, bool)
             nc[ctx.cpu().numpy()] = False
 
             y_norm = norm_y(y, y_mean, y_std)
             cx, cy = x[:, ctx, :], y_norm[:, ctx, :]
 
-            # --- timed raw forward pass ---
+            # ── timed raw forward pass (always executed) ──────────────────────
             _sync()
             t0 = time.perf_counter()
             mean_n, var_n, *_ = model(cx, cy, x)
@@ -809,18 +847,37 @@ def eval_model_on_groups(
 
             def mae(p): return float(np.mean(np.abs(p[nc] - y_gt[nc])))
 
+            # ── raw ────────────────────────────────────────────────────────
             if "raw" in methods:
                 mae_lists["raw"].append(mae(p_phys))
                 lat_lists["raw"].append(t_raw)
 
+            # ── alpha-beta filter (online) ──────────────────────────────
+            if "alpha_beta" in methods:
+                t0 = time.perf_counter()
+                xy_ab = _ab_filter(p_phys[:, :2], dt, alpha_ab, beta_ab)
+                lat_lists["alpha_beta"].append(time.perf_counter() - t0)
+                p_ab = p_phys.copy(); p_ab[:, :2] = xy_ab
+                mae_lists["alpha_beta"].append(mae(p_ab))
+
+            # ── Kalman forward filter (online) ───────────────────────────
+            if "kalman_cv_var" in methods:
+                t0 = time.perf_counter()
+                xy_kcv = kalman_cv_fwd(p_phys[:, :2], v_phys[:, :2], dt, sigma_a)
+                lat_lists["kalman_cv_var"].append(time.perf_counter() - t0)
+                p_kcv = p_phys.copy(); p_kcv[:, :2] = xy_kcv
+                mae_lists["kalman_cv_var"].append(mae(p_kcv))
+
+            # ── RTS smoother (offline) ───────────────────────────────────
             if "kalman_rts_var" in methods:
                 t0 = time.perf_counter()
                 xy_rts = rts_var(p_phys[:, :2], v_phys[:, :2], dt, sigma_a)
-                lat_lists["kalman_rts_var"].append(time.perf_counter() - t0)  # filter overhead only
-                p_rts  = p_phys.copy(); p_rts[:, :2] = xy_rts
+                lat_lists["kalman_rts_var"].append(time.perf_counter() - t0)
+                p_rts = p_phys.copy(); p_rts[:, :2] = xy_rts
                 mae_lists["kalman_rts_var"].append(mae(p_rts))
 
-            if "ar_kalman_rts_var" in methods:
+            # ── AR-based methods (rollout shared across all ar_* methods) ───
+            if any(m in methods for m in _AR_METHODS):
                 _sync()
                 t0 = time.perf_counter()
                 ar_phys, ar_var = _ar_rollout(
@@ -831,11 +888,24 @@ def eval_model_on_groups(
                 t_ar = time.perf_counter() - t0
                 p_ar = ar_phys.squeeze(0).cpu().numpy()
                 v_ar = ar_var.squeeze(0).cpu().numpy()
-                t0   = time.perf_counter()
-                xy_ar_rts = rts_var(p_ar[:, :2], v_ar[:, :2], dt, sigma_a)
-                lat_lists["ar_kalman_rts_var"].append(t_ar + (time.perf_counter() - t0))
-                p_ar_rts  = p_ar.copy(); p_ar_rts[:, :2] = xy_ar_rts
-                mae_lists["ar_kalman_rts_var"].append(mae(p_ar_rts))
+
+                if "ar_raw" in methods:
+                    mae_lists["ar_raw"].append(mae(p_ar))
+                    lat_lists["ar_raw"].append(t_ar)
+
+                if "ar_kalman_cv_var" in methods:
+                    t0 = time.perf_counter()
+                    xy_ar_kcv = kalman_cv_fwd(p_ar[:, :2], v_ar[:, :2], dt, sigma_a)
+                    lat_lists["ar_kalman_cv_var"].append(t_ar + (time.perf_counter() - t0))
+                    p_ar_kcv = p_ar.copy(); p_ar_kcv[:, :2] = xy_ar_kcv
+                    mae_lists["ar_kalman_cv_var"].append(mae(p_ar_kcv))
+
+                if "ar_kalman_rts_var" in methods:
+                    t0 = time.perf_counter()
+                    xy_ar_rts = rts_var(p_ar[:, :2], v_ar[:, :2], dt, sigma_a)
+                    lat_lists["ar_kalman_rts_var"].append(t_ar + (time.perf_counter() - t0))
+                    p_ar_rts = p_ar.copy(); p_ar_rts[:, :2] = xy_ar_rts
+                    mae_lists["ar_kalman_rts_var"].append(mae(p_ar_rts))
 
         results[theta]   = {m: float(np.mean(v)) for m, v in mae_lists.items() if v}
         latencies[theta] = {m: float(np.mean(v)) for m, v in lat_lists.items()  if v}
@@ -857,8 +927,9 @@ def _latency_mean_ms(
 
 
 def save_latency_csv(
-    latency_by_model: Dict[str, Dict[float, Dict[str, float]]],  # model → theta → method → s
-    output_dir: Path,
+    latency_by_model: Dict[str, Dict[float, Dict[str, float]]],
+    eval_methods:     List[str],
+    output_dir:       Path,
 ) -> None:
     """
     Saves latency_comparison.csv with columns:
@@ -871,14 +942,14 @@ def save_latency_csv(
         w.writerow(["model", "method", "label"] +
                    [f"theta_{t:.1f}_ms" for t in thetas] + ["mean_ms"])
         for model_label, theta_dict in latency_by_model.items():
-            for method in EVAL_METHODS:
+            for method in eval_methods:
                 vals_ms = [
                     theta_dict.get(t, {}).get(method, float("nan")) * 1e3
                     for t in thetas
                 ]
                 mean_ms = float(np.nanmean(vals_ms))
                 w.writerow(
-                    [model_label, method, METHOD_LABELS[method]] +
+                    [model_label, method, METHOD_LABELS.get(method, method)] +
                     [f"{v:.3f}" for v in vals_ms] +
                     [f"{mean_ms:.3f}"]
                 )
@@ -886,52 +957,49 @@ def save_latency_csv(
 
 
 def plot_latency_comparison(
-    latency_by_model: Dict[str, Dict[float, Dict[str, float]]],  # model → theta → method → s
-    output_dir: Path,
+    latency_by_model: Dict[str, Dict[float, Dict[str, float]]],
+    eval_methods:     List[str],
+    output_dir:       Path,
 ) -> None:
     """
     Two-panel figure:
       Left  - absolute mean latency per method per model (grouped bars, ms)
       Right - overhead vs raw forward pass (ms)
-    This makes it easy to confirm that fine-tuning does NOT add inference cost.
     """
     model_labels = list(latency_by_model.keys())
     n_models     = len(model_labels)
-    model_colors = ["#3498db", "#e74c3c", "#27ae60", "#9b59b6"]  # up to 4 models
+    model_colors = ["#3498db", "#e74c3c", "#27ae60", "#9b59b6"]
 
-    # Compute mean_ms per (model, method)
-    data: Dict[str, Dict[str, float]] = {}   # model → method → mean_ms
+    data: Dict[str, Dict[str, float]] = {}
     for ml, theta_dict in latency_by_model.items():
         data[ml] = {}
-        for method in EVAL_METHODS:
+        for method in eval_methods:
             vals = [theta_dict[t].get(method, float("nan")) * 1e3
                     for t in theta_dict]
             data[ml][method] = float(np.nanmean(vals))
 
-    x      = np.arange(len(EVAL_METHODS))
+    x      = np.arange(len(eval_methods))
     width  = 0.8 / n_models
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
 
     for i, (ml, color) in enumerate(zip(model_labels, model_colors)):
         offsets = (i - (n_models - 1) / 2) * width
-        abs_ms  = [data[ml].get(m, float("nan")) for m in EVAL_METHODS]
+        abs_ms  = [data[ml].get(m, float("nan")) for m in eval_methods]
         ax1.bar(x + offsets, abs_ms, width=width * 0.9,
                 color=color, alpha=0.8, label=ml, edgecolor="black", lw=0.4)
-
-        # Overhead = method_latency - raw_latency for the same model
-        raw_ms = data[ml].get("raw", 0.0)
+        raw_ms   = data[ml].get("raw", 0.0)
         overhead = [max(0.0, v - raw_ms) if m != "raw" else 0.0
-                    for m, v in zip(EVAL_METHODS, abs_ms)]
+                    for m, v in zip(eval_methods, abs_ms)]
         ax2.bar(x + offsets, overhead, width=width * 0.9,
                 color=color, alpha=0.8, label=ml, edgecolor="black", lw=0.4)
 
+    xlabels = [METHOD_LABELS.get(m, m) for m in eval_methods]
     for ax, title, ylabel in [
         (ax1, "Absolute inference latency per trajectory", "Latency (ms)"),
         (ax2, "Post-processing overhead vs raw forward pass", "Extra latency (ms)"),
     ]:
         ax.set_xticks(x)
-        ax.set_xticklabels([METHOD_LABELS[m] for m in EVAL_METHODS],
-                           rotation=20, ha="right", fontsize=9)
+        ax.set_xticklabels(xlabels, rotation=25, ha="right", fontsize=8)
         ax.set_ylabel(ylabel)
         ax.set_title(title)
         ax.legend(fontsize=8)
@@ -995,115 +1063,125 @@ def save_comparison_csv(
 
 
 def plot_mae_comparison(
-    oracle_res:  Dict[float, Dict[str, float]],
-    hv_res:      Dict[float, Dict[str, float]],
-    ft_res:      Dict[float, Dict[str, float]],
-    output_dir:  Path,
+    oracle_res:   Dict[float, Dict[str, float]],
+    hv_res:       Dict[float, Dict[str, float]],
+    ft_res:       Dict[float, Dict[str, float]],
+    ft_label:     str,
+    eval_methods: List[str],
+    output_dir:   Path,
 ) -> None:
-    """
-    Line plot: MAE vs θ for all key series side-by-side.
-    One panel per post-processing method, plus a combined overview.
-    """
+    """MAE vs θ for all evaluated methods, comparing HV baseline and fine-tuned model."""
     thetas = sorted(oracle_res.keys())
     x = np.array(thetas)
 
     def vals(res, method):
         return np.array([res.get(t, {}).get(method, float("nan")) for t in thetas])
 
-    # ---------- series definitions ----------
-    # (label, values, color, linestyle, marker)
-    oracle_v   = vals(oracle_res, "raw")
-    hv_raw_v   = vals(hv_res,     "raw")
-    hv_rts_v   = vals(hv_res,     "kalman_rts_var")
-    hv_ar_v    = vals(hv_res,     "ar_kalman_rts_var")
-    ft_raw_v   = vals(ft_res,     "raw")
-    ft_rts_v   = vals(ft_res,     "kalman_rts_var")
-    ft_ar_v    = vals(ft_res,     "ar_kalman_rts_var")
+    # Per-method visual style: (hv_color, ft_color, linestyle, marker)
+    _STYLE = {
+        "raw":               ("#e74c3c", "#27ae60", "--",  "s"),
+        "alpha_beta":        ("#e67e22", "#2ecc71", "-.",  "v"),
+        "kalman_cv_var":     ("#d35400", "#1abc9c", "-.",  "^"),
+        "ar_raw":            ("#c0392b", "#117a65", ":",   "p"),
+        "ar_kalman_cv_var":  ("#7b241c", "#6c3483", ":",   "D"),
+        "kalman_rts_var":    ("#922b21", "#0e6655", "-.",  ">"),
+        "ar_kalman_rts_var": ("#641e16", "#4a235a", ":",   "*"),
+    }
 
-    series = [
-        ("Oracle (lowvar) - Raw",          oracle_v,   "#2c3e50", "-",   "o"),
-        ("HV - Raw (OoD baseline)",         hv_raw_v,   "#e74c3c", "--",  "s"),
-        ("HV - RTS(R=σ²)",                  hv_rts_v,   "#e67e22", "-.",  "^"),
-        ("HV - AR+RTS(R=σ²)",               hv_ar_v,    "#c0392b", ":",   "D"),
-        ("FT decoder - Raw",                ft_raw_v,   "#27ae60", "-",   "o"),
-        ("FT decoder - RTS(R=σ²)",          ft_rts_v,   "#1abc9c", "-.",  "^"),
-        ("FT decoder - AR+RTS(R=σ²)",       ft_ar_v,    "#6c3483", ":",   "D"),
-    ]
+    oracle_v = vals(oracle_res, "raw")
+    hv_raw_v = vals(hv_res, "raw")
 
-    fig, ax = plt.subplots(figsize=(9, 5))
-
-    # shaded gap: oracle → hv_raw (total possible improvement)
+    fig, ax = plt.subplots(figsize=(10, 5))
     ax.fill_between(x, oracle_v, hv_raw_v, alpha=0.06, color="#e74c3c")
+    ax.plot(x, oracle_v, color="#2c3e50", ls="-", marker="o",
+            markersize=6, lw=2.5, label="Oracle (lowvar) - Raw")
 
-    for label, v, color, ls, marker in series:
-        ax.plot(x, v, color=color, ls=ls, marker=marker,
-                markersize=6, lw=2, label=label)
+    for method in eval_methods:
+        hv_color, ft_color, ls, marker = _STYLE.get(
+            method, ("#888888", "#444444", "--", "x")
+        )
+        lbl  = METHOD_LABELS.get(method, method)
+        hv_v = vals(hv_res, method)
+        ft_v = vals(ft_res, method)
+        ax.plot(x, hv_v, color=hv_color, ls=ls, marker=marker,
+                markersize=5, lw=1.5, alpha=0.75, label=f"HV - {lbl}")
+        ax.plot(x, ft_v, color=ft_color, ls=ls, marker=marker,
+                markersize=6, lw=2.0, label=f"{ft_label} - {lbl}")
 
-    # Annotate % gap closed by best fine-tuned series at each theta
+    # Annotate % gap closed by best available FT series
+    best_ar = next(
+        (m for m in ["ar_kalman_rts_var", "ar_kalman_cv_var", "ar_raw", "raw"]
+         if m in eval_methods),
+        eval_methods[-1],
+    )
+    ft_best_v    = vals(ft_res, best_ar)
+    best_ar_lbl  = METHOD_LABELS.get(best_ar, best_ar)
+    ann_color    = _STYLE.get(best_ar, ("", "#000000", "", ""))[1]
     for i, theta in enumerate(thetas):
         gap_total  = hv_raw_v[i] - oracle_v[i]
-        gap_closed = hv_raw_v[i] - ft_ar_v[i]
+        gap_closed = hv_raw_v[i] - ft_best_v[i]
         if gap_total > 0 and not np.isnan(gap_closed):
             pct = 100.0 * gap_closed / gap_total
             ax.annotate(
                 f"{pct:.0f}%",
-                xy=(theta, ft_ar_v[i]),
+                xy=(theta, ft_best_v[i]),
                 xytext=(0, -14), textcoords="offset points",
-                ha="center", fontsize=8, color="#6c3483", fontweight="bold",
+                ha="center", fontsize=8, color=ann_color, fontweight="bold",
             )
 
     ax.set_xlabel("θ (channel variability)", fontsize=11)
     ax.set_ylabel("MAE (m)", fontsize=11)
     ax.set_title(
-        "MAE vs θ — HV baseline / Decoder fine-tuning / Post-processing\n"
-        "(% = gap closed by FT+AR+RTS(R=σ²) vs oracle)",
+        f"MAE vs θ — HV baseline / {ft_label} / Post-processing\n"
+        f"(% = gap closed by {ft_label}+{best_ar_lbl} vs oracle)",
         fontsize=10,
     )
     ax.set_xticks(thetas)
     ax.set_xticklabels([f"{t:.1f}" for t in thetas])
-    ax.legend(fontsize=8, loc="upper left")
+    ax.legend(fontsize=7, loc="upper left", ncol=2)
     ax.grid(alpha=0.35)
     ax.set_ylim(bottom=0)
     plt.tight_layout()
-
     path = output_dir / "mae_vs_theta.png"
     plt.savefig(path, dpi=160); plt.close()
     print(f"[✓] Saved {path}")
 
 
 def print_summary(
-    oracle_res: Dict[float, Dict[str, float]],
-    hv_res:     Dict[float, Dict[str, float]],
-    ft_res:     Dict[float, Dict[str, float]],
+    oracle_res:   Dict[float, Dict[str, float]],
+    hv_res:       Dict[float, Dict[str, float]],
+    ft_res:       Dict[float, Dict[str, float]],
+    eval_methods: List[str],
+    ft_label:     str,
 ) -> None:
     def mean_all(res, method):
-        v = [res[t][method] for t in res if method in res[t] and not np.isnan(res[t][method])]
+        v = [res[t][method] for t in res
+             if method in res[t] and not np.isnan(res[t][method])]
         return float(np.mean(v)) if v else float("nan")
 
-    oracle_raw  = mean_all(oracle_res, "raw")
-    hv_raw      = mean_all(hv_res,     "raw")
-    ft_raw      = mean_all(ft_res,     "raw")
-    ft_rts      = mean_all(ft_res,     "kalman_rts_var")
-    ft_ar_rts   = mean_all(ft_res,     "ar_kalman_rts_var")
-    gap         = hv_raw - oracle_raw
+    oracle_raw = mean_all(oracle_res, "raw")
+    hv_raw     = mean_all(hv_res,     "raw")
+    gap        = hv_raw - oracle_raw
 
-    hv_rts      = mean_all(hv_res, "kalman_rts_var")
-    hv_ar_rts   = mean_all(hv_res, "ar_kalman_rts_var")
+    def pct(mae):
+        return 100.0 * (hv_raw - mae) / max(gap, 1e-6)
 
-    def pct(mae): return 100.0 * (hv_raw - mae) / max(gap, 1e-6)
-
-    print("\n" + "=" * 70)
-    print("Fine-tuning Summary (mean MAE across all θ)")
-    print("=" * 70)
-    print(f"  Oracle raw (ceiling)         : {oracle_raw:.2f} m")
-    print(f"  HV raw     (OoD baseline)    : {hv_raw:.2f} m   (gap = {gap:.2f} m)")
-    print(f"  HV best pp — RTS(R=σ²)       : {hv_rts:.2f} m  ({pct(hv_rts):.1f}% gap closed)")
-    print(f"  HV best pp — AR+RTS(R=σ²)    : {hv_ar_rts:.2f} m  ({pct(hv_ar_rts):.1f}% gap closed)")
-    print("-" * 70)
-    print(f"  FT decoder — raw             : {ft_raw:.2f} m   ({pct(ft_raw):.1f}% gap closed)")
-    print(f"  FT decoder — RTS(R=σ²)       : {ft_rts:.2f} m  ({pct(ft_rts):.1f}% gap closed)")
-    print(f"  FT decoder — AR+RTS(R=σ²)    : {ft_ar_rts:.2f} m  ({pct(ft_ar_rts):.1f}% gap closed)")
-    print("=" * 70)
+    col_w = 26
+    print("\n" + "=" * 74)
+    print(f"Fine-tuning Summary: {ft_label}  (mean MAE across all θ)")
+    print("=" * 74)
+    print(f"  {'Oracle raw (ceiling)':<{col_w}}: {oracle_raw:.2f} m")
+    print(f"  {'HV raw (OoD baseline)':<{col_w}}: {hv_raw:.2f} m   (gap = {gap:.2f} m)")
+    print("-" * 74)
+    hdr_ft = (ft_label + " (m)")[:14]
+    print(f"  {'Method':<{col_w}}  {'HV (m)':>8}  {'%gap':>6}  {hdr_ft:>14}  {'%gap':>6}")
+    print("-" * 74)
+    for method in eval_methods:
+        lbl    = METHOD_LABELS.get(method, method)
+        hv_m   = mean_all(hv_res, method)
+        ft_m   = mean_all(ft_res, method)
+        print(f"  {lbl:<{col_w}}  {hv_m:8.2f}  {pct(hv_m):6.1f}%  {ft_m:14.2f}  {pct(ft_m):6.1f}%")
+    print("=" * 74)
 
 # ---------------------------------------------------------------------------
 # argparse + main
@@ -1139,6 +1217,12 @@ def parse_args() -> argparse.Namespace:
     # Data-efficiency sweep
     p.add_argument("--efficiency-sweep", action="store_true", help="Run data-efficiency sweep over --sweep-ns values.")
     p.add_argument("--sweep-ns", type=str, default="10,20,50,100,200,0", help="Comma-separated list of n values for the sweep (0 = all training data).")
+    p.add_argument("--include-rts", action="store_true",
+                   help="Also evaluate offline RTS smoother methods (kalman_rts_var, ar_kalman_rts_var).")
+    p.add_argument("--alpha-ab", type=float, default=0.85,
+                   help="Alpha gain for the alpha-beta filter.")
+    p.add_argument("--beta-ab",  type=float, default=0.005,
+                   help="Beta gain for the alpha-beta filter.")
     return p.parse_args()
 
 
@@ -1189,11 +1273,13 @@ def main() -> None:
     thetas    = sorted(lv_groups.keys())
     print(f"[data] test θ values: {thetas}")
 
+    eval_methods = ONLINE_METHODS + (RTS_METHODS if args.include_rts else [])
     eval_kw = dict(
         ctx_pct=args.context, device=device,
         dt=args.dt, sigma_a=args.sigma_a,
+        alpha_ab=args.alpha_ab, beta_ab=args.beta_ab,
         ar_block_k=args.ar_block_k, ar_var_thresh=args.ar_var_thresh,
-        methods=EVAL_METHODS,
+        methods=eval_methods,
     )
 
     # ------------------------------------------------------------------ #
@@ -1252,19 +1338,21 @@ def main() -> None:
     # 6. Outputs
     # ------------------------------------------------------------------ #
     plot_finetune_curves(tr_nll, vl_nll, tr_mae, vl_mae, args.output_dir)
-    plot_mae_comparison(oracle_res, hv_res, ft_res, args.output_dir)
+    plot_mae_comparison(oracle_res, hv_res, ft_res, "FT decoder", eval_methods, args.output_dir)
     save_comparison_csv(
         {"oracle": oracle_res, "highvar_baseline": hv_res, "finetuned_decoder": ft_res},
         thetas,
         args.output_dir,
     )
-    print_summary(oracle_res, hv_res, ft_res)
+    print_summary(oracle_res, hv_res, ft_res, eval_methods, "FT decoder")
     save_latency_csv(
         {"HV baseline": hv_lats, "FT decoder": ft_lats},
+        eval_methods,
         args.output_dir,
     )
     plot_latency_comparison(
         {"HV baseline": hv_lats, "FT decoder": ft_lats},
+        eval_methods,
         args.output_dir,
     )
 

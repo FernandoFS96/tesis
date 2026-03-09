@@ -1,7 +1,11 @@
 model,method,label,theta_0.0_ms,theta_0.1_ms,theta_0.2_ms,theta_0.3_ms,mean_ms
-HV baseline,raw,Raw,4.420,4.304,4.381,4.468,4.393
-HV baseline,kalman_rts_var,RTS (R=σ²),3.834,3.975,3.872,3.894,3.894
-HV baseline,ar_kalman_rts_var,AR+RTS (R=σ²),39.335,37.566,38.891,38.383,38.544
-FT decoder,raw,Raw,4.326,4.968,4.856,4.352,4.626
-FT decoder,kalman_rts_var,RTS (R=σ²),3.772,4.391,4.219,3.968,4.088
-FT decoder,ar_kalman_rts_var,AR+RTS (R=σ²),38.118,41.642,40.186,38.681,39.656
+HV baseline,raw,Raw,4.736,4.883,5.150,4.822,4.898
+HV baseline,alpha_beta,Alpha-Beta,0.119,0.115,0.118,0.114,0.117
+HV baseline,kalman_cv_var,Kal CV (R=σ²),2.605,2.580,2.669,2.596,2.612
+HV baseline,ar_raw,AR raw,47.789,46.466,46.356,48.595,47.302
+HV baseline,ar_kalman_cv_var,AR+Kal CV (R=σ²),50.449,49.161,49.182,51.295,50.022
+FT decoder,raw,Raw,5.444,5.526,4.901,5.155,5.256
+FT decoder,alpha_beta,Alpha-Beta,0.132,0.132,0.117,0.124,0.126
+FT decoder,kalman_cv_var,Kal CV (R=σ²),2.870,2.919,2.600,2.748,2.784
+FT decoder,ar_raw,AR raw,49.283,49.940,47.211,50.262,49.174
+FT decoder,ar_kalman_cv_var,AR+Kal CV (R=σ²),52.133,52.622,50.055,52.998,51.952

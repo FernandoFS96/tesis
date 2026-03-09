@@ -1,0 +1,11 @@
+model,method,label,theta_0.0_ms,theta_0.1_ms,theta_0.2_ms,theta_0.3_ms,mean_ms
+HV baseline,raw,Raw,4.709,5.009,4.765,5.027,4.877
+HV baseline,alpha_beta,Alpha-Beta,0.123,0.121,0.115,0.113,0.118
+HV baseline,kalman_cv_var,Kal CV (R=σ²),2.628,2.653,2.638,2.536,2.614
+HV baseline,ar_raw,AR raw,47.588,50.300,48.981,47.741,48.652
+HV baseline,ar_kalman_cv_var,AR+Kal CV (R=σ²),50.237,53.191,51.643,50.329,51.350
+FT last-layers,raw,Raw,5.400,4.809,5.900,4.819,5.232
+FT last-layers,alpha_beta,Alpha-Beta,0.122,0.126,0.133,0.119,0.125
+FT last-layers,kalman_cv_var,Kal CV (R=σ²),2.708,2.679,2.995,2.609,2.748
+FT last-layers,ar_raw,AR raw,51.518,43.215,48.358,47.199,47.572
+FT last-layers,ar_kalman_cv_var,AR+Kal CV (R=σ²),54.492,45.815,51.580,49.768,50.414
