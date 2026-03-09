@@ -1,19 +1,32 @@
 #!/usr/bin/env python3
 """
-Optuna wrapper for train_anp_topologies_masked.py
+Optuna wrapper for ANP and RANP masked training scripts.
 
+- Selects model with --model anp|ranp.
 - Minimizes validation MAE (default).
-- Uses SQLite storage so for resume.
-- Supports pruning (requires a small patch in the training function: trial.report + trial.should_prune).
+- Uses SQLite storage for resume.
+- Supports pruning (requires trial.report + trial.should_prune hooks in the training function).
 
-Run (single process):
+Run ANP (single process):
   python optuna_anp_search.py \
+    --model anp \
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
     --topologies ellipsoidal \
     --objective-topology ellipsoidal \
     --n-trials 20 \
     --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
     --study-name anp_masked_v6 \
+    --disable-pruning
+
+Run RANP (single process):
+  python optuna_anp_search.py \
+    --model ranp \
+    --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+    --topologies ellipsoidal \
+    --objective-topology ellipsoidal \
+    --n-trials 20 \
+    --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_ranp.db \
+    --study-name ranp_masked_v1 \
     --disable-pruning
 
 Resume:
@@ -57,7 +70,7 @@ from optuna.samplers import TPESampler
 from optuna.pruners import MedianPruner
 
 # IMPORTANT: run this script from the project root (so src/ is importable), or PYTHONPATH must include the project root.
-import src.training.train_anp_topologies_masked as train_mod
+import importlib.util as _importlib_util
 
 
 def make_objective(args):
@@ -69,6 +82,20 @@ def make_objective(args):
 
     results_root = Path(args.results_dir) / args.study_name
     results_root.mkdir(parents=True, exist_ok=True)
+
+    # Load the appropriate training module once per study (importlib needed for hyphenated filename)
+    if args.model == "anp":
+        import src.training.train_anp_topologies_masked as _train_mod
+        _train_fn = _train_mod.train_anp_topology_masked
+    else:
+        _spec = _importlib_util.spec_from_file_location(
+            "train_ranp",
+            Path(__file__).parent / "train_r-anp_topologies_masked.py",
+        )
+        _train_mod = _importlib_util.module_from_spec(_spec)
+        _spec.loader.exec_module(_train_mod)
+        _train_fn = _train_mod.train_ranp_topology_masked
+    train_mod = _train_mod
 
     def objective(trial: optuna.trial.Trial) -> float:
         t0 = time.perf_counter()
@@ -83,8 +110,8 @@ def make_objective(args):
             "lr": trial.suggest_categorical("lr", [7e-4,5e-4, 3e-4, 1e-4]),
             "weight_decay": trial.suggest_categorical("weight_decay", [1e-3, 5e-4, 1e-4, 5e-5, 1e-5]),
 
-            # ANP training dynamics
-            "kl_warmup_epochs": trial.suggest_int("kl_warmup_epochs", 1000, 3000, step=500),
+            # training dynamics
+            "kl_warmup_epochs": trial.suggest_int("kl_warmup_epochs", 500, 3000, step=500),
 
             # context sampling
             "ctx_sample_mode": trial.suggest_categorical("ctx_sample_mode", ["first"]),#trial.suggest_categorical("ctx_sample_mode", ["first", "random"]),
@@ -97,6 +124,13 @@ def make_objective(args):
 
         # batch-size often interacts with lr; keep a small menu
         hp["batch_size"] = trial.suggest_categorical("batch_size", [4, 8])
+
+        # RANP-specific: RNN encoder hyperparameters
+        if args.model == "ranp":
+            hp["rnn_type"]       = trial.suggest_categorical("rnn_type", ["lstm", "gru"])
+            hp["rnn_hidden_dim"] = trial.suggest_categorical("rnn_hidden_dim", [64, 128, 192, 256])
+            hp["rnn_layers"]     = trial.suggest_int("rnn_layers", 1, 2, 3)
+            hp["rnn_dropout"]    = trial.suggest_categorical("rnn_dropout", [0.0, 0.1, 0.2])
 
         # ---------------------------
         # 2) Per-trial output folder
@@ -120,7 +154,7 @@ def make_objective(args):
             topo_t0 = time.perf_counter()
 
             # training function already has Optuna pruning hooks (trial.report + trial.should_prune), so it will report intermediate MAE values and prune unpromising trials.
-            best_mae = train_mod.train_anp_topology_masked(
+            train_kwargs = dict(
                 train_data=train_data,
                 val_data=val_data,
                 save_dir=str(save_dir),
@@ -137,15 +171,21 @@ def make_objective(args):
                 mask_fill=hp["mask_fill"],
                 mask_in_val=args.mask_in_val,
                 kl_warmup_epochs=hp["kl_warmup_epochs"],
-
                 num_hidden=hp["num_hidden"],
                 lr=hp["lr"],
                 weight_decay=hp["weight_decay"],
                 trial=trial,
                 report_every=args.report_every,
-
                 save_checkpoints=False,
             )
+            if args.model == "ranp":
+                train_kwargs.update(
+                    rnn_type=hp["rnn_type"],
+                    rnn_hidden_dim=hp["rnn_hidden_dim"],
+                    rnn_layers=hp["rnn_layers"],
+                    rnn_dropout=hp["rnn_dropout"],
+                )
+            best_mae = _train_fn(**train_kwargs)
             minutes_per_topology[topo] = (time.perf_counter() - topo_t0) / 60.0
             maes[topo] = float(best_mae)
 
@@ -163,6 +203,7 @@ def make_objective(args):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--data-dir", type=str, required=True)
+    p.add_argument("--model", type=str, default="anp", choices=["anp", "ranp"], help="Model to tune: 'anp' = train_anp_topologies_masked, 'ranp' = train_r-anp_topologies_masked.")
     p.add_argument("--topologies", type=str, default="aligned,ellipsoidal,random")
     p.add_argument("--objective-topology", type=str, default="aligned", help="Topology used for objective when --aggregate-topologies is false.")
     p.add_argument("--aggregate-topologies", action="store_true", help="If set, objective = mean MAE over ALL topologies (slower but more robust).")
