@@ -13,9 +13,9 @@ Adds to your current inspect script:
 - (Optional) interactive plots saved as HTML (requires plotly)
 
 Usage:
-  python inspect_optuna_v2.py \
+  python inspect_optuna.py \
     --storage "sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db" \
-    --study-name anp_masked_v4 \
+    --study-name anp_masked_v5 \
     --output-dir results/optuna \
     --group-param batch_size \
     --top-n 5 \

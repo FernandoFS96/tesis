@@ -22,6 +22,26 @@ python train_r-anp_topologies_masked.py \
   --rnn-dropout 0.1 \
   --device cuda \
   --topologies ellipsoidal,random,aligned
+
+Using GRU instead of LSTM:  
+python train_r-anp_topologies_masked.py \
+  --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+  --batch-size 8 \
+  --epochs 5000 \
+  --patience 300 \
+  --ctx-sample-mode first \
+  --num-sensors 10 \
+  --num-time-points 201 \
+  --sensor-drop-mode bernoulli \
+  --sensor-drop-p 0.2 \
+  --mask-fill train_mean \
+  --kl-warmup-epochs 1000 \
+  --rnn-type gru \
+  --rnn-hidden-dim 128 \
+  --rnn-layers 1 \
+  --rnn-dropout 0.1 \
+  --device cuda \
+  --topologies ellipsoidal,random,aligned
 '''
 
 import csv
@@ -181,7 +201,8 @@ def save_all_metrics(train_loss, val_loss, train_mae, val_mae,
                      train_beta=None,
                      train_var_min=None, train_var_mean=None, train_var_max=None,
                      val_var_min=None,   val_var_mean=None,   val_var_max=None,
-                     train_nll_nonctx=None, val_nll_nonctx=None):
+                     train_nll_nonctx=None, val_nll_nonctx=None,
+                     val_mae_02=None, val_mae_04=None, val_mae_06=None):
     metrics = {
         'train_loss': train_loss,
         'val_loss': val_loss,
@@ -200,6 +221,9 @@ def save_all_metrics(train_loss, val_loss, train_mae, val_mae,
         'val_var_max': val_var_max,
         'train_nll_nonctx': train_nll_nonctx,
         'val_nll_nonctx': val_nll_nonctx,
+        'val_mae_02': val_mae_02,
+        'val_mae_04': val_mae_04,
+        'val_mae_06': val_mae_06,
     }
     with open(os.path.join(experiment_dir, "metrics.pkl"), "wb") as f:
         pickle.dump(metrics, f)
@@ -250,6 +274,23 @@ def plot_anp_diagnostics(save_dir,
     plt.legend()
     plt.tight_layout()
     plt.savefig(os.path.join(save_dir, "training_diagnostics_variance.png"), dpi=150)
+    plt.close()
+
+
+def plot_val_mae_per_frac(save_dir, train_mae, val_mae_02, val_mae_04, val_mae_06):
+    epochs = np.arange(1, len(train_mae) + 1)
+    plt.figure(figsize=(10, 6))
+    plt.plot(epochs, train_mae,  label="train MAE (random ctx)", color="black",     linestyle="--")
+    plt.plot(epochs, val_mae_02, label="val MAE  ctx=20%",       color="steelblue")
+    plt.plot(epochs, val_mae_04, label="val MAE  ctx=40% \u2605", color="darkorange", linewidth=2)
+    plt.plot(epochs, val_mae_06, label="val MAE  ctx=60%",       color="seagreen")
+    plt.xlabel("Epoch")
+    plt.ylabel("MAE (m)")
+    plt.title("MAE per validation context fraction (\u2605 = early-stop criterion)")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, "training_mae_vs_ctx_frac.png"), dpi=150)
     plt.close()
 
 
@@ -338,9 +379,11 @@ def train_ranp_topology_masked(
     train_var_min_list, train_var_mean_list, train_var_max_list = [], [], []
     val_var_min_list,   val_var_mean_list,   val_var_max_list   = [], [], []
     train_nll_nonctx_list, val_nll_nonctx_list = [], []
+    val_mae_02_list, val_mae_04_list, val_mae_06_list = [], [], []
 
-    # fixed context fractions for validation
-    val_fracs = [0.3]#[0.1, 0.3, 0.5]
+    # validation context fractions; VAL_ES_FRAC drives early stopping
+    val_fracs = [0.2, 0.4, 0.6]
+    VAL_ES_FRAC = 0.4
 
     t_init = time.time()
     pbar = tqdm(range(epochs), desc=f"[RANP-MASKED-{topology_name}]", unit="epoch", ncols=200)
@@ -384,7 +427,7 @@ def train_ranp_topology_masked(
             context_size = torch.randint(min_context, max_context + 1, (1,), device=device).item() if max_context > min_context else min_context
 
             context_indices = sample_context_indices(total_points, context_size, mode=ctx_sample_mode, device=device)
-            target_indices = torch.arange(total_points, device=device)
+            target_indices = torch.arange(context_size, total_points, device=device)
 
             # normalize Y
             y_batch_raw = y_batch
@@ -428,19 +471,15 @@ def train_ranp_topology_masked(
                 train_nll += nll.item()
                 train_kl  += kl.item()
 
-                # Fixed held-out tail (last 20%) for consistent MAE tracking
-                n_holdout = max(1, int(round(0.20 * total_points)))
-                holdout_mask = torch.zeros(total_points, dtype=torch.bool, device=device)
-                holdout_mask[total_points - n_holdout:] = True
-
+                # target_indices already excludes context → all outputs are post-context
                 nll_pointwise = 0.5 * torch.log(2 * torch.pi * y_pred_var_norm) \
                                 + 0.5 * ((target_y - y_pred_mean_norm) ** 2) / y_pred_var_norm
-                train_nll_nonctx += nll_pointwise[:, holdout_mask, :].mean().item()
+                train_nll_nonctx += nll_pointwise.mean().item()
 
                 y_pred_mean = y_pred_mean_norm * y_std + y_mean
                 mae = F.l1_loss(
-                    y_pred_mean[:, holdout_mask, :],
-                    y_batch_raw[:, holdout_mask, :],
+                    y_pred_mean,
+                    y_batch_raw[:, target_indices, :],
                     reduction="mean"
                 ).item()
 
@@ -480,7 +519,8 @@ def train_ranp_topology_masked(
         g = torch.Generator(device=device)
         g.manual_seed(1)
         model.eval()
-        val_loss, val_mae = 0.0, 0.0
+        val_loss = 0.0
+        val_mae_per_frac = {f: 0.0 for f in val_fracs}
         val_nll, val_kl = 0.0, 0.0
         val_var_min, val_var_mean, val_var_max = 0.0, 0.0, 0.0
         val_nll_nonctx = 0.0
@@ -507,18 +547,13 @@ def train_ranp_topology_masked(
                 y_batch_norm = (y_batch - y_mean) / y_std
                 total_points = T
 
-                # Fixed held-out tail (last 20%) for consistent MAE/early-stopping
-                n_holdout = max(1, int(round(0.20 * total_points)))
-                holdout_mask = torch.zeros(total_points, dtype=torch.bool, device=device)
-                holdout_mask[total_points - n_holdout:] = True
-
-                batch_loss = batch_mae = 0.0
+                batch_loss = 0.0
 
                 for frac in val_fracs:
                     context_size = max(1, min(total_points - 1, int(round(frac * total_points))))
                     ctx_idx = sample_context_indices(total_points, context_size, mode=ctx_sample_mode, device=device, generator=g
                     )
-                    tar_idx = torch.arange(total_points, device=device)
+                    tar_idx = torch.arange(context_size, total_points, device=device)
 
                     context_y = y_batch_norm[:, ctx_idx, :]
                     target_y  = y_batch_norm[:, tar_idx, :]
@@ -534,13 +569,13 @@ def train_ranp_topology_masked(
 
                     y_pred_mean = y_pred_mean_norm * y_std + y_mean
                     mae = F.l1_loss(
-                        y_pred_mean[:, holdout_mask, :],
-                        y_batch_raw[:, holdout_mask, :],
+                        y_pred_mean,
+                        y_batch_raw[:, tar_idx, :],
                         reduction="mean"
                     ).item()
 
                     batch_loss += loss.item()
-                    batch_mae  += mae
+                    val_mae_per_frac[frac] += mae
 
                     val_nll += nll.item()
                     val_kl  += kl.item()
@@ -549,20 +584,23 @@ def train_ranp_topology_masked(
                     val_var_max  += y_pred_var_norm.max().item()
 
                     nll_pointwise = 0.5 * torch.log(2 * torch.pi * y_pred_var_norm) + 0.5 * ((target_y - y_pred_mean_norm) ** 2) / y_pred_var_norm
-                    val_nll_nonctx += nll_pointwise[:, holdout_mask, :].mean().item()
+                    val_nll_nonctx += nll_pointwise.mean().item()
 
                 val_loss += (batch_loss / len(val_fracs))
-                val_mae  += (batch_mae  / len(val_fracs))
 
                 val_batches_seen += 1
                 if dry_run and val_batches_seen >= 1:
                     break
 
         val_loss /= len(val_loader)
-        val_mae  /= len(val_loader)
+        val_mae_per_frac = {f: v / len(val_loader) for f, v in val_mae_per_frac.items()}
+        val_mae = val_mae_per_frac[VAL_ES_FRAC]
 
         val_loss_list.append(val_loss)
         val_mae_list.append(val_mae)
+        val_mae_02_list.append(val_mae_per_frac[0.2])
+        val_mae_04_list.append(val_mae_per_frac[0.4])
+        val_mae_06_list.append(val_mae_per_frac[0.6])
 
         den = len(val_loader) * len(val_fracs)
         val_nll /= den
@@ -638,7 +676,8 @@ def train_ranp_topology_masked(
             train_beta=train_beta_list,
             train_var_min=train_var_min_list, train_var_mean=train_var_mean_list, train_var_max=train_var_max_list,
             val_var_min=val_var_min_list, val_var_mean=val_var_mean_list, val_var_max=val_var_max_list,
-            train_nll_nonctx=train_nll_nonctx_list, val_nll_nonctx=val_nll_nonctx_list
+            train_nll_nonctx=train_nll_nonctx_list, val_nll_nonctx=val_nll_nonctx_list,
+            val_mae_02=val_mae_02_list, val_mae_04=val_mae_04_list, val_mae_06=val_mae_06_list,
         )
 
         plot_anp_diagnostics(
@@ -651,6 +690,9 @@ def train_ranp_topology_masked(
             val_var_min=val_var_min_list, val_var_max=val_var_max_list,
             train_nll_nonctx=train_nll_nonctx_list, val_nll_nonctx=val_nll_nonctx_list
         )
+        plot_val_mae_per_frac(
+            save_dir, train_mae_list, val_mae_02_list, val_mae_04_list, val_mae_06_list
+        )
 
         # CSV log
         csv_path = os.path.join(save_dir, "training_log.csv")
@@ -659,7 +701,8 @@ def train_ranp_topology_masked(
             w.writerow([
                 "epoch",
                 "train_loss","train_nll","train_nll_nonctx","train_kl","beta","train_var_min","train_var_mean","train_var_max","train_mae",
-                "val_loss","val_nll","val_nll_nonctx","val_kl","val_var_min","val_var_mean","val_var_max","val_mae"
+                "val_loss","val_nll","val_nll_nonctx","val_kl","val_var_min","val_var_mean","val_var_max",
+                "val_mae_02","val_mae_04","val_mae_06","val_mae"
             ])
             for e in range(len(train_loss_list)):
                 w.writerow([
@@ -667,7 +710,8 @@ def train_ranp_topology_masked(
                     train_loss_list[e], train_nll_list[e], train_nll_nonctx_list[e], train_kl_list[e], train_beta_list[e],
                     train_var_min_list[e], train_var_mean_list[e], train_var_max_list[e], train_mae_list[e],
                     val_loss_list[e], val_nll_list[e], val_nll_nonctx_list[e], val_kl_list[e],
-                    val_var_min_list[e], val_var_mean_list[e], val_var_max_list[e], val_mae_list[e],
+                    val_var_min_list[e], val_var_mean_list[e], val_var_max_list[e],
+                    val_mae_02_list[e], val_mae_04_list[e], val_mae_06_list[e], val_mae_list[e],
                 ])
 
         # plot training curves

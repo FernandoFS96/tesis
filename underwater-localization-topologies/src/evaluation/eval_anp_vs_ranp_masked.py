@@ -23,14 +23,25 @@ python eval_anp_vs_ranp_masked.py \
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
     --topology random \
     --anp-ckpt /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies_masked/lowvar/masked_dropbernoulli_p0.2_train_mean_first/topology_random/best_checkpoint.pth.tar \
-    --ranp-ckpt /home/fernando/tesis/underwater-localization-topologies/src/training/results/RANP_topologies_masked/ranp_dropbernoulli_p0.2_train_mean_first_rnn-lstm_h256_l1/topology_random/best_checkpoint.pth.tar \
+    --ranp-ckpt /home/fernando/tesis/underwater-localization-topologies/src/training/results/RANP_topologies_masked/ranp_dropbernoulli_p0.2_train_mean_first_rnn-lstm_h128_l1/topology_random/best_checkpoint.pth.tar \
     --output-dir results/eval_anp_vs_ranp/lowvar_random \
     --ctx-fracs 0.05,0.10,0.20,0.30,0.50,0.70,0.90 \
-    --fixed-ctx-frac 0.30 \
+    --fixed-ctx-frac 0.40 \
+    --num-traj-plots 2 \
+    --seed 18
+
+python eval_anp_vs_ranp_masked.py \
+    --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+    --topology ellipsoidal \
+    --anp-ckpt /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies_masked/lowvar/masked_dropbernoulli_p0.2_train_mean_first/topology_ellipsoidal/best_checkpoint.pth.tar \
+    --ranp-ckpt /home/fernando/tesis/underwater-localization-topologies/src/training/results/RANP_topologies_masked/ranp_dropbernoulli_p0.2_train_mean_first_rnn-lstm_h128_l1/topology_ellipsoidal/best_checkpoint.pth.tar \
+    --output-dir results/eval_anp_vs_ranp/lowvar_ellipsoidal \
+    --ctx-fracs 0.05,0.10,0.20,0.30,0.50,0.70,0.90 \
+    --fixed-ctx-frac 0.40 \
     --num-traj-plots 2 \
     --seed 18
 """
-
+#/home/fernando/tesis/underwater-localization-topologies/src/training/results/RANP_topologies_masked/ranp_dropbernoulli_p0.2_train_mean_first_rnn-gru_h128_l1/topology_ellipsoidal/best_checkpoint.pth.tar \
 from __future__ import annotations
 
 import argparse
@@ -72,7 +83,7 @@ _DEFAULT_ANP_CKPT = str(
 _DEFAULT_RANP_CKPT = str(
     _REPO_ROOT
     / "src/training/results/RANP_topologies_masked"
-    / "ranp_dropbernoulli_p0.2_train_mean_first_rnn-lstm_h256_l1"
+    / "ranp_dropbernoulli_p0.2_train_mean_first_rnn-lstm_h128_l1"
     / "topology_random/best_checkpoint.pth.tar"
 )
 _DEFAULT_OUTPUT_DIR = str(
@@ -272,10 +283,7 @@ def eval_mae_per_theta(
 
             n_ctx   = max(1, min(T - 1, int(round(ctx_frac * T))))
             ctx_idx = ctx_indices_first(T, n_ctx, device)
-            tar_idx = torch.arange(T, device=device)
-
-            non_ctx = torch.ones(T, dtype=torch.bool, device=device)
-            non_ctx[ctx_idx] = False
+            tar_idx = torch.arange(n_ctx, T, device=device)  # strictly post-context
 
             ctx_y = y_norm[:, ctx_idx, :]
             tar_y = y_norm[:, tar_idx, :]
@@ -283,12 +291,12 @@ def eval_mae_per_theta(
             # ANP
             mean_anp, _, _, _ = predict_anp(anp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
             pred_anp = mean_anp * y_std + y_mean
-            anp_maes.append(F.l1_loss(pred_anp[:, non_ctx, :], y_raw[:, non_ctx, :], reduction="mean").item())
+            anp_maes.append(F.l1_loss(pred_anp, y_raw[:, tar_idx, :], reduction="mean").item())
 
             # RANP
             mean_ranp, _, _, _ = predict_ranp(ranp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
             pred_ranp = mean_ranp * y_std + y_mean
-            ranp_maes.append(F.l1_loss(pred_ranp[:, non_ctx, :], y_raw[:, non_ctx, :], reduction="mean").item())
+            ranp_maes.append(F.l1_loss(pred_ranp, y_raw[:, tar_idx, :], reduction="mean").item())
 
         results["ANP"][theta]  = float(np.mean(anp_maes))
         results["RANP"][theta] = float(np.mean(ranp_maes))

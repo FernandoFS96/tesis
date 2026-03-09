@@ -11,9 +11,9 @@ Run (single process):
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
     --topologies ellipsoidal \
     --objective-topology ellipsoidal \
-    --n-trials 100 \
+    --n-trials 20 \
     --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
-    --study-name anp_masked_v5 \
+    --study-name anp_masked_v6 \
     --disable-pruning
 
 Resume:
@@ -23,7 +23,7 @@ Resume:
   --objective-topology ellipsoidal \
   --n-trials 200 \
   --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
-  --study-name anp_masked_v5 \
+  --study-name anp_masked_v6 \
   --device cuda
 
 With nohup and redirect to log:
@@ -33,11 +33,11 @@ With nohup and redirect to log:
         --objective-topology ellipsoidal \
         --n-trials 200 \
         --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
-        --study-name anp_masked_v5 \
-        > optuna_anp_masked_v5_$(date +%F_%H%M%S)_$$.log 2>&1 &
+        --study-name anp_masked_v6 \
+        > optuna_anp_masked_v6_$(date +%F_%H%M%S)_$$.log 2>&1 &
 
     monitor with:
-    tail -f optuna_anp_masked_v5_$(date +%F_%H%M%S)_$$.log 2>&1 &
+    tail -f optuna_anp_masked_v6_$(date +%F_%H%M%S)_$$.log 2>&1 &
 
 Parallel: start multiple processes pointing to the same storage+study:
   # terminal 1
@@ -79,12 +79,12 @@ def make_objective(args):
         # ---------------------------
         hp = {
             # model / optimizer
-            "num_hidden": trial.suggest_int("num_hidden", 160, 288, step=32),
-            "lr": trial.suggest_categorical("lr", [5e-4, 3e-4, 1e-4]),
-            "weight_decay": trial.suggest_categorical("weight_decay", [1e-2, 7e-3, 3e-3, 1e-3]),
+            "num_hidden": trial.suggest_int("num_hidden", 192, 320, step=64), 
+            "lr": trial.suggest_categorical("lr", [7e-4,5e-4, 3e-4, 1e-4]),
+            "weight_decay": trial.suggest_categorical("weight_decay", [1e-3, 5e-4, 1e-4, 5e-5, 1e-5]),
 
             # ANP training dynamics
-            "kl_warmup_epochs": trial.suggest_int("kl_warmup_epochs", 1000, 1800, step=400),
+            "kl_warmup_epochs": trial.suggest_int("kl_warmup_epochs", 1000, 3000, step=500),
 
             # context sampling
             "ctx_sample_mode": trial.suggest_categorical("ctx_sample_mode", ["first"]),#trial.suggest_categorical("ctx_sample_mode", ["first", "random"]),
