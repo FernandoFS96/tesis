@@ -69,9 +69,11 @@ ALL_METHODS = [
     "alpha_beta",
     "kalman_cv_I",
     "kalman_cv_var",
+    "kalman_cv_calib",      # calibrated R + velocity init from context
     "kalman_rts_I",
     "kalman_rts_var",
     "ar_raw",
+    "ar_uncert",            # AR ordered by ascending predicted variance
     "ar_kalman_rts_I",
     "ar_kalman_rts_var",
 ]
@@ -80,12 +82,14 @@ METHOD_LABELS = {
     "raw":               "Raw",
     "alpha_beta":        "Alpha-Beta",
     "kalman_cv_I":       "Kal CV (R=I)",
-    "kalman_cv_var":     "Kal CV (R=σ²)",
+    "kalman_cv_var":     "Kal CV (R=\u03c3\u00b2)",
+    "kalman_cv_calib":   "Kal CV (R=calib)",
     "kalman_rts_I":      "RTS (R=I)",
-    "kalman_rts_var":    "RTS (R=σ²)",
+    "kalman_rts_var":    "RTS (R=\u03c3\u00b2)",
     "ar_raw":            "AR raw",
+    "ar_uncert":         "AR (by \u03c3\u00b2)",
     "ar_kalman_rts_I":   "AR+RTS (R=I)",
-    "ar_kalman_rts_var": "AR+RTS (R=σ²)",
+    "ar_kalman_rts_var": "AR+RTS (R=\u03c3\u00b2)",
 }
 
 METHOD_COLORS = {
@@ -93,9 +97,11 @@ METHOD_COLORS = {
     "alpha_beta":        "#e67e22",
     "kalman_cv_I":       "#f1c40f",
     "kalman_cv_var":     "#2ecc71",
+    "kalman_cv_calib":   "#16a085",
     "kalman_rts_I":      "#1abc9c",
     "kalman_rts_var":    "#27ae60",
     "ar_raw":            "#3498db",
+    "ar_uncert":         "#2980b9",
     "ar_kalman_rts_I":   "#9b59b6",
     "ar_kalman_rts_var": "#6c3483",
 }
@@ -305,6 +311,69 @@ def _build_R(var_xy_np: np.ndarray, eps: float = 0.01) -> np.ndarray:
     return R
 
 
+def _kalman_cv_calib(
+    z_xy:      np.ndarray,   # (T,2)  raw ANP predictions  (physical units)
+    var_xy:    np.ndarray,   # (T,2)  ANP predicted variance (physical units)
+    ctx_idx:   np.ndarray,   # (N_ctx,)  integer indices of context points
+    gt_ctx_xy: np.ndarray,   # (N_ctx,2) ground-truth positions at context points
+    dt:        float,
+    sigma_a:   float,
+    eps:       float = 0.01,
+) -> np.ndarray:             # (T,2)
+    """
+    Kalman CV filter with two online improvements over kalman_cv_var:
+      1. R re-calibrated from context residuals: gamma = mean(err²) / mean(σ²)
+         This corrects the scale of the ANP's predicted variance, which may be
+         poorly calibrated under domain shift.
+      2. Initial velocity estimated from the last two context points (causal).
+    Both improvements require only context observations → fully online / causal.
+    """
+    # Sort context by time
+    order  = np.argsort(ctx_idx)
+    ctx_s  = ctx_idx[order]
+    gt_s   = gt_ctx_xy[order]           # gt at ctx, time-sorted
+
+    # 1. Per-axis calibration factor
+    pred_ctx = z_xy[ctx_s]              # (N_ctx, 2)
+    err_sq   = (pred_ctx - gt_s) ** 2
+    var_ctx  = var_xy[ctx_s]
+    mean_var = np.mean(var_ctx, axis=0)
+    gamma    = np.where(
+        mean_var > eps,
+        np.mean(err_sq, axis=0) / np.maximum(mean_var, eps),
+        1.0,
+    )
+    gamma    = np.clip(gamma, 0.1, 100.0)
+    R_calib  = _build_R(var_xy * gamma, eps=eps)
+
+    # 2. Initial state: position + velocity from context
+    T = z_xy.shape[0]
+    F, H, Q = _cv_matrices(dt, sigma_a)
+    x_s = np.zeros(4, dtype=np.float64)
+    x_s[:2] = gt_s[-1] if len(ctx_s) >= 1 else z_xy[0]
+    if len(ctx_s) >= 2:
+        dt_steps = max(int(ctx_s[-1]) - int(ctx_s[-2]), 1)
+        x_s[2]   = (gt_s[-1, 0] - gt_s[-2, 0]) / (dt * dt_steps)
+        x_s[3]   = (gt_s[-1, 1] - gt_s[-2, 1]) / (dt * dt_steps)
+
+    P  = np.eye(4, dtype=np.float64)
+    xf = np.zeros((T, 4))
+    I  = np.eye(4, dtype=np.float64)
+
+    for t in range(T):
+        xp = F @ x_s;  Pp = F @ P @ F.T + Q
+        R  = R_calib[t]
+        inn = z_xy[t] - H @ xp
+        S   = H @ Pp @ H.T + R
+        K   = Pp @ H.T @ np.linalg.inv(S)
+        x_s = xp + K @ inn
+        KH  = K @ H
+        P   = (I - KH) @ Pp @ (I - KH).T + K @ R @ K.T
+        xf[t] = x_s
+
+    return xf[:, :2].astype(np.float32)
+
+
 def apply_postprocess(
     z_xy:     np.ndarray,    # (T,2) positions in physical units
     var_xy:   np.ndarray,    # (T,2) predicted variance in physical units
@@ -343,20 +412,22 @@ def apply_postprocess(
 # ---------------------------------------------------------------------------
 
 def _ar_rollout(
-    model:       torch.nn.Module,
-    x:           torch.Tensor,    # (1,T,D)
-    y:           torch.Tensor,    # (1,T,3) real units
-    ctx_idx:     torch.Tensor,
-    y_mean:      torch.Tensor,
-    y_std:       torch.Tensor,
-    order:       str  = "closest",
-    block_k:     int  = 5,
-    var_thresh:  float = 0.01,
-    force_accept: bool = True,
+    model:         torch.nn.Module,
+    x:             torch.Tensor,                   # (1,T,D)
+    y:             torch.Tensor,                   # (1,T,3) real units
+    ctx_idx:       torch.Tensor,
+    y_mean:        torch.Tensor,
+    y_std:         torch.Tensor,
+    order:         str                    = "closest",
+    block_k:       int                    = 5,
+    var_thresh:    float                  = 0.01,
+    init_var_norm: Optional[torch.Tensor] = None,
+    force_accept:  bool                   = True,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Returns (y_pred_phys, y_var_phys), both (1,T,3) in physical units.
     Variance for context points is ~0 (set to a small placeholder).
+    order: "closest" | "time" | "uncertainty" | anything else → random.
     """
     device = x.device
     B, T, _ = x.shape
@@ -373,7 +444,13 @@ def _ar_rollout(
         non_ctx.sort(key=lambda t: (int(np.min(np.abs(ctx_sorted - t))), t))
     elif order == "time":
         pass  # already sorted
-    # else random: shuffle
+    elif order == "uncertainty":
+        if init_var_norm is not None:
+            var_mean_np = init_var_norm[0, :, :2].mean(-1).detach().cpu().numpy()
+        else:
+            _, iv_norm, *_ = model(x[:, ctx_idx, :], y_norm[:, ctx_idx, :], x)
+            var_mean_np = iv_norm[0, :, :2].mean(-1).detach().cpu().numpy()
+        non_ctx.sort(key=lambda t: float(var_mean_np[t]))
     else:
         np.random.shuffle(non_ctx)
 
@@ -468,9 +545,10 @@ def eval_theta_group(
         x = _augment_x_allsensors(x, model)               # append mask=1 for masked ANPs
         B, T, _ = x.shape                                 # B==1 (DataLoader batch=1)
 
-        ctx    = first_ctx_idx(T, ctx_pct, device)
+        ctx        = first_ctx_idx(T, ctx_pct, device)
+        ctx_np_arr = ctx.cpu().numpy().astype(int)
         nc_mask_np = np.ones(T, bool)
-        nc_mask_np[ctx.cpu().numpy()] = False
+        nc_mask_np[ctx_np_arr] = False
 
         y_norm = norm_y(y, y_mean, y_std)
         cx, cy = x[:, ctx, :], y_norm[:, ctx, :]
@@ -508,6 +586,15 @@ def eval_theta_group(
             p_pp = p_np.copy(); p_pp[:, :2] = xy_pp
             maes[m].append(_mae(p_pp))
 
+        # --- kalman_cv_calib: calibrated R + velocity init from context ---
+        t0 = time.perf_counter()
+        xy_calib = _kalman_cv_calib(
+            p_np[:, :2], v_np[:, :2], ctx_np_arr, y_np[ctx_np_arr, :2], dt, sigma_a,
+        )
+        latencies["kalman_cv_calib"].append(time.perf_counter() - t0)
+        p_calib = p_np.copy(); p_calib[:, :2] = xy_calib
+        maes["kalman_cv_calib"].append(_mae(p_calib))
+
         # ---- AR rollout (timed) ----
         if device.type == "cuda":
             torch.cuda.synchronize()
@@ -525,6 +612,21 @@ def eval_theta_group(
         v_ar = ar_var_phys.squeeze(0).cpu().numpy()       # (T,3)
         maes["ar_raw"].append(_mae(p_ar))
         latencies["ar_raw"].append(t_ar)
+
+        # --- AR by uncertainty: sort targets ascending by predicted variance ---
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        ar_uncert_phys, _ = _ar_rollout(
+            model=model, x=x, y=y,
+            ctx_idx=ctx, y_mean=y_mean, y_std=y_std,
+            order="uncertainty", init_var_norm=var_norm,
+            block_k=ar_block_k, var_thresh=ar_var_thresh,
+        )
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        latencies["ar_uncert"].append(time.perf_counter() - t0)
+        maes["ar_uncert"].append(_mae(ar_uncert_phys.squeeze(0).cpu().numpy()))
 
         for ar_key, filt in [("ar_kalman_rts_I", "kalman_rts_I"),
                               ("ar_kalman_rts_var", "kalman_rts_var")]:
@@ -595,6 +697,13 @@ def predict_single(
         pp = p_np.copy(); pp[:, :2] = xy_pp
         preds[m] = pp
 
+    # kalman_cv_calib
+    xy_calib = _kalman_cv_calib(
+        p_np[:, :2], v_np[:, :2], ctx_np, y_np[ctx_np, :2], dt, sigma_a,
+    )
+    pp = p_np.copy(); pp[:, :2] = xy_calib
+    preds["kalman_cv_calib"] = pp
+
     ar_phys, ar_var = _ar_rollout(
         model=model, x=x, y=y, ctx_idx=ctx,
         y_mean=y_mean, y_std=y_std,
@@ -603,6 +712,13 @@ def predict_single(
     p_ar = ar_phys.squeeze(0).cpu().numpy()
     v_ar = ar_var.squeeze(0).cpu().numpy()
     preds["ar_raw"] = p_ar
+    ar_uncert_phys, _ = _ar_rollout(
+        model=model, x=x, y=y, ctx_idx=ctx,
+        y_mean=y_mean, y_std=y_std,
+        order="uncertainty", init_var_norm=var_norm,
+        block_k=ar_block_k, var_thresh=ar_var_thresh,
+    )
+    preds["ar_uncert"] = ar_uncert_phys.squeeze(0).cpu().numpy()
     for ar_key, filt in [("ar_kalman_rts_I", "kalman_rts_I"),
                           ("ar_kalman_rts_var", "kalman_rts_var")]:
         xy_pp = apply_postprocess(
@@ -905,10 +1021,12 @@ def make_mae_vs_theta_plot(
     x = np.array(thetas)
 
     series = {
-        "oracle_raw":       ("Oracle (lowvar) – Raw",   "#2c3e50", "-",  "o"),
-        "hv_raw":           ("HV – Raw (OoD baseline)", "#e74c3c", "--", "s"),
-        "hv_rts_var":       ("HV – RTS (R=σ²)",         "#27ae60", "-.", "^"),
-        "hv_ar_rts_var":    ("HV – AR+RTS (R=σ²)",      "#6c3483", ":",  "D"),
+        "oracle_raw":      ("Oracle (lowvar) \u2013 Raw",    "#2c3e50", "-",  "o"),
+        "hv_raw":          ("HV \u2013 Raw (OoD baseline)",  "#e74c3c", "--", "s"),
+        "hv_kalman_calib": ("HV \u2013 Kal CV (R=calib)",   "#16a085", "-.", "^"),
+        "hv_rts_var":      ("HV \u2013 RTS (R=\u03c3\u00b2)",        "#27ae60", "-.", "D"),
+        "hv_ar_uncert":    ("HV \u2013 AR (by \u03c3\u00b2)",         "#2980b9", ":",  "p"),
+        "hv_ar_rts_var":   ("HV \u2013 AR+RTS (R=\u03c3\u00b2)",     "#6c3483", ":",  "*"),
     }
 
     def get_vals(model_key: str, method: str) -> np.ndarray:
@@ -917,56 +1035,59 @@ def make_mae_vs_theta_plot(
             for t in thetas
         ])
 
-    oracle_vals    = get_vals(oracle_key,   "raw")
-    hv_raw_vals    = get_vals(degraded_key, "raw")
-    hv_rts_vals    = get_vals(degraded_key, "kalman_rts_var")
-    hv_ar_rts_vals = get_vals(degraded_key, "ar_kalman_rts_var")
+    oracle_vals          = get_vals(oracle_key,   "raw")
+    hv_raw_vals          = get_vals(degraded_key, "raw")
+    hv_kalman_calib_vals = get_vals(degraded_key, "kalman_cv_calib")
+    hv_rts_vals          = get_vals(degraded_key, "kalman_rts_var")
+    hv_ar_uncert_vals    = get_vals(degraded_key, "ar_uncert")
+    hv_ar_rts_vals       = get_vals(degraded_key, "ar_kalman_rts_var")
 
     data = {
-        "oracle_raw":    oracle_vals,
-        "hv_raw":        hv_raw_vals,
-        "hv_rts_var":    hv_rts_vals,
-        "hv_ar_rts_var": hv_ar_rts_vals,
+        "oracle_raw":      oracle_vals,
+        "hv_raw":          hv_raw_vals,
+        "hv_kalman_calib": hv_kalman_calib_vals,
+        "hv_rts_var":      hv_rts_vals,
+        "hv_ar_uncert":    hv_ar_uncert_vals,
+        "hv_ar_rts_var":   hv_ar_rts_vals,
     }
 
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = plt.subplots(figsize=(10, 5))
 
     # Shaded gap: hv_raw → oracle (red fill), improvements narrow this
     ax.fill_between(x, oracle_vals, hv_raw_vals,
-                    alpha=0.08, color="#e74c3c", label="_nolegend_")
-    ax.fill_between(x, oracle_vals, hv_rts_vals,
-                    alpha=0.10, color="#27ae60", label="_nolegend_")
+                    alpha=0.07, color="#e74c3c", label="_nolegend_")
     ax.fill_between(x, oracle_vals, hv_ar_rts_vals,
-                    alpha=0.12, color="#6c3483", label="_nolegend_")
+                    alpha=0.09, color="#6c3483", label="_nolegend_")
 
     for key, (label, color, ls, marker) in series.items():
         ax.plot(x, data[key], color=color, ls=ls, marker=marker,
                 markersize=7, lw=2, label=label)
 
-    # Annotate % gap closed for best method at each theta
+    # Annotate % gap closed for best AR method at each theta
     for i, theta in enumerate(thetas):
         gap_total = hv_raw_vals[i] - oracle_vals[i]
-        gap_closed = hv_raw_vals[i] - hv_ar_rts_vals[i]
-        if gap_total > 0:
+        best_ar_v = float(np.nanmin([hv_ar_uncert_vals[i], hv_ar_rts_vals[i]]))
+        gap_closed = hv_raw_vals[i] - best_ar_v
+        if gap_total > 0 and not np.isnan(gap_closed):
             pct = 100.0 * gap_closed / gap_total
             ax.annotate(
                 f"{pct:.0f}%",
-                xy=(theta, hv_ar_rts_vals[i]),
+                xy=(theta, best_ar_v),
                 xytext=(0, -14), textcoords="offset points",
                 ha="center", fontsize=8, color="#6c3483",
                 fontweight="bold",
             )
 
-    ax.set_xlabel("θ (channel variability)", fontsize=11)
+    ax.set_xlabel("\u03b8 (channel variability)", fontsize=11)
     ax.set_ylabel("MAE (m)", fontsize=11)
     ax.set_title(
-        "MAE vs θ — Oracle / HV raw / Best post-processing\n"
-        "(% labels = gap closed by AR+RTS(R=σ²) vs oracle)",
+        "MAE vs \u03b8 \u2014 Oracle / HV raw / Post-processing improvements\n"
+        "(% = gap closed by best AR method vs oracle)",
         fontsize=10,
     )
     ax.set_xticks(thetas)
     ax.set_xticklabels([f"{t:.1f}" for t in thetas])
-    ax.legend(fontsize=9, loc="upper left")
+    ax.legend(fontsize=8, loc="upper left")
     ax.grid(alpha=0.35)
     ax.set_ylim(bottom=0)
 
