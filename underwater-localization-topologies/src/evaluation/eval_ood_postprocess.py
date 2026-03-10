@@ -36,7 +36,7 @@ Uso:
     --lowvar-data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
     --highvar-data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
     --topology ellipsoidal \
-    --context 30 \
+    --context 40 \
     --output-dir results/eval_ood_postprocess
 """
 
@@ -72,10 +72,15 @@ ALL_METHODS = [
     "kalman_cv_calib",      # calibrated R + velocity init from context
     "kalman_rts_I",
     "kalman_rts_var",
+    "ctx_bias",             # global mean-shift correction from context residuals
+    "ctx_anchor",           # relative-displacement anchoring to last context GT
     "ar_raw",
     "ar_uncert",            # AR ordered by ascending predicted variance
+    "ar_kalman_cv_I",       # AR + causal Kalman CV (R=I)    — online alternative to RTS
+    "ar_kalman_cv_var",     # AR + causal Kalman CV (R=σ²)   — online alternative to RTS
     "ar_kalman_rts_I",
     "ar_kalman_rts_var",
+    "ctx_bias_ar",          # bias-corrected predictions fed into AR rollout
 ]
 
 METHOD_LABELS = {
@@ -86,10 +91,15 @@ METHOD_LABELS = {
     "kalman_cv_calib":   "Kal CV (R=calib)",
     "kalman_rts_I":      "RTS (R=I)",
     "kalman_rts_var":    "RTS (R=\u03c3\u00b2)",
+    "ctx_bias":          "Ctx Bias",
+    "ctx_anchor":        "Ctx Anchor",
     "ar_raw":            "AR raw",
     "ar_uncert":         "AR (by \u03c3\u00b2)",
+    "ar_kalman_cv_I":    "AR+Kal CV (R=I)",
+    "ar_kalman_cv_var":  "AR+Kal CV (R=\u03c3\u00b2)",
     "ar_kalman_rts_I":   "AR+RTS (R=I)",
     "ar_kalman_rts_var": "AR+RTS (R=\u03c3\u00b2)",
+    "ctx_bias_ar":       "Bias+AR",
 }
 
 METHOD_COLORS = {
@@ -100,10 +110,15 @@ METHOD_COLORS = {
     "kalman_cv_calib":   "#16a085",
     "kalman_rts_I":      "#1abc9c",
     "kalman_rts_var":    "#27ae60",
+    "ctx_bias":          "#c0392b",
+    "ctx_anchor":        "#d35400",
     "ar_raw":            "#3498db",
     "ar_uncert":         "#2980b9",
+    "ar_kalman_cv_I":    "#8e44ad",
+    "ar_kalman_cv_var":  "#6c3483",
     "ar_kalman_rts_I":   "#9b59b6",
-    "ar_kalman_rts_var": "#6c3483",
+    "ar_kalman_rts_var": "#4a235a",
+    "ctx_bias_ar":       "#1a5276",
 }
 
 # ---------------------------------------------------------------------------
@@ -374,6 +389,47 @@ def _kalman_cv_calib(
     return xf[:, :2].astype(np.float32)
 
 
+def _ctx_bias_shift(
+    z_xy:      np.ndarray,   # (T,2)  raw ANP predictions (physical units)
+    ctx_idx:   np.ndarray,   # (N_ctx,) integer indices of context points
+    gt_ctx_xy: np.ndarray,   # (N_ctx,2) ground-truth positions at context points
+) -> np.ndarray:             # (T,2)
+    """
+    Global mean-shift correction: computes the mean residual (GT - pred) over
+    the context window and adds it uniformly to all predictions.
+    Fully online and causal — requires only context observations.
+    """
+    pred_ctx = z_xy[ctx_idx]               # (N_ctx, 2)
+    bias     = np.mean(gt_ctx_xy - pred_ctx, axis=0)   # (2,)
+    return (z_xy + bias).astype(np.float32)
+
+
+def _ctx_anchor(
+    z_xy:      np.ndarray,   # (T,2)  raw ANP predictions (physical units)
+    ctx_idx:   np.ndarray,   # (N_ctx,) integer indices of context points
+    gt_ctx_xy: np.ndarray,   # (N_ctx,2) ground-truth positions at context points
+) -> np.ndarray:             # (T,2)
+    """
+    Relative-displacement anchoring: for each target step t, uses the closest
+    context point c as an anchor and replaces the absolute prediction with
+      pred_anchored[t] = gt[c] + (pred[t] - pred[c])
+    This removes the absolute position bias while preserving the ANP's
+    predicted relative displacements.
+    Fully online and causal.
+    """
+    ctx_sorted = np.sort(ctx_idx)
+    gt_sorted  = gt_ctx_xy[np.argsort(ctx_idx)]  # GT sorted by time
+    T          = z_xy.shape[0]
+    out        = z_xy.copy().astype(np.float32)
+    for t in range(T):
+        # index of closest context point in time
+        dists = np.abs(ctx_sorted - t)
+        c_pos = int(np.argmin(dists))       # position in sorted ctx array
+        c_t   = ctx_sorted[c_pos]           # time-index of that context point
+        out[t] = gt_sorted[c_pos] + (z_xy[t] - z_xy[c_t])
+    return out
+
+
 def apply_postprocess(
     z_xy:     np.ndarray,    # (T,2) positions in physical units
     var_xy:   np.ndarray,    # (T,2) predicted variance in physical units
@@ -501,7 +557,10 @@ _FILTER_METHODS = [
     "kalman_rts_I", "kalman_rts_var",
 ]
 _AR_FILTER_METHODS = [
-    "ar_kalman_rts_I", "ar_kalman_rts_var",
+    ("ar_kalman_cv_I",   "kalman_cv_I"),
+    ("ar_kalman_cv_var",  "kalman_cv_var"),
+    ("ar_kalman_rts_I",  "kalman_rts_I"),
+    ("ar_kalman_rts_var", "kalman_rts_var"),
 ]
 
 
@@ -595,6 +654,20 @@ def eval_theta_group(
         p_calib = p_np.copy(); p_calib[:, :2] = xy_calib
         maes["kalman_cv_calib"].append(_mae(p_calib))
 
+        # --- ctx_bias: global mean-shift from context residuals ---
+        t0 = time.perf_counter()
+        xy_bias = _ctx_bias_shift(p_np[:, :2], ctx_np_arr, y_np[ctx_np_arr, :2])
+        latencies["ctx_bias"].append(time.perf_counter() - t0)
+        p_bias = p_np.copy(); p_bias[:, :2] = xy_bias
+        maes["ctx_bias"].append(_mae(p_bias))
+
+        # --- ctx_anchor: relative-displacement anchoring to closest context GT ---
+        t0 = time.perf_counter()
+        xy_anchor = _ctx_anchor(p_np[:, :2], ctx_np_arr, y_np[ctx_np_arr, :2])
+        latencies["ctx_anchor"].append(time.perf_counter() - t0)
+        p_anchor = p_np.copy(); p_anchor[:, :2] = xy_anchor
+        maes["ctx_anchor"].append(_mae(p_anchor))
+
         # ---- AR rollout (timed) ----
         if device.type == "cuda":
             torch.cuda.synchronize()
@@ -628,8 +701,7 @@ def eval_theta_group(
         latencies["ar_uncert"].append(time.perf_counter() - t0)
         maes["ar_uncert"].append(_mae(ar_uncert_phys.squeeze(0).cpu().numpy()))
 
-        for ar_key, filt in [("ar_kalman_rts_I", "kalman_rts_I"),
-                              ("ar_kalman_rts_var", "kalman_rts_var")]:
+        for ar_key, filt in _AR_FILTER_METHODS:
             t0 = time.perf_counter()
             xy_pp = apply_postprocess(
                 z_xy=p_ar[:, :2], var_xy=v_ar[:, :2],
@@ -638,6 +710,31 @@ def eval_theta_group(
             latencies[ar_key].append(t_ar + (time.perf_counter() - t0))  # AR + filter
             p_pp = p_ar.copy(); p_pp[:, :2] = xy_pp
             maes[ar_key].append(_mae(p_pp))
+
+        # --- ctx_bias_ar: bias-corrected predictions fed into AR rollout ---
+        # Shift the raw measurements by the context bias before AR so that
+        # AR starts from better-anchored context observations.
+        y_bias_phys = y.clone()
+        bias_vec    = torch.tensor(
+            np.mean(y_np[ctx_np_arr, :2] - p_np[ctx_np_arr, :2], axis=0),
+            dtype=torch.float32, device=device,
+        )                                                 # (2,)
+        y_bias_phys[0, :, :2] = y_bias_phys[0, :, :2] + bias_vec
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        ar_bias_phys, _ = _ar_rollout(
+            model=model, x=x, y=y_bias_phys,
+            ctx_idx=ctx, y_mean=y_mean, y_std=y_std,
+            block_k=ar_block_k, var_thresh=ar_var_thresh,
+        )
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        latencies["ctx_bias_ar"].append(time.perf_counter() - t0)
+        # undo the bias shift on the AR output so MAE is against original GT
+        ar_bias_np = ar_bias_phys.squeeze(0).cpu().numpy().copy()
+        ar_bias_np[:, :2] -= bias_vec.cpu().numpy()
+        maes["ctx_bias_ar"].append(_mae(ar_bias_np))
 
     maes_mean  = {k: float(np.mean(v)) if v else float("nan") for k, v in maes.items()}
     lats_mean  = {k: float(np.mean(v)) if v else float("nan") for k, v in latencies.items()}
@@ -704,6 +801,16 @@ def predict_single(
     pp = p_np.copy(); pp[:, :2] = xy_calib
     preds["kalman_cv_calib"] = pp
 
+    # ctx_bias
+    xy_bias = _ctx_bias_shift(p_np[:, :2], ctx_np, y_np[ctx_np, :2])
+    pp = p_np.copy(); pp[:, :2] = xy_bias
+    preds["ctx_bias"] = pp
+
+    # ctx_anchor
+    xy_anchor = _ctx_anchor(p_np[:, :2], ctx_np, y_np[ctx_np, :2])
+    pp = p_np.copy(); pp[:, :2] = xy_anchor
+    preds["ctx_anchor"] = pp
+
     ar_phys, ar_var = _ar_rollout(
         model=model, x=x, y=y, ctx_idx=ctx,
         y_mean=y_mean, y_std=y_std,
@@ -719,14 +826,27 @@ def predict_single(
         block_k=ar_block_k, var_thresh=ar_var_thresh,
     )
     preds["ar_uncert"] = ar_uncert_phys.squeeze(0).cpu().numpy()
-    for ar_key, filt in [("ar_kalman_rts_I", "kalman_rts_I"),
-                          ("ar_kalman_rts_var", "kalman_rts_var")]:
+    for ar_key, filt in _AR_FILTER_METHODS:
         xy_pp = apply_postprocess(
             z_xy=p_ar[:, :2], var_xy=v_ar[:, :2],
             method=filt, dt=dt, alpha=alpha, beta=beta, sigma_a=sigma_a,
         )
         pp = p_ar.copy(); pp[:, :2] = xy_pp
         preds[ar_key] = pp
+
+    # ctx_bias_ar: bias-corrected GT-anchor fed into AR
+    bias_vec    = np.mean(y_np[ctx_np, :2] - p_np[ctx_np, :2], axis=0)  # (2,)
+    y_bias_phys = torch.tensor(y_np.copy(), dtype=torch.float32, device=device).unsqueeze(0)
+    y_bias_phys[0, :, :2] = y_bias_phys[0, :, :2] + torch.tensor(
+        bias_vec, dtype=torch.float32, device=device)
+    ar_bias_phys, _ = _ar_rollout(
+        model=model, x=x, y=y_bias_phys,
+        ctx_idx=ctx, y_mean=y_mean, y_std=y_std,
+        block_k=ar_block_k, var_thresh=ar_var_thresh,
+    )
+    ar_bias_np = ar_bias_phys.squeeze(0).cpu().numpy().copy()
+    ar_bias_np[:, :2] -= bias_vec
+    preds["ctx_bias_ar"] = ar_bias_np
 
     return {"gt": y_np, "ctx_idx": ctx_np, "nc_mask": nc_mask, "preds": preds}
 
@@ -1255,22 +1375,13 @@ def save_trajectory_plot(
 # ---------------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="Evaluate post-processing to reduce OoD MAE gap."
-    )
-    p.add_argument("--lowvar-ckpt",   type=Path, required=True,
-                   help="Checkpoint of lowvar ANP (oracle).")
-    p.add_argument("--highvar-ckpt",  type=Path, required=True,
-                   help="Checkpoint of highvar ANP (OoD model to improve).")
-    p.add_argument("--lowvar-data-dir",  type=Path, required=True,
-                   help="Processed data directory for lowvar (test target).")
-    p.add_argument("--highvar-data-dir", type=Path, required=True,
-                   help="Processed data directory for highvar "
-                        "(used only for normalization stats of the highvar model).")
-    p.add_argument("--topology",  type=str, default="ellipsoidal",
-                   choices=["ellipsoidal", "aligned", "random"])
-    p.add_argument("--context",   type=int, default=30,
-                   help="Context percentage [0-100].")
+    p = argparse.ArgumentParser(description="Evaluate post-processing to reduce OoD MAE gap.")
+    p.add_argument("--lowvar-ckpt",   type=Path, required=True, help="Checkpoint of lowvar ANP (oracle).")
+    p.add_argument("--highvar-ckpt",  type=Path, required=True, help="Checkpoint of highvar ANP (OoD model to improve).")
+    p.add_argument("--lowvar-data-dir",  type=Path, required=True, help="Processed data directory for lowvar (test target).")
+    p.add_argument("--highvar-data-dir", type=Path, required=True, help="Processed data directory for highvar (used only for normalization stats of the highvar model).")
+    p.add_argument("--topology",  type=str, default="ellipsoidal", choices=["ellipsoidal", "aligned", "random"])
+    p.add_argument("--context",   type=int, default=40, help="Context percentage [0-100].")
     p.add_argument("--dt",        type=float, default=1.0)
     p.add_argument("--alpha",     type=float, default=0.85)
     p.add_argument("--beta",      type=float, default=0.005)
@@ -1279,10 +1390,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--ar-var-thresh",  type=float, default=0.01)
     p.add_argument("--n-traj-plots",   type=int,   default=4)
     p.add_argument("--seed",      type=int, default=EVAL_SEED)
-    p.add_argument("--output-dir", type=Path,
-                   default=Path("results/eval_ood_postprocess"))
-    p.add_argument("--no-traj-plots", action="store_true",
-                   help="Skip qualitative trajectory plots.")
+    p.add_argument("--output-dir", type=Path, default=Path("results/eval_ood_postprocess"))
+    p.add_argument("--no-traj-plots", action="store_true", help="Skip qualitative trajectory plots.")
     return p.parse_args()
 
 
