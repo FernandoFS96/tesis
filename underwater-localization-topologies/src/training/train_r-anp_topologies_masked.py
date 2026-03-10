@@ -42,6 +42,26 @@ python train_r-anp_topologies_masked.py \
   --rnn-dropout 0.1 \
   --device cuda \
   --topologies ellipsoidal,random,aligned
+
+Using high variance data
+python train_r-anp_topologies_masked.py \
+  --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance
+  --batch-size 8 \
+  --epochs 5000 \
+  --patience 300 \
+  --ctx-sample-mode first \
+  --num-sensors 10 \
+  --num-time-points 201 \
+  --sensor-drop-mode bernoulli \
+  --sensor-drop-p 0.2 \
+  --mask-fill train_mean \
+  --kl-warmup-epochs 1000 \
+  --rnn-type gru \
+  --rnn-hidden-dim 128 \
+  --rnn-layers 1 \
+  --rnn-dropout 0.1 \
+  --device cuda \
+  --topologies ellipsoidal,random,aligned
 '''
 
 import csv
@@ -783,6 +803,14 @@ def main():
     args = parser.parse_args()
 
     topologies = [t.strip() for t in args.topologies.split(",") if t.strip()]
+    # denote level of data variance
+    if "low_variance" in args.data_dir:
+        var_tag = "lowvar"
+    elif "high_variance" in args.data_dir:
+        var_tag = "highvar"
+    else:
+        var_tag = "varunknown"
+
     run_name = (
         f"ranp_drop{args.sensor_drop_mode}_p{args.sensor_drop_p}"
         f"_{args.mask_fill}_{args.ctx_sample_mode}"
@@ -790,7 +818,7 @@ def main():
     )
 
     if args.save_dir is None:
-        base = os.path.join(os.getcwd(), "results", "RANP_topologies_masked", run_name)
+        base = os.path.join(os.getcwd(), "results", "RANP_topologies_masked", var_tag, run_name)
     else:
         base = os.path.join(args.save_dir, run_name)
 
