@@ -54,7 +54,8 @@ Usage
     --lr 1e-4 \
     --output-dir results/finetune_decoder_ood \
     --efficiency-sweep \
-    --sweep-ns 10,20,50,100,200,0 \
+    --comparison-sweep \
+    --sweep-ns 10,20,50,100,150,200,0 \
     
 """
 
@@ -84,6 +85,13 @@ from src.utils.nav_dataset import NavigationTrajectoryDataset
 # Constants
 # ---------------------------------------------------------------------------
 EVAL_SEED = 18
+
+# Fine-tuning modes
+FT_MODES: List[str] = ["full_decoder", "last_layer"]
+FT_MODE_LABELS: Dict[str, str] = {
+    "full_decoder": "FT full decoder",
+    "last_layer":   "FT last layer",
+}
 
 # Methods evaluated by default (all online / causal)
 ONLINE_METHODS: List[str] = [
@@ -146,16 +154,51 @@ def load_anp(ckpt_path: Path, device: torch.device) -> LatentModel:
     return model.to(device)
 
 
-def freeze_encoders(model: LatentModel) -> int:
-    """Freeze LatentEncoder + DeterministicEncoder; return # trainable params."""
+# Decoder layer name prefixes for selective freezing
+_DECODER_LAST_LAYER_PREFIXES = (
+    "decoder.mean_projection",
+    "decoder.log_var_projection",
+)
+
+
+def _apply_freeze(model: LatentModel, verbose: bool = True) -> int:
+    """Helper: print trainable count and return it."""
+    n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    n_total     = sum(p.numel() for p in model.parameters())
+    if verbose:
+        print(f"[freeze] trainable: {n_trainable:,} / {n_total:,} "
+              f"({100.*n_trainable/n_total:.1f} %)")
+    return n_trainable
+
+
+def freeze_encoders(model: LatentModel, verbose: bool = True) -> int:
+    """Freeze LatentEncoder + DeterministicEncoder (full decoder trained)."""
     for name, p in model.named_parameters():
         if name.startswith("latent_encoder") or name.startswith("deterministic_encoder"):
             p.requires_grad_(False)
-    n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    n_total     = sum(p.numel() for p in model.parameters())
-    print(f"[freeze] trainable: {n_trainable:,} / {n_total:,} "
-          f"({100.*n_trainable/n_total:.1f} %)")
-    return n_trainable
+    return _apply_freeze(model, verbose)
+
+
+def freeze_for_last_layer_only(model: LatentModel, verbose: bool = True) -> int:
+    """
+    Freeze LatentEncoder, DeterministicEncoder, AND all Decoder layers
+    except mean_projection and log_var_projection.
+    Only the two output heads of the Decoder remain trainable.
+    """
+    for name, p in model.named_parameters():
+        if name.startswith("latent_encoder") or name.startswith("deterministic_encoder"):
+            p.requires_grad_(False)
+        elif name.startswith("decoder") and not name.startswith(_DECODER_LAST_LAYER_PREFIXES):
+            p.requires_grad_(False)
+    return _apply_freeze(model, verbose)
+
+
+def apply_ft_mode(model: LatentModel, ft_mode: str, verbose: bool = True) -> int:
+    """Dispatch to the correct freeze function based on ft_mode."""
+    if ft_mode == "last_layer":
+        return freeze_for_last_layer_only(model, verbose)
+    else:  # full_decoder
+        return freeze_encoders(model, verbose)
 
 # ---------------------------------------------------------------------------
 # Data helpers
@@ -272,10 +315,10 @@ def finetune(
     p_drop:        float,
     output_dir:    Optional[Path],
     verbose:       bool = True,
-) -> Tuple[List[float], List[float], List[float], List[float]]:
+) -> Tuple[List[float], List[float], List[float], List[float], float]:
     """
     Fine-tune the decoder of `model` in-place.
-    Returns (train_nll, val_nll, train_mae, val_mae) history lists.
+    Returns (train_nll, val_nll, train_mae, val_mae, train_time_seconds).
     """
     x_means_t = torch.tensor(x_means_SP, dtype=torch.float32, device=device)
     P = num_time_points
@@ -295,6 +338,7 @@ def finetune(
     val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
 
     best_val_nll  = float("inf")
+    best_val_mae  = float("inf")
     best_state    = None
     patience_ctr  = 0
 
@@ -302,6 +346,8 @@ def finetune(
     hist_val_nll:   List[float] = []
     hist_train_mae: List[float] = []
     hist_val_mae:   List[float] = []
+
+    train_start = time.perf_counter()
 
     for epoch in range(1, epochs + 1):
         # ---- Training ----
@@ -382,8 +428,8 @@ def finetune(
         scheduler.step(val_nll)
 
         # Early stopping
-        if val_nll < best_val_nll - 1e-5:
-            best_val_nll = val_nll
+        if val_mae < best_val_mae - 1e-5:
+            best_val_mae = val_mae
             best_state   = copy.deepcopy(model.state_dict())
             patience_ctr = 0
         else:
@@ -399,6 +445,8 @@ def finetune(
                 print(f"[early stop] epoch {epoch}")
             break
 
+    train_elapsed = time.perf_counter() - train_start
+
     # Restore best weights
     if best_state is not None:
         model.load_state_dict(best_state)
@@ -409,7 +457,285 @@ def finetune(
         torch.save({"model": model.state_dict()}, ckpt_path)
         print(f"[✓] Saved fine-tuned checkpoint → {ckpt_path}")
 
-    return hist_train_nll, hist_val_nll, hist_train_mae, hist_val_mae
+    return hist_train_nll, hist_val_nll, hist_train_mae, hist_val_mae, train_elapsed
+
+# ---------------------------------------------------------------------------
+# Comparison sweep  (ft_mode × n_trajectories)
+# ---------------------------------------------------------------------------
+
+def run_comparison_sweep(
+    hv_original_state: dict,
+    lv_train:          List,
+    lv_val:            List,
+    lv_groups:         Dict[float, List],
+    lv_y_mean:         torch.Tensor,
+    lv_y_std:          torch.Tensor,
+    lv_x_means:        np.ndarray,
+    device:            torch.device,
+    sweep_ns:          List[int],
+    ft_modes:          List[str],
+    seed:              int,
+    finetune_kw:       dict,
+    eval_kw:           dict,
+) -> Dict[str, Dict[int, Dict[str, object]]]:
+    """
+    For each ft_mode in ft_modes and each n in sweep_ns, fine-tune a fresh
+    copy of the highvar model and record mean MAE + training time.
+
+    Returns:
+      {ft_mode: {n: {"mae": float, "train_time_s": float,
+                     "method_maes": {method: float}}}}
+    """
+    from src.models.anp import LatentModel as _LM
+
+    rng        = np.random.default_rng(seed)
+    n_positive = sorted(n for n in sweep_ns if n > 0)
+    max_n      = min(max(n_positive), len(lv_train)) if n_positive else 0
+    pool_idx   = rng.permutation(len(lv_train))[:max_n]
+
+    # detect input_dim from state dict
+    key       = next(k for k in hv_original_state
+                     if "context_projection.linear_layer.weight" in k)
+    input_dim = hv_original_state[key].shape[1]
+
+    results: Dict[str, Dict[int, Dict[str, object]]] = {}
+
+    for ft_mode in ft_modes:
+        results[ft_mode] = {}
+        print(f"\n[comparison sweep] ft_mode={ft_mode}")
+        for n in sorted(set(sweep_ns)):
+            k       = len(lv_train) if n == 0 else min(n, len(lv_train))
+            ft_data = lv_train if n == 0 else [lv_train[i] for i in pool_idx[:k]]
+            label   = "all" if n == 0 else str(n)
+            print(f"  n={label:>4s} ({len(ft_data)} traj) … ", end="", flush=True)
+
+            # Fresh model copy
+            model_n = _LM(num_hidden=128, input_dim=input_dim, output_dim=3)
+            model_n.load_state_dict(copy.deepcopy(hv_original_state))
+            model_n = model_n.to(device)
+            apply_ft_mode(model_n, ft_mode, verbose=False)
+
+            _, _, _, _, train_time = finetune(
+                model=model_n,
+                train_data=ft_data,
+                val_data=lv_val,
+                y_mean=lv_y_mean,
+                y_std=lv_y_std,
+                x_means_SP=lv_x_means,
+                output_dir=None,
+                verbose=False,
+                **finetune_kw,
+            )
+
+            theta_res, _ = eval_model_on_groups(
+                model_n, lv_groups, lv_y_mean, lv_y_std, **eval_kw
+            )
+            method_maes: Dict[str, float] = {}
+            for method in eval_kw["methods"]:
+                vals = [theta_res[t][method]
+                        for t in theta_res if method in theta_res[t]]
+                method_maes[method] = float(np.mean(vals)) if vals else float("nan")
+
+            results[ft_mode][n] = {
+                "mae":           method_maes.get("raw", float("nan")),
+                "train_time_s":  train_time,
+                "method_maes":   method_maes,
+            }
+            print(f"raw={method_maes.get('raw', float('nan')):.2f} m  "
+                  f"time={train_time:.1f}s")
+
+    return results
+
+
+def save_comparison_sweep_csv(
+    sweep_results: Dict[str, Dict[int, Dict[str, object]]],
+    oracle_mae:    float,
+    hv_raw_mae:    float,
+    output_dir:    Path,
+) -> None:
+    path = output_dir / "comparison_sweep.csv"
+    ft_modes = list(sweep_results.keys())
+    # collect all methods from first entry
+    first_mode = ft_modes[0]
+    first_n    = next(iter(sweep_results[first_mode]))
+    methods    = list(sweep_results[first_mode][first_n]["method_maes"].keys())  # type: ignore
+    gap = hv_raw_mae - oracle_mae
+
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        header = (["ft_mode", "ft_mode_label", "n_finetune", "n_label",
+                   "train_time_s"] +
+                  [f"mae_{m}" for m in methods] +
+                  ["pct_gap_closed_raw"])
+        w.writerow(header)
+        for ft_mode in ft_modes:
+            lbl = FT_MODE_LABELS.get(ft_mode, ft_mode)
+            for n in sorted(sweep_results[ft_mode].keys()):
+                entry    = sweep_results[ft_mode][n]
+                n_label  = "all" if n == 0 else str(n)
+                raw_mae  = entry["method_maes"].get("raw", float("nan"))  # type: ignore
+                pct      = 100.0 * (hv_raw_mae - raw_mae) / max(gap, 1e-6)
+                row = ([ft_mode, lbl, n, n_label,
+                        f"{entry['train_time_s']:.2f}"] +
+                       [f"{entry['method_maes'].get(m, float('nan')):.4f}"  # type: ignore
+                        for m in methods] +
+                       [f"{pct:.1f}"])
+                w.writerow(row)
+    print(f"[✓] Saved {path}")
+
+
+def plot_comparison_sweep(
+    sweep_results: Dict[str, Dict[int, Dict[str, object]]],
+    oracle_mae:    float,
+    hv_raw_mae:    float,
+    output_dir:    Path,
+    best_method:   str = "raw",
+) -> None:
+    """
+    Three-panel figure:
+      Left   — MAE (best online method) vs n_trajectories per ft_mode
+      Middle — Training time (s) vs n_trajectories per ft_mode
+      Right  — MAE vs Training time (Pareto-style scatter)
+    """
+    ft_modes  = list(sweep_results.keys())
+    mode_colors = {"full_decoder": "#27ae60", "last_layer": "#8e44ad"}
+    mode_markers = {"full_decoder": "o", "last_layer": "D"}
+
+    # Gather xs (sorted n values), excluding 0 first then append if present
+    all_ns: List[int] = []
+    for mode in ft_modes:
+        all_ns.extend(sweep_results[mode].keys())
+    ns_pos = sorted(set(n for n in all_ns if n != 0))
+    ns_sorted = ns_pos + ([0] if 0 in all_ns else [])
+    x_labels = ["all" if n == 0 else str(n) for n in ns_sorted]
+    x_pos    = np.arange(len(ns_sorted))
+
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(17, 5))
+
+    for ft_mode in ft_modes:
+        color  = mode_colors.get(ft_mode, "#555555")
+        marker = mode_markers.get(ft_mode, "s")
+        lbl    = FT_MODE_LABELS.get(ft_mode, ft_mode)
+        d      = sweep_results[ft_mode]
+
+        mae_vals  = np.array([d[n]["method_maes"].get(best_method, float("nan"))  # type: ignore
+                              for n in ns_sorted])
+        time_vals = np.array([d[n]["train_time_s"] for n in ns_sorted])
+
+        ax1.plot(x_pos, mae_vals,  color=color, marker=marker, lw=2,
+                 markersize=7, label=lbl)
+        ax2.plot(x_pos, time_vals, color=color, marker=marker, lw=2,
+                 markersize=7, label=lbl)
+        ax3.scatter(time_vals, mae_vals, color=color, marker=marker,
+                    s=70, label=lbl, zorder=3)
+        for i, n in enumerate(ns_sorted):
+            ax3.annotate(x_labels[i], (time_vals[i], mae_vals[i]),
+                         textcoords="offset points", xytext=(5, 3), fontsize=7)
+
+    # Reference lines
+    best_m_lbl = METHOD_LABELS.get(best_method, best_method)
+    for ax in (ax1, ax3):
+        ax.axhline(oracle_mae, color="#2c3e50", ls="-",  lw=1.5, alpha=0.7,
+                   label=f"Oracle ceiling ({oracle_mae:.2f} m)")
+        ax.axhline(hv_raw_mae, color="#e74c3c", ls="--", lw=1.5, alpha=0.7,
+                   label=f"HV raw baseline ({hv_raw_mae:.2f} m)")
+
+    # Format ax1: MAE vs n
+    ax1.set_xticks(x_pos);  ax1.set_xticklabels(x_labels, fontsize=9)
+    ax1.set_xlabel("Number of fine-tuning trajectories", fontsize=10)
+    ax1.set_ylabel(f"MAE — {best_m_lbl} (m)",          fontsize=10)
+    ax1.set_title("MAE vs fine-tuning trajectories",    fontsize=10)
+    ax1.legend(fontsize=8);  ax1.grid(alpha=0.35)
+    ax1.set_xlim(-0.5, len(ns_sorted) - 0.5)
+
+    # Format ax2: time vs n
+    ax2.set_xticks(x_pos);  ax2.set_xticklabels(x_labels, fontsize=9)
+    ax2.set_xlabel("Number of fine-tuning trajectories", fontsize=10)
+    ax2.set_ylabel("Training time (s)",                  fontsize=10)
+    ax2.set_title("Training time vs fine-tuning trajectories", fontsize=10)
+    ax2.legend(fontsize=8);  ax2.grid(alpha=0.35)
+    ax2.set_xlim(-0.5, len(ns_sorted) - 0.5)
+
+    # Format ax3: scatter MAE vs time
+    ax3.set_xlabel("Training time (s)", fontsize=10)
+    ax3.set_ylabel(f"MAE — {best_m_lbl} (m)", fontsize=10)
+    ax3.set_title("MAE vs training time (lower-left = better)", fontsize=10)
+    ax3.legend(fontsize=8);  ax3.grid(alpha=0.35)
+
+    plt.suptitle(
+        f"Fine-tuning comparison: full decoder vs last layer only\n"
+        f"(metric: {best_m_lbl}, oracle={oracle_mae:.2f} m, HV={hv_raw_mae:.2f} m)",
+        fontsize=10,
+    )
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    path = output_dir / "comparison_sweep_combined.png"
+    plt.savefig(path, dpi=160);  plt.close()
+    print(f"[✓] Saved {path}")
+
+    # Individual plots
+    _plot_comparison_panel(
+        sweep_results, oracle_mae, hv_raw_mae, ns_sorted, x_labels,
+        metric="mae", best_method=best_method, output_dir=output_dir,
+    )
+    _plot_comparison_panel(
+        sweep_results, oracle_mae, hv_raw_mae, ns_sorted, x_labels,
+        metric="time", best_method=best_method, output_dir=output_dir,
+    )
+
+
+def _plot_comparison_panel(
+    sweep_results: Dict[str, Dict[int, Dict[str, object]]],
+    oracle_mae:    float,
+    hv_raw_mae:    float,
+    ns_sorted:     List[int],
+    x_labels:      List[str],
+    metric:        str,
+    best_method:   str,
+    output_dir:    Path,
+) -> None:
+    ft_modes = list(sweep_results.keys())
+    mode_colors  = {"full_decoder": "#27ae60", "last_layer": "#8e44ad"}
+    mode_markers = {"full_decoder": "o",       "last_layer": "D"}
+    x_pos = np.arange(len(ns_sorted))
+    fig, ax = plt.subplots(figsize=(9, 5))
+    best_m_lbl = METHOD_LABELS.get(best_method, best_method)
+
+    for ft_mode in ft_modes:
+        color  = mode_colors.get(ft_mode, "#555555")
+        marker = mode_markers.get(ft_mode, "s")
+        lbl    = FT_MODE_LABELS.get(ft_mode, ft_mode)
+        d      = sweep_results[ft_mode]
+        if metric == "mae":
+            vals = np.array([d[n]["method_maes"].get(best_method, float("nan"))  # type: ignore
+                             for n in ns_sorted])
+        else:
+            vals = np.array([d[n]["train_time_s"] for n in ns_sorted])
+        ax.plot(x_pos, vals, color=color, marker=marker, lw=2, markersize=7, label=lbl)
+
+    if metric == "mae":
+        ax.axhline(oracle_mae, color="#2c3e50", ls="-",  lw=1.5, alpha=0.7,
+                   label=f"Oracle ({oracle_mae:.2f} m)")
+        ax.axhline(hv_raw_mae, color="#e74c3c", ls="--", lw=1.5, alpha=0.7,
+                   label=f"HV raw ({hv_raw_mae:.2f} m)")
+        ax.set_ylabel(f"MAE — {best_m_lbl} (m)", fontsize=11)
+        ax.set_title("MAE vs fine-tuning trajectories — full decoder vs last layer",
+                     fontsize=10)
+        fname = "comparison_sweep_mae.png"
+    else:
+        ax.set_ylabel("Training time (s)", fontsize=11)
+        ax.set_title("Training time vs fine-tuning trajectories — full decoder vs last layer",
+                     fontsize=10)
+        fname = "comparison_sweep_time.png"
+
+    ax.set_xticks(x_pos);  ax.set_xticklabels(x_labels, fontsize=9)
+    ax.set_xlabel("Number of fine-tuning trajectories", fontsize=11)
+    ax.legend(fontsize=9);  ax.grid(alpha=0.35)
+    ax.set_xlim(-0.5, len(ns_sorted) - 0.5)
+    plt.tight_layout()
+    path = output_dir / fname
+    plt.savefig(path, dpi=160);  plt.close()
+    print(f"[✓] Saved {path}")
+
 
 # ---------------------------------------------------------------------------
 # Data-efficiency sweep
@@ -436,7 +762,7 @@ def _run_single_sweep_point(
     model_n = _LM(num_hidden=128, input_dim=input_dim, output_dim=3)
     model_n.load_state_dict(copy.deepcopy(hv_original_state))
     model_n = model_n.to(device)
-    # silence freeze print during sweep
+    # silence freeze print during efficiency sweep (always full_decoder)
     for name, p in model_n.named_parameters():
         if name.startswith("latent_encoder") or name.startswith("deterministic_encoder"):
             p.requires_grad_(False)
@@ -451,7 +777,7 @@ def _run_single_sweep_point(
         output_dir=None,
         verbose=False,
         **finetune_kw,
-    )
+    )  # return value ignored — efficiency sweep only needs MAE
 
     theta_res, _ = eval_model_on_groups(
         model_n, lv_groups, lv_y_mean, lv_y_std, **eval_kw
@@ -1188,41 +1514,41 @@ def print_summary(
 # ---------------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="Fine-tune ANP decoder for OoD domain adaptation."
-    )
+    p = argparse.ArgumentParser(description="Fine-tune ANP decoder for OoD domain adaptation.")
     p.add_argument("--lowvar-ckpt",      type=Path, required=True)
     p.add_argument("--highvar-ckpt",     type=Path, required=True)
     p.add_argument("--lowvar-data-dir",  type=Path, required=True)
     p.add_argument("--highvar-data-dir", type=Path, required=True)
     p.add_argument("--topology",   type=str, default="ellipsoidal", choices=["ellipsoidal", "aligned", "random"])
     # Data / masking
-    p.add_argument("--num-sensors",      type=int, default=10)
-    p.add_argument("--num-time-points",  type=int, default=201)
-    p.add_argument("--sensor-drop-p",   type=float, default=0.2, help="Probability of dropping each sensor during fine-tuning.")
-    # Fine-tuning
-    p.add_argument("--finetune-n",  type=int, default=100, help="Number of lowvar train trajectories for fine-tuning (0 = use all).")
-    p.add_argument("--epochs",      type=int, default=300)
-    p.add_argument("--lr",          type=float, default=1e-4)
-    p.add_argument("--batch-size",  type=int, default=16)
-    p.add_argument("--patience",    type=int, default=50)
-    p.add_argument("--context",     type=int, default=30, help="Context percentage [0-100].")
+    p.add_argument("--num-sensors",     type=int,   default=10)
+    p.add_argument("--num-time-points", type=int,   default=201)
+    p.add_argument("--sensor-drop-p",  type=float,  default=0.2, help="Probability of dropping each sensor during fine-tuning.")
+    # Fine-tuning (single-run mode)
+    p.add_argument("--ft-mode", type=str, default="full_decoder", choices=FT_MODES, help="Which parts of the model to fine-tune.")
+    p.add_argument("--finetune-n",  type=int,   default=100, help="Trajectories for fine-tuning in single-run mode (0=all).")
+    p.add_argument("--epochs",      type=int,   default=500)
+    p.add_argument("--lr",          type=float, default=3e-4)
+    p.add_argument("--batch-size",  type=int,   default=8)
+    p.add_argument("--patience",    type=int,   default=100)
+    p.add_argument("--context",     type=int,   default=40, help="Context percentage [0-100].")
     # Evaluation
-    p.add_argument("--dt",          type=float, default=1.0)
-    p.add_argument("--sigma-a",     type=float, default=1.0)
-    p.add_argument("--ar-block-k",       type=int,   default=5)
-    p.add_argument("--ar-var-thresh",    type=float, default=0.01)
-    p.add_argument("--seed",        type=int, default=EVAL_SEED)
-    p.add_argument("--output-dir",  type=Path, default=Path("results/finetune_decoder_ood"))
-    # Data-efficiency sweep
-    p.add_argument("--efficiency-sweep", action="store_true", help="Run data-efficiency sweep over --sweep-ns values.")
-    p.add_argument("--sweep-ns", type=str, default="10,20,50,100,200,0", help="Comma-separated list of n values for the sweep (0 = all training data).")
-    p.add_argument("--include-rts", action="store_true",
-                   help="Also evaluate offline RTS smoother methods (kalman_rts_var, ar_kalman_rts_var).")
-    p.add_argument("--alpha-ab", type=float, default=0.85,
-                   help="Alpha gain for the alpha-beta filter.")
-    p.add_argument("--beta-ab",  type=float, default=0.005,
-                   help="Beta gain for the alpha-beta filter.")
+    p.add_argument("--dt",            type=float, default=1.0)
+    p.add_argument("--sigma-a",       type=float, default=1.0)
+    p.add_argument("--ar-block-k",    type=int,   default=5)
+    p.add_argument("--ar-var-thresh", type=float, default=0.01)
+    p.add_argument("--seed",          type=int,   default=EVAL_SEED)
+    p.add_argument("--output-dir",    type=Path, default=Path("results/finetune_decoder_ood"))
+    # Post-processing
+    p.add_argument("--include-rts", action="store_true", help="Also evaluate offline RTS smoother methods.")
+    p.add_argument("--alpha-ab", type=float, default=0.85)
+    p.add_argument("--beta-ab",  type=float, default=0.005)
+    # Data-efficiency sweep (legacy single-mode)
+    p.add_argument("--efficiency-sweep", action="store_true", help="Run data-efficiency sweep (full_decoder only).")
+    p.add_argument("--sweep-ns", type=str, default="10,20,50,100,200,0", help="Comma-separated n values for sweeps (0=all data).")
+    # Comparison sweep  (both modes × all n values)
+    p.add_argument("--comparison-sweep", action="store_true", help="Compare full_decoder vs last_layer across --sweep-ns trajectory counts, measuring MAE and training time.")
+    p.add_argument("--comparison-best-method", type=str, default="raw", help="Method used as the MAE metric in comparison plots.")
     return p.parse_args()
 
 
@@ -1301,12 +1627,12 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     # 4. Fine-tune decoder
     # ------------------------------------------------------------------ #
-    print("\n[fine-tune] freezing encoders …")
-    freeze_encoders(hv_model)
+    print(f"\n[fine-tune] mode={args.ft_mode} — applying freeze …")
+    apply_ft_mode(hv_model, args.ft_mode)
 
-    print(f"[fine-tune] training decoder for up to {args.epochs} epochs "
+    print(f"[fine-tune] training for up to {args.epochs} epochs "
           f"(lr={args.lr}, patience={args.patience}) …\n")
-    tr_nll, vl_nll, tr_mae, vl_mae = finetune(
+    tr_nll, vl_nll, tr_mae, vl_mae, ft_train_time = finetune(
         model=hv_model,
         train_data=ft_train,
         val_data=lv_val,
@@ -1328,6 +1654,7 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     # 5. Post fine-tuning evaluation
     # ------------------------------------------------------------------ #
+    print(f"\n[fine-tune] completed in {ft_train_time:.1f} s")
     print("\n[eval] fine-tuned model …")
     hv_model.eval()
     ft_res, ft_lats = eval_model_on_groups(
@@ -1337,46 +1664,53 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     # 6. Outputs
     # ------------------------------------------------------------------ #
+    ft_label = FT_MODE_LABELS.get(args.ft_mode, args.ft_mode)
     plot_finetune_curves(tr_nll, vl_nll, tr_mae, vl_mae, args.output_dir)
-    plot_mae_comparison(oracle_res, hv_res, ft_res, "FT decoder", eval_methods, args.output_dir)
+    plot_mae_comparison(oracle_res, hv_res, ft_res, ft_label, eval_methods, args.output_dir)
     save_comparison_csv(
         {"oracle": oracle_res, "highvar_baseline": hv_res, "finetuned_decoder": ft_res},
         thetas,
         args.output_dir,
     )
-    print_summary(oracle_res, hv_res, ft_res, eval_methods, "FT decoder")
+    print_summary(oracle_res, hv_res, ft_res, eval_methods, ft_label)
     save_latency_csv(
-        {"HV baseline": hv_lats, "FT decoder": ft_lats},
+        {"HV baseline": hv_lats, f"{ft_label}": ft_lats},
         eval_methods,
         args.output_dir,
     )
     plot_latency_comparison(
-        {"HV baseline": hv_lats, "FT decoder": ft_lats},
+        {"HV baseline": hv_lats, f"{ft_label}": ft_lats},
         eval_methods,
         args.output_dir,
     )
 
     # ------------------------------------------------------------------ #
-    # 7. Data-efficiency sweep (optional)
+    # 7. Data-efficiency sweep (optional, full_decoder only)
     # ------------------------------------------------------------------ #
+    def _mean_all(res, method):
+        v = [res[t][method] for t in res
+             if method in res[t] and not np.isnan(res[t][method])]
+        return float(np.mean(v)) if v else float("nan")
+
+    oracle_mean = _mean_all(oracle_res, "raw")
+    hv_mean     = _mean_all(hv_res,     "raw")
+
+    # Shared finetune kwargs
+    ft_kw = dict(
+        device=device,
+        num_time_points=args.num_time_points,
+        num_sensors=args.num_sensors,
+        ctx_pct=args.context,
+        lr=args.lr,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        patience=args.patience,
+        p_drop=args.sensor_drop_p,
+    )
+
     if args.efficiency_sweep:
         sweep_ns = [int(x.strip()) for x in args.sweep_ns.split(",") if x.strip()]
         print(f"\n[efficiency sweep] n values: {sweep_ns}")
-
-        # Shared finetune kwargs — only hyperparams; data/output_dir/verbose
-        # are injected per-point inside _run_single_sweep_point
-        ft_kw = dict(
-            device=device,
-            num_time_points=args.num_time_points,
-            num_sensors=args.num_sensors,
-            ctx_pct=args.context,
-            lr=args.lr,
-            epochs=args.epochs,
-            batch_size=args.batch_size,
-            patience=args.patience,
-            p_drop=args.sensor_drop_p,
-        )
-
         sweep_res = run_efficiency_sweep(
             hv_original_state=hv_original_state,
             lv_train=lv_train,
@@ -1391,18 +1725,36 @@ def main() -> None:
             finetune_kw=ft_kw,
             eval_kw=eval_kw,
         )
-
-        # oracle and hv baselines (mean across thetas)
-        def _mean_all(res, method):
-            v = [res[t][method] for t in res
-                 if method in res[t] and not np.isnan(res[t][method])]
-            return float(np.mean(v)) if v else float("nan")
-
-        oracle_mean = _mean_all(oracle_res, "raw")
-        hv_mean     = _mean_all(hv_res,     "raw")
-
         save_efficiency_csv(sweep_res, oracle_mean, hv_mean, args.output_dir)
         plot_efficiency_curve(sweep_res, oracle_mean, hv_mean, args.output_dir)
+
+    # ------------------------------------------------------------------ #
+    # 8. Comparison sweep  (full_decoder vs last_layer × sweep_ns)
+    # ------------------------------------------------------------------ #
+    if args.comparison_sweep:
+        sweep_ns = [int(x.strip()) for x in args.sweep_ns.split(",") if x.strip()]
+        print(f"\n[comparison sweep] modes={FT_MODES}  n values={sweep_ns}")
+        comp_res = run_comparison_sweep(
+            hv_original_state=hv_original_state,
+            lv_train=lv_train,
+            lv_val=lv_val,
+            lv_groups=lv_groups,
+            lv_y_mean=lv_y_mean,
+            lv_y_std=lv_y_std,
+            lv_x_means=lv_x_means,
+            device=device,
+            sweep_ns=sweep_ns,
+            ft_modes=FT_MODES,
+            seed=args.seed,
+            finetune_kw=ft_kw,
+            eval_kw=eval_kw,
+        )
+        save_comparison_sweep_csv(comp_res, oracle_mean, hv_mean, args.output_dir)
+        plot_comparison_sweep(
+            comp_res, oracle_mean, hv_mean,
+            args.output_dir,
+            best_method=args.comparison_best_method,
+        )
 
     print(f"\n[done] all outputs in {args.output_dir}")
 
