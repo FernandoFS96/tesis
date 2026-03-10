@@ -5,45 +5,48 @@ This script trains ANP models with sensor masking for each topology and logs det
 
 Usage:
 Using bernoulli dropout with 20% drop probability and filling masked sensors with training mean:
-python train_anp_topologies_masked.py \
-  --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-  --batch-size 8 \
-  --epochs 3000 \
-  --ctx-sample-mode first \
-  --patience 200 \
-  --num-sensors 10 \
-  --num-time-points 201 \
-  --sensor-drop-mode bernoulli \
-  --sensor-drop-p 0.2 \
-  --mask-fill train_mean \
-  --topologies random,ellipsoidal,aligned \
+    cd underwater-localization-topologies/src/training
+    python train_anp_topologies_masked.py \
+        --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+        --batch-size 8 \
+        --epochs 3000 \
+        --ctx-sample-mode first \
+        --patience 200 \
+        --num-sensors 10 \
+        --num-time-points 201 \
+        --sensor-drop-mode bernoulli \
+        --sensor-drop-p 0.2 \
+        --mask-fill train_mean \
+        --topologies random,ellipsoidal,aligned \
 
   Using k-uniform dropout with random k:
-python train_anp_topologies_masked.py \
-  --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-  --batch-size 8 \
-  --epochs 5000 \
-  --ctx-sample-mode first \
-  --patience 500 \
-  --num-sensors 10 \
-  --num-time-points 201 \
-  --sensor-drop-mode k_uniform \
-  --mask-fill train_mean \
-  --topologies aligned,ellipsoidal,random
+    cd underwater-localization-topologies/src/training
+    python train_anp_topologies_masked.py \
+      --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+      --batch-size 8 \
+      --epochs 5000 \
+      --ctx-sample-mode first \
+      --patience 500 \
+      --num-sensors 10 \
+      --num-time-points 201 \
+      --sensor-drop-mode k_uniform \
+      --mask-fill train_mean \
+      --topologies aligned,ellipsoidal,random
 
 Using bernoulli dropout with 20% drop probability and filling masked sensors with training mean but for high variance data:
-python train_anp_topologies_masked.py \
-  --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
-  --batch-size 16 \
-  --epochs 3000 \
-  --ctx-sample-mode first \
-  --patience 200 \
-  --num-sensors 10 \
-  --num-time-points 201 \
-  --sensor-drop-mode bernoulli \
-  --sensor-drop-p 0.2 \
-  --mask-fill train_mean \
-  --topologies random,ellipsoidal,aligned
+    cd underwater-localization-topologies/src/training
+    python train_anp_topologies_masked.py \
+      --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
+      --batch-size 16 \
+      --epochs 3000 \
+      --ctx-sample-mode first \
+      --patience 200 \
+      --num-sensors 10 \
+      --num-time-points 201 \
+      --sensor-drop-mode bernoulli \
+      --sensor-drop-p 0.2 \
+      --mask-fill train_mean \
+      --topologies random,ellipsoidal,aligned
 '''
 
 import csv

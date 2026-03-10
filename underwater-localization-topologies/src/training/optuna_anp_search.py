@@ -8,36 +8,43 @@ Optuna wrapper for ANP and RANP masked training scripts.
 - Supports pruning (requires trial.report + trial.should_prune hooks in the training function).
 
 Run ANP (single process):
-  python optuna_anp_search.py \
+    cd underwater-localization-topologies/src/training
+    python optuna_anp_search.py \
     --model anp \
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
     --topologies ellipsoidal \
     --objective-topology ellipsoidal \
-    --n-trials 20 \
+    --n-trials 50 \
     --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
-    --study-name anp_masked_v6 \
+    --study-name anp_masked_lowvar_ellipsoidal_v1 \
+    --constant-liar \
+    --cleanup-trial-checkpoints \
     --disable-pruning
 
 Run RANP (single process):
-  python optuna_anp_search.py \
+    cd underwater-localization-topologies/src/training
+    python optuna_anp_search.py \
     --model ranp \
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
     --topologies ellipsoidal \
     --objective-topology ellipsoidal \
-    --n-trials 20 \
+    --n-trials 50 \
     --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_ranp.db \
-    --study-name ranp_masked_v1 \
+    --study-name ranp_masked_lowvar_ellipsoidal_v1 \
+    --constant-liar \
+    --cleanup-trial-checkpoints \
     --disable-pruning
 
 Resume:
-  python optuna_anp_search.py \
-    --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-  --topologies ellipsoidal \
-  --objective-topology ellipsoidal \
-  --n-trials 200 \
-  --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
-  --study-name anp_masked_v6 \
-  --device cuda
+    cd underwater-localization-topologies/src/training
+    python optuna_anp_search.py \
+        --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+        --topologies ellipsoidal \
+        --objective-topology ellipsoidal \
+        --n-trials 200 \
+        --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
+        --study-name anp_masked_lowvar_ellipsoidal_v1 \
+        --device cuda
 
 With nohup and redirect to log:
     nohup python optuna_anp_search.py \
@@ -46,11 +53,11 @@ With nohup and redirect to log:
         --objective-topology ellipsoidal \
         --n-trials 200 \
         --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
-        --study-name anp_masked_v6 \
-        > optuna_anp_masked_v6_$(date +%F_%H%M%S)_$$.log 2>&1 &
+        --study-name anp_masked_lowvar_ellipsoidal_v1 \
+        > optuna_anp_masked_lowvar_ellipsoidal_v1_$(date +%F_%H%M%S)_$$.log 2>&1 &
 
     monitor with:
-    tail -f optuna_anp_masked_v6_$(date +%F_%H%M%S)_$$.log 2>&1 &
+    tail -f optuna_anp_masked_lowvar_ellipsoidal_v1_$(date +%F_%H%M%S)_$$.log 2>&1 &
 
 Parallel: start multiple processes pointing to the same storage+study:
   # terminal 1
@@ -62,8 +69,10 @@ Parallel: start multiple processes pointing to the same storage+study:
 import argparse
 import json
 import os
+import shutil
 from pathlib import Path
 import time
+from typing import Callable
 
 import optuna
 from optuna.samplers import TPESampler
@@ -71,6 +80,58 @@ from optuna.pruners import MedianPruner
 
 # IMPORTANT: run this script from the project root (so src/ is importable), or PYTHONPATH must include the project root.
 import importlib.util as _importlib_util
+
+
+def _make_best_model_callback(results_root: Path) -> Callable:
+    """Returns an Optuna callback that copies the best trial's checkpoints to best_model/."""
+
+    def callback(study: optuna.Study, trial: optuna.trial.FrozenTrial) -> None:
+        if trial.state != optuna.trial.TrialState.COMPLETE:
+            return
+        if study.best_trial.number != trial.number:
+            return
+
+        trial_dir_str = trial.user_attrs.get("trial_dir")
+        if trial_dir_str is None:
+            return
+        trial_dir = Path(trial_dir_str)
+        best_dir = results_root / "best_model"
+
+        if best_dir.exists():
+            shutil.rmtree(best_dir)
+        best_dir.mkdir(parents=True, exist_ok=True)
+
+        # Copy hparams.json
+        hparams_src = trial_dir / "hparams.json"
+        if hparams_src.exists():
+            shutil.copy2(str(hparams_src), str(best_dir / "hparams.json"))
+
+        # Copy best_checkpoint.pth.tar from each topology subdirectory
+        for topo_dir in sorted(trial_dir.iterdir()):
+            if not topo_dir.is_dir():
+                continue
+            ckpt_src = topo_dir / "best_checkpoint.pth.tar"
+            if ckpt_src.exists():
+                dest_dir = best_dir / topo_dir.name
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(ckpt_src), str(dest_dir / "best_checkpoint.pth.tar"))
+
+        # Save trial metadata alongside the checkpoint
+        info = {
+            "trial_number": trial.number,
+            "value": trial.value,
+            "params": trial.params,
+            "user_attrs": {k: v for k, v in trial.user_attrs.items() if k != "trial_dir"},
+        }
+        with open(str(best_dir / "trial_info.json"), "w") as f:
+            json.dump(info, f, indent=2)
+
+        print(
+            f"\n[best_model] Trial {trial.number} is new best "
+            f"(MAE={trial.value:.6f}). Checkpoints saved to {best_dir}\n"
+        )
+
+    return callback
 
 
 def make_objective(args):
@@ -106,8 +167,8 @@ def make_objective(args):
         # ---------------------------
         hp = {
             # model / optimizer
-            "num_hidden": trial.suggest_int("num_hidden", 192, 320, step=64), 
-            "lr": trial.suggest_categorical("lr", [7e-4,5e-4, 3e-4, 1e-4]),
+            "num_hidden": trial.suggest_int("num_hidden", 128, 320, step=64), 
+            "lr": trial.suggest_categorical("lr", [7e-4, 5e-4, 3e-4, 1e-4]),
             "weight_decay": trial.suggest_categorical("weight_decay", [1e-3, 5e-4, 1e-4, 5e-5, 1e-5]),
 
             # training dynamics
@@ -176,7 +237,7 @@ def make_objective(args):
                 weight_decay=hp["weight_decay"],
                 trial=trial,
                 report_every=args.report_every,
-                save_checkpoints=False,
+                save_checkpoints=True,
             )
             if args.model == "ranp":
                 train_kwargs.update(
@@ -227,13 +288,15 @@ def main():
     p.add_argument("--results-dir", type=str, default="results/optuna")
     p.add_argument("--report-every", type=int, default=50, help="Epoch interval for trial.report() in training (pruning granularity).")
     p.add_argument("--disable-pruning", action="store_true", help="Disable Optuna pruning so all trials run to completion.")
+    p.add_argument("--constant-liar", action="store_true", help="Enable constant_liar in TPESampler to reduce duplicate hyperparameter suggestions when running multiple parallel workers on the same study.")
 
     # For GPU training, keep n_jobs=1 and parallelize with multiple processes (same --storage).
     p.add_argument("--n-jobs", type=int, default=1)
+    p.add_argument("--cleanup-trial-checkpoints", action="store_true", help="After each trial, delete its checkpoint files to save space (only the best model is kept in best_model/).")
 
     args = p.parse_args()
 
-    sampler = TPESampler(seed=args.seed)
+    sampler = TPESampler(seed=args.seed, constant_liar=args.constant_liar)
     if args.disable_pruning:
         pruner = optuna.pruners.NopPruner()
     else:
@@ -253,14 +316,42 @@ def main():
         load_if_exists=True,
     )
 
+    results_root = Path(args.results_dir) / args.study_name
+    results_root.mkdir(parents=True, exist_ok=True)
+
     objective = make_objective(args)
-    study.optimize(objective, n_trials=args.n_trials, timeout=args.timeout, n_jobs=args.n_jobs)
+
+    callbacks = [_make_best_model_callback(results_root)]
+
+    if args.cleanup_trial_checkpoints:
+        def _cleanup_callback(study: optuna.Study, trial: optuna.trial.FrozenTrial) -> None:
+            """Delete checkpoint files from trial dirs that are NOT the current best."""
+            if trial.state != optuna.trial.TrialState.COMPLETE:
+                return
+            if study.best_trial.number == trial.number:
+                return  # keep the best (already copied by the other callback)
+            trial_dir_str = trial.user_attrs.get("trial_dir")
+            if trial_dir_str is None:
+                return
+            for ckpt in Path(trial_dir_str).rglob("*.pth.tar"):
+                try:
+                    ckpt.unlink()
+                except OSError:
+                    pass
+        callbacks.append(_cleanup_callback)
+
+    study.optimize(objective, n_trials=args.n_trials, timeout=args.timeout,
+                   n_jobs=args.n_jobs, callbacks=callbacks)
 
     print("\nBest trial:")
     bt = study.best_trial
     print("  value (mean val MAE):", bt.value)
     print("  params:", bt.params)
     print("  user attrs:", bt.user_attrs)
+
+    best_dir = results_root / "best_model"
+    if best_dir.exists():
+        print(f"\nBest model checkpoints saved to: {best_dir}")
 
 
 if __name__ == "__main__":
