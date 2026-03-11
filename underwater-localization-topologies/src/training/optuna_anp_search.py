@@ -184,13 +184,13 @@ def make_objective(args):
         }
 
         # batch-size often interacts with lr; keep a small menu
-        hp["batch_size"] = trial.suggest_categorical("batch_size", [4, 8])
+        hp["batch_size"] = trial.suggest_categorical("batch_size", [4, 8, 16])
 
         # RANP-specific: RNN encoder hyperparameters
         if args.model == "ranp":
             hp["rnn_type"]       = trial.suggest_categorical("rnn_type", ["lstm", "gru"])
             hp["rnn_hidden_dim"] = trial.suggest_categorical("rnn_hidden_dim", [64, 128, 192, 256])
-            hp["rnn_layers"]     = trial.suggest_int("rnn_layers", 1, 2, 3)
+            hp["rnn_layers"]     = trial.suggest_int("rnn_layers", 1, 3, step=1)
             hp["rnn_dropout"]    = trial.suggest_categorical("rnn_dropout", [0.0, 0.1, 0.2])
 
         # ---------------------------
@@ -271,7 +271,7 @@ def main():
 
     # training settings (keep these fixed during HPO; tune them only if you really need)
     p.add_argument("--epochs", type=int, default=3000)
-    p.add_argument("--patience", type=int, default=150)
+    p.add_argument("--patience", type=int, default=200)
     p.add_argument("--device", type=str, default="cuda")
 
     # data/model sizes needed by masking layout
