@@ -795,7 +795,7 @@ class MahalanobisPostProcessor(PostProcessor):
                     S: np.ndarray) -> float:
         diff  = (z - z_pred).reshape(-1, 1)
         try:
-            d2 = float(diff.T @ np.linalg.inv(S) @ diff)
+            d2 = float((diff.T @ np.linalg.inv(S) @ diff).item())
         except np.linalg.LinAlgError:
             return float("inf")
         return float(np.sqrt(max(d2, 0.0)))
@@ -1168,7 +1168,7 @@ def save_qualitative_plots(
         # Mark context / target
         ctx_idx = np.where(bundle.ctx_mask)[0]
         ax.scatter(gt[ctx_idx, 0], gt[ctx_idx, 1],
-                   marker="o", c="gray", s=25, zorder=9, label="Context (GT)")
+                   marker="o", c="red", s=25, zorder=9, label="Context (GT)")
 
         ax.set_xlabel("x (m)"); ax.set_ylabel("z (m)")
         ax.set_title(f"Trajectory #{idx}  θ={bundle.theta:.2f}", fontsize=11)
@@ -1221,7 +1221,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="Random search trials per postprocessor method")
     # ── misc ──
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--seed", type=int, default=18)
     p.add_argument("--extra-configs", default=None,
                    help="JSON string: list of extra ModelConfig dicts to also evaluate")
     p.add_argument("--no-cache", action="store_true",
