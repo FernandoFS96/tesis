@@ -2,8 +2,7 @@
 """
 eval_postprocessing_comparison.py
 ==================================
-Modular benchmark of online (causal) trajectory postprocessors applied to the
-raw predictions of an ANP (or RANP) model.
+Modular benchmark of online trajectory postprocessors applied to theraw predictions of an ANP (or RANP) model.
 
 Postprocessors implemented
 --------------------------
@@ -12,16 +11,13 @@ Postprocessors implemented
 3. EMA-Var      - variance-weighted adaptive EMA        [ alpha_base, sigma_ref ]
 4. EKF          - Kalman filter, constant-velocity model [ sigma_a, R_scale ]
 5. UKF          - Unscented Kalman filter (CV)           [ sigma_a, R_scale, ukf_alpha ]
-6. Mahalanobis  - Gated KF: outlier rejection via
-                  Mahalanobis distance                   [ mahal_thresh, sigma_a, R_scale ]
+6. Mahalanobis  - Gated KF: outlier rejection via Mahalanobis distance [ mahal_thresh, sigma_a, R_scale ]
 
 All postprocessors are strictly causal (use only t <= current timestep).
-EKF/UKF use the model's predicted variance (sigma^2) as the measurement noise
-matrix R, making them naturally exploit the probabilistic ANP output.
+EKF/UKF use the model's predicted variance (sigma^2) as the measurement noise matrix R, making them naturally exploit the probabilistic ANP output.
 
-For each method with tunable hyperparameters a random search over a parameter
-grid is performed on the validation set.  Final evaluation is on the held-out
-test set.
+For each method with tunable hyperparameters a random search over a parameter grid is performed on the validation set.
+Final evaluation is on the held-out test set.
 
 Outputs (saved to --output-dir)
 --------------------------------
@@ -214,23 +210,16 @@ def denormalize_y(y_norm: torch.Tensor, mean: torch.Tensor, std: torch.Tensor) -
 @dataclass
 class PredBundle:
     """Pre-computed model predictions for one trajectory."""
-    mean_real: np.ndarray   # (T, 3) de-normalised mean
-    var_real:  np.ndarray   # (T, 3) de-normalised variance (sigma^2)
-    gt_real:   np.ndarray   # (T, 3) ground truth
-    ctx_mask:  np.ndarray   # (T,)   bool - True for context points
-    theta:     float = 0.0
+    mean_real:    np.ndarray   # (T, 3) de-normalised mean
+    var_real:     np.ndarray   # (T, 3) de-normalised variance (sigma^2)
+    gt_real:      np.ndarray   # (T, 3) ground truth
+    ctx_mask:     np.ndarray   # (T,)   bool - True for context points
+    theta:        float = 0.0
+    infer_time_s: float = 0.0  # model forward-pass wall time for this trajectory (s)
 
 
 @torch.no_grad()
-def run_inference(
-    model: torch.nn.Module,
-    model_type: str,
-    data: list,
-    thetas: list,
-    y_mean: torch.Tensor,
-    y_std:  torch.Tensor,
-    ctx_frac: float,
-    device: torch.device,
+def run_inference(model: torch.nn.Module, model_type: str, data: list, thetas: list, y_mean: torch.Tensor, y_std:  torch.Tensor, ctx_frac: float, device: torch.device,
 ) -> List[PredBundle]:
     """Run model inference on all trajectories, return PredBundle list."""
     bundles: List[PredBundle] = []
@@ -259,13 +248,13 @@ def run_inference(
         ctx_y  = y_norm[:, ctx_idx, :]   # (1, Nc, 3)
         tar_y  = y_norm[:, tar_idx, :]   # (1, T,  3)
 
+        _t_infer_start = time.perf_counter()
         if model_type == "anp":
             ctx_x = x_aug[:, ctx_idx, :]
             tar_x = x_aug[:, tar_idx, :]
             mean_norm, var_norm, *_ = model(ctx_x, ctx_y, tar_x)
         elif model_type == "ranp":
-            mean_norm, var_norm, *_ = model(
-                x_seq=x_aug,
+            mean_norm, var_norm, *_ = model(x_seq=x_aug,
                 context_indices=ctx_idx,
                 context_y=ctx_y,
                 target_indices=tar_idx,
@@ -273,22 +262,23 @@ def run_inference(
             )
         else:
             raise ValueError(f"Unknown model_type: {model_type!r}")
+        _infer_time = time.perf_counter() - _t_infer_start
 
         mean_real = denormalize_y(mean_norm, y_mean, y_std)[0].cpu().numpy()  # (T, 3)
         # var_norm is in normalised space; convert to real units: var_real = var_norm * y_std^2
-        var_real  = (var_norm[0].cpu().numpy() * (y_std_np ** 2))              # (T, 3)
+        var_real  = (var_norm[0].cpu().numpy() * (y_std_np ** 2)) # (T, 3)
 
-        gt_np     = y_gt[0].cpu().numpy()                                       # (T, 3)
+        gt_np     = y_gt[0].cpu().numpy() # (T, 3)
 
         ctx_mask_np = np.zeros(T, dtype=bool)
         ctx_mask_np[:n_ctx] = True
 
-        bundles.append(PredBundle(
-            mean_real=mean_real,
+        bundles.append(PredBundle(mean_real=mean_real,
             var_real=var_real,
             gt_real=gt_np,
             ctx_mask=ctx_mask_np,
             theta=float(theta) if not isinstance(theta, float) else theta,
+            infer_time_s=_infer_time,
         ))
 
     return bundles
@@ -308,8 +298,7 @@ class PostProcessor(ABC):
     def apply(self, bundle: PredBundle) -> np.ndarray:
         """Apply postprocessing, return filtered trajectory (T, 2) for x-z plane.
 
-        Context points are overwritten with ground truth (position is known
-        from initial conditioning, as in deployment).
+        Context points are overwritten with ground truth (position is known from initial conditioning, as in deployment).
         """
 
     def apply_timed(self, bundle: PredBundle) -> Tuple[np.ndarray, float]:
@@ -395,10 +384,8 @@ class EMAVarPostProcessor(PostProcessor):
     """Variance-weighted EMA with velocity extrapolation to avoid positional drift.
 
     At each target step t:
-      1. Compute a velocity-extrapolated "predicted" position from the last two
-         filtered estimates:  predicted[t] = out[t-1] + (out[t-1] - out[t-2])
-      2. Blend the raw ANP prediction with the predicted position using an
-         adaptive weight that scales with model confidence:
+      1. Compute a velocity-extrapolated "predicted" position from the last two filtered estimates:  predicted[t] = out[t-1] + (out[t-1] - out[t-2])
+      2. Blend the raw ANP prediction with the predicted position using an adaptive weight that scales with model confidence:
 
          alpha(t) = clip( sigma_ref / (sigma_xz(t) + sigma_ref), alpha_min, alpha_max )
 
@@ -407,8 +394,7 @@ class EMAVarPostProcessor(PostProcessor):
          Small sigma  → model is confident → alpha high → trust new prediction.
          Large sigma  → model is uncertain → alpha low  → rely on vel-extrapolated state.
 
-    The velocity extrapolation step prevents the estimate from freezing when the
-    model is uncertain (alpha ≈ 0), which would cause unbounded positional drift.
+    The velocity extrapolation step prevents the estimate from freezing when the model is uncertain (alpha ≈ 0), which would cause unbounded positional drift.
 
     Parameters
     ----------
@@ -531,8 +517,7 @@ class EKFPostProcessor(PostProcessor):
 
     This is the key advantage over a classical Kalman filter with fixed R.
 
-    At context points the filter is updated with ground truth (R = 0 / hard
-    constraint) so the vehicle's known initial positions are honoured.
+    At context points the filter is updated with ground truth (R = 0 / hard constraint) so the vehicle's known initial positions are honoured.
 
     Parameters
     ----------
@@ -601,7 +586,7 @@ class EKFPostProcessor(PostProcessor):
 # UKF helpers — Merwe scaled sigma points
 # ═══════════════════════════════════════════════════════════════════════════════
 # Note: for the linear CV model, UKF and standard KF yield identical results.
-# The UKF implementation is here to support future nonlinear dynamics extensions.
+# The UKF implementation is to support possible nonlinear dynamics extensions.
 
 def _ukf_weights(n: int, alpha: float = 1.0, kappa: float = 0.0, beta: float = 2.0
                  ) -> Tuple[np.ndarray, np.ndarray, float]:
@@ -639,8 +624,7 @@ def _sigma_points(mean: np.ndarray, P: np.ndarray, lam: float) -> np.ndarray:
     return sigmas
 
 
-def _ukf_predict(x: np.ndarray, P: np.ndarray, F: np.ndarray, Q: np.ndarray,
-                 Wm: np.ndarray, Wc: np.ndarray, lam: float
+def _ukf_predict(x: np.ndarray, P: np.ndarray, F: np.ndarray, Q: np.ndarray, Wm: np.ndarray, Wc: np.ndarray, lam: float
                  ) -> Tuple[np.ndarray, np.ndarray]:
     n      = len(x)
     sigmas = _sigma_points(x, P, lam)                    # (2n+1, n)
@@ -652,9 +636,7 @@ def _ukf_predict(x: np.ndarray, P: np.ndarray, F: np.ndarray, Q: np.ndarray,
     return x_p, P_p
 
 
-def _ukf_update(x_p: np.ndarray, P_p: np.ndarray,
-                z: np.ndarray, H: np.ndarray, R: np.ndarray,
-                Wm: np.ndarray, Wc: np.ndarray, lam: float
+def _ukf_update(x_p: np.ndarray, P_p: np.ndarray, z: np.ndarray, H: np.ndarray, R: np.ndarray, Wm: np.ndarray, Wc: np.ndarray, lam: float
                 ) -> Tuple[np.ndarray, np.ndarray]:
     n      = len(x_p)
     sigmas = _sigma_points(x_p, P_p, lam)                # (2n+1, n)
@@ -680,8 +662,7 @@ class UKFPostProcessor(PostProcessor):
 
     Uses the same ANP variance → R strategy as EKFPostProcessor.
     For the linear CV model the results are numerically identical to EKF;
-    the sigma-point machinery is here for easy extension to nonlinear motion
-    models (e.g. Dubins curve, coordinated turn) in the future.
+    the sigma-point machinery is for easy extension to nonlinear motion models in the future.
 
     Parameters
     ----------
@@ -692,8 +673,7 @@ class UKFPostProcessor(PostProcessor):
     ukf_alpha : sigma-point spread parameter (alpha=1 → standard symmetric UT)
     """
 
-    def __init__(self, sigma_a: float = 0.5, R_scale: float = 1.0,
-                 dt: float = 1.0, init_P: float = 10.0, ukf_alpha: float = 1.0):
+    def __init__(self, sigma_a: float = 0.5, R_scale: float = 1.0, dt: float = 1.0, init_P: float = 10.0, ukf_alpha: float = 1.0):
         self._sigma_a   = float(sigma_a)
         self._R_scale   = float(R_scale)
         self._dt        = float(dt)
@@ -701,8 +681,7 @@ class UKFPostProcessor(PostProcessor):
         self._ukf_alpha = float(ukf_alpha)
 
         n = 4  # state dimension for CV model
-        self._Wm, self._Wc, self._lam = _ukf_weights(
-            n, alpha=self._ukf_alpha, kappa=0.0, beta=2.0
+        self._Wm, self._Wc, self._lam = _ukf_weights( n, alpha=self._ukf_alpha, kappa=0.0, beta=2.0
         )
 
     @property
@@ -763,26 +742,22 @@ class MahalanobisPostProcessor(PostProcessor):
 
     At each target timestep:
       1. Predict state forward with CV dynamics.
-      2. Compute Mahalanobis distance between raw ANP prediction and
-         predicted position using the innovation covariance S = H*P*H^T + R.
+      2. Compute Mahalanobis distance between raw ANP prediction and predicted position using the innovation covariance S = H*P*H^T + R.
       3. If distance > mahal_thresh: output predicted position (reject raw pred).
          If distance <= mahal_thresh: standard KF update with raw ANP prediction.
 
-    This makes the filter robust to large, spurious acoustic measurement errors
-    without completely discarding the uncertainty information from the model.
+    This makes the filter robust to large, spurious acoustic measurement errors without completely discarding the uncertainty information from the model.
 
     Parameters
     ----------
-    mahal_thresh : Mahalanobis distance threshold for rejection
-                   (chi-squared 95% for 2-DOF ≈ 2.45, 99% ≈ 3.03)
+    mahal_thresh : Mahalanobis distance threshold for rejection (chi-squared 95% for 2-DOF ≈ 2.45, 99% ≈ 3.03)
     sigma_a      : process noise
     R_scale      : multiplier on per-step ANP variance → R_t
     dt           : timestep
     init_P       : initial state covariance diagonal
     """
 
-    def __init__(self, mahal_thresh: float = 3.0, sigma_a: float = 0.5,
-                 R_scale: float = 1.0, dt: float = 1.0, init_P: float = 10.0):
+    def __init__(self, mahal_thresh: float = 3.0, sigma_a: float = 0.5, R_scale: float = 1.0, dt: float = 1.0, init_P: float = 10.0):
         self._mahal_thresh = float(mahal_thresh)
         self._sigma_a      = float(sigma_a)
         self._R_scale      = float(R_scale)
@@ -803,8 +778,7 @@ class MahalanobisPostProcessor(PostProcessor):
             "init_P":       self._init_P,
         }
 
-    def _mahal_dist(self, z: np.ndarray, z_pred: np.ndarray,
-                    S: np.ndarray) -> float:
+    def _mahal_dist(self, z: np.ndarray, z_pred: np.ndarray, S: np.ndarray) -> float:
         diff  = (z - z_pred).reshape(-1, 1)
         try:
             d2 = float((diff.T @ np.linalg.inv(S) @ diff).item())
@@ -882,8 +856,7 @@ def _mean_bundle_mae(pp: PostProcessor, bundles: List[PredBundle]) -> float:
     return float(np.mean(maes))
 
 
-def random_search_hparams(
-    pp_class,
+def random_search_hparams( pp_class,
     param_grid: Dict[str, list],
     val_bundles: List[PredBundle],
     n_trials: int = 50,
@@ -987,12 +960,13 @@ _PP_CLASSES = {
 
 @dataclass
 class EvalResult:
-    name:             str
-    params:           dict
-    maes_xz:          List[float]   # per trajectory, x-z plane
-    maes_full:        List[float]   # per trajectory, all 3 dims
-    latencies_s:      List[float]   # postprocessing overhead per trajectory (s)
-    val_mae_xz:       float = float("nan")  # from hparam search
+    name:                str
+    params:              dict
+    maes_xz:             List[float]   # per trajectory, x-z plane
+    maes_full:           List[float]   # per trajectory, all 3 dims
+    latencies_post_s:    List[float]   # postprocessing overhead only (s)
+    latencies_infer_s:   List[float]   # model inference time per trajectory (s)
+    val_mae_xz:          float = float("nan")  # from hparam search
 
 
 def evaluate_postprocessor(
@@ -1000,22 +974,26 @@ def evaluate_postprocessor(
     test_bundles: List[PredBundle],
     val_mae_xz: float = float("nan"),
 ) -> EvalResult:
-    maes_xz     = []
-    maes_full   = []
-    latencies   = []
+    maes_xz          = []
+    maes_full        = []
+    latencies_post   = []
+    latencies_infer  = []
 
     for bundle in test_bundles:
-        fxy, elapsed = pp.apply_timed(bundle)
+        fxy, elapsed_post = pp.apply_timed(bundle)
         maes_xz.append(_mae_xz(fxy, bundle))
         maes_full.append(_mae_full(fxy, bundle))
-        latencies.append(elapsed)
+        latencies_post.append(elapsed_post)
+        # infer_time_s may be 0.0 for bundles loaded from an old cache
+        latencies_infer.append(getattr(bundle, "infer_time_s", 0.0))
 
     return EvalResult(
         name=pp.name,
         params=pp.params,
         maes_xz=maes_xz,
         maes_full=maes_full,
-        latencies_s=latencies,
+        latencies_post_s=latencies_post,
+        latencies_infer_s=latencies_infer,
         val_mae_xz=val_mae_xz,
     )
 
@@ -1053,7 +1031,7 @@ def save_txt_report(
     lines.append("")
 
     # ── MAE table ────────────────────────────────────────────────────────────
-    lines.append("MAE (x-z plane, non-context points)")
+    lines.append("MAE (non-context points)")
     lines.append("-" * 80)
     hdr = f"{'Method':<18} {'Mean':>10} {'Std':>10} {'Median':>10} {'Val MAE':>10}"
     lines.append(hdr)
@@ -1073,16 +1051,22 @@ def save_txt_report(
     lines.append("")
 
     # ── Latency table ────────────────────────────────────────────────────────
-    lines.append("Postprocessing latency (per trajectory, seconds)")
+    lines.append("Latency per trajectory (ms)   [Infer = model forward pass | PP = postprocessing overhead]")
     lines.append("-" * 80)
-    hdr2 = f"{'Method':<18} {'Mean (ms)':>12} {'Std (ms)':>12} {'p95 (ms)':>12}"
+    hdr2 = f"{'Method':<18} {'Infer (ms)':>12} {'PP (ms)':>12} {'Total (ms)':>12} {'PP p95 (ms)':>13}"
     lines.append(hdr2)
     lines.append("-" * 80)
     for r in results:
-        lat_ms = np.array(r.latencies_s) * 1e3
-        m, s   = float(lat_ms.mean()), float(lat_ms.std())
-        p95    = float(np.percentile(lat_ms, 95))
-        lines.append(f"{r.name:<18} {m:>12.3f} {s:>12.3f} {p95:>12.3f}")
+        infer_ms = np.array(r.latencies_infer_s) * 1e3
+        post_ms  = np.array(r.latencies_post_s)  * 1e3
+        total_ms = infer_ms + post_ms
+        lines.append(
+            f"{r.name:<18}"
+            f" {float(infer_ms.mean()):>12.3f}"
+            f" {float(post_ms.mean()):>12.3f}"
+            f" {float(total_ms.mean()):>12.3f}"
+            f" {float(np.percentile(post_ms, 95)):>13.3f}"
+        )
     lines.append("")
 
     # ── Best hyperparameters ─────────────────────────────────────────────────
@@ -1112,7 +1096,7 @@ def save_mae_boxplot(results: List[EvalResult], output_path: str) -> None:
 
     ax.set_xticks(range(1, len(results) + 1))
     ax.set_xticklabels(labels, rotation=15, ha="right")
-    ax.set_ylabel("MAE (x-z plane, m)", fontsize=11)
+    ax.set_ylabel("MAE (m)", fontsize=11)
     ax.set_title("Postprocessing comparison — MAE distribution (test set)", fontsize=12)
     ax.yaxis.grid(True, alpha=0.4)
     ax.set_axisbelow(True)
@@ -1128,15 +1112,18 @@ def save_pareto_plot(results: List[EvalResult], output_path: str) -> None:
     colors  = matplotlib.colormaps["tab10"](np.linspace(0, 0.9, len(results)))
 
     for r, c in zip(results, colors):
-        mae_mean = float(np.mean(r.maes_xz))
-        lat_mean = float(np.mean(r.latencies_s)) * 1e3   # ms
-        ax.scatter(lat_mean, mae_mean, color=c, s=120, zorder=5, label=r.name)
-        ax.annotate(r.name, (lat_mean, mae_mean),
+        mae_mean   = float(np.mean(r.maes_xz))
+        infer_mean = float(np.mean(r.latencies_infer_s)) * 1e3   # ms
+        post_mean  = float(np.mean(r.latencies_post_s))  * 1e3   # ms
+        total_mean = infer_mean + post_mean
+        ax.scatter(total_mean, mae_mean, color=c, s=120, zorder=5, label=r.name)
+        label_txt = f"{r.name} ({total_mean:.1f} ms)"
+        ax.annotate(label_txt, (total_mean, mae_mean),
                     textcoords="offset points", xytext=(6, 3), fontsize=9)
 
-    ax.set_xlabel("Mean postprocessing latency (ms per trajectory)", fontsize=11)
-    ax.set_ylabel("Mean MAE — x-z plane (m)", fontsize=11)
-    ax.set_title("MAE vs postprocessing overhead (Pareto view)", fontsize=12)
+    ax.set_xlabel("Mean total latency (infer + PP overhead, ms per trajectory)", fontsize=11)
+    ax.set_ylabel("Mean MAE (m)", fontsize=11)
+    ax.set_title("MAE vs total latency (Pareto view)", fontsize=12)
     ax.legend(fontsize=8, loc="upper right")
     ax.grid(True, alpha=0.35)
     fig.tight_layout()
@@ -1199,9 +1186,7 @@ def save_qualitative_plots(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        description="Online postprocessing comparison for ANP/RANP trajectory predictions."
-    )
+    p = argparse.ArgumentParser(description="Online postprocessing comparison for ANP/RANP trajectory predictions.")
     # ── model ──
     p.add_argument("--ckpt", required=True,
                    help="Path to best_checkpoint.pth.tar")
@@ -1343,10 +1328,12 @@ def main() -> None:
         print("[eval ] running final evaluation on test set ...")
         eval_results: List[EvalResult] = []
         for pp, val_mae in zip(best_pps, best_val_maes):
-            res = evaluate_postprocessor(pp, test_bundles, val_mae_xz=val_mae)
-            m   = np.mean(res.maes_xz)
-            lat = np.mean(res.latencies_s) * 1e3
-            print(f"        {res.name:<16} MAE={m:.4f}  lat={lat:.3f} ms")
+            res         = evaluate_postprocessor(pp, test_bundles, val_mae_xz=val_mae)
+            m           = np.mean(res.maes_xz)
+            lat_infer   = np.mean(res.latencies_infer_s) * 1e3
+            lat_post    = np.mean(res.latencies_post_s)  * 1e3
+            lat_total   = lat_infer + lat_post
+            print(f"        {res.name:<16} MAE={m:.4f}  infer={lat_infer:.2f} ms  pp={lat_post:.3f} ms  total={lat_total:.2f} ms")
             eval_results.append(res)
 
         # ── reports ──────────────────────────────────────────────────────────
