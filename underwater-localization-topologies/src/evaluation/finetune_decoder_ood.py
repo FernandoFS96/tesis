@@ -1,14 +1,17 @@
 """
 finetune_decoder_ood.py
 =======================
-Compares two decoder fine-tuning strategies when adapting a pre-trained
+Compares three fine-tuning strategies when adapting a pre-trained
 ANP (highvar) to a new deployment domain (lowvar):
 
-  full_decoder : fine-tune all layers of the Decoder
-  last_layer   : fine-tune only the output heads
-                 (mean_projection + log_var_projection)
-
-Both encoders are frozen in both cases.
+  full_decoder    : freeze both encoders → fine-tune all Decoder layers
+  last_layer      : freeze both encoders + Decoder internals → fine-tune
+                    only Decoder output heads (mean_projection + log_var_projection)
+  all_last_layers : freeze all internal layers → fine-tune only the last-layer
+                    heads of EVERY sub-network:
+                      LatentEncoder        → mu + log_var
+                      DeterministicEncoder → cross_attentions[-1]
+                      Decoder              → mean_projection + log_var_projection
 
 Sweep
 -----
@@ -64,10 +67,11 @@ from src.utils.nav_dataset import NavigationTrajectoryDataset
 EVAL_SEED = 18
 
 # Fine-tuning modes
-FT_MODES: List[str] = ["full_decoder", "last_layer"]
+FT_MODES: List[str] = ["full_decoder", "last_layer", "all_last_layers"]
 FT_MODE_LABELS: Dict[str, str] = {
-    "full_decoder": "FT full decoder",
-    "last_layer":   "FT last layer",
+    "full_decoder":    "FT full decoder",
+    "last_layer":      "FT last layer (dec)",
+    "all_last_layers": "FT all last layers",
 }
 
 # ---------------------------------------------------------------------------
@@ -146,10 +150,43 @@ def freeze_for_last_layer_only(model: LatentModel, verbose: bool = True) -> int:
     return _apply_freeze(model, verbose)
 
 
+def freeze_all_last_layers(model: LatentModel, verbose: bool = True) -> int:
+    """
+    Freeze ALL parameters, then unfreeze only the last-layer heads of each
+    sub-network:
+      LatentEncoder        : mu, log_var
+      DeterministicEncoder : cross_attentions[-1]  (last cross-attention block)
+      Decoder              : mean_projection, log_var_projection
+    """
+    # 1. Freeze everything
+    for p in model.parameters():
+        p.requires_grad_(False)
+
+    # 2. Unfreeze LatentEncoder output projections
+    for p in model.latent_encoder.mu.parameters():
+        p.requires_grad_(True)
+    for p in model.latent_encoder.log_var.parameters():
+        p.requires_grad_(True)
+
+    # 3. Unfreeze DeterministicEncoder last cross-attention block
+    for p in model.deterministic_encoder.cross_attentions[-1].parameters():
+        p.requires_grad_(True)
+
+    # 4. Unfreeze Decoder output heads
+    for p in model.decoder.mean_projection.parameters():
+        p.requires_grad_(True)
+    for p in model.decoder.log_var_projection.parameters():
+        p.requires_grad_(True)
+
+    return _apply_freeze(model, verbose)
+
+
 def apply_ft_mode(model: LatentModel, ft_mode: str, verbose: bool = True) -> int:
     """Dispatch to the correct freeze function based on ft_mode."""
     if ft_mode == "last_layer":
         return freeze_for_last_layer_only(model, verbose)
+    elif ft_mode == "all_last_layers":
+        return freeze_all_last_layers(model, verbose)
     else:  # full_decoder
         return freeze_encoders(model, verbose)
 
