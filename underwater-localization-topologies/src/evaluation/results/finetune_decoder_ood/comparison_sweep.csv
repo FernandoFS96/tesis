@@ -1,0 +1,22 @@
+ft_mode,ft_mode_label,n_finetune,n_label,train_time_s,mae_m,pct_gap_closed
+full_decoder,FT full decoder,0,all,1606.45,6.8742,86.9
+full_decoder,FT full decoder,10,10,124.76,10.8471,19.4
+full_decoder,FT full decoder,20,20,233.05,10.5447,24.5
+full_decoder,FT full decoder,50,50,211.21,10.0575,32.8
+full_decoder,FT full decoder,100,100,691.34,8.7355,55.3
+full_decoder,FT full decoder,200,200,1057.43,7.5698,75.1
+full_decoder,FT full decoder,300,300,1333.70,7.1555,82.1
+last_layer,FT last layer (dec),0,all,1182.80,11.1180,14.8
+last_layer,FT last layer (dec),10,10,86.17,11.6021,6.5
+last_layer,FT last layer (dec),20,20,91.97,11.7173,4.6
+last_layer,FT last layer (dec),50,50,111.77,11.6408,5.9
+last_layer,FT last layer (dec),100,100,169.94,10.8590,19.2
+last_layer,FT last layer (dec),200,200,704.11,11.1741,13.8
+last_layer,FT last layer (dec),300,300,567.60,11.2576,12.4
+all_last_layers,FT all last layers,0,all,438.31,10.3319,28.1
+all_last_layers,FT all last layers,10,10,16.73,11.5249,7.9
+all_last_layers,FT all last layers,20,20,32.96,11.0565,15.8
+all_last_layers,FT all last layers,50,50,67.57,10.3650,27.6
+all_last_layers,FT all last layers,100,100,59.66,10.4368,26.4
+all_last_layers,FT all last layers,200,200,214.79,10.3184,28.4
+all_last_layers,FT all last layers,300,300,532.19,10.2530,29.5
