@@ -21,6 +21,17 @@ Run ANP (single process):
     --cleanup-trial-checkpoints \
     --disable-pruning
 
+    Resume with:
+    python optuna_anp_search.py \
+    --model anp \
+    --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+    --topologies ellipsoidal \
+    --objective-topology ellipsoidal \
+    --n-trials 50 \
+    --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
+    --study-name anp_masked_lowvar_ellipsoidal_v1 \
+    --device cuda
+
 Run RANP (single process):
     cd underwater-localization-topologies/src/training
     python optuna_anp_search.py \
@@ -35,16 +46,16 @@ Run RANP (single process):
     --cleanup-trial-checkpoints \
     --disable-pruning
 
-Resume:
-    cd underwater-localization-topologies/src/training
+    Resume with:
     python optuna_anp_search.py \
-        --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-        --topologies ellipsoidal \
-        --objective-topology ellipsoidal \
-        --n-trials 200 \
-        --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
-        --study-name anp_masked_lowvar_ellipsoidal_v1 \
-        --device cuda
+    --model ranp \
+    --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+    --topologies ellipsoidal \
+    --objective-topology ellipsoidal \
+    --n-trials 50 \
+    --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_ranp.db \
+    --study-name ranp_masked_lowvar_ellipsoidal_v1 \
+    --device cuda   
 
 With nohup and redirect to log:
     nohup python optuna_anp_search.py \
