@@ -15,13 +15,25 @@ Adds to your current inspect script:
 Usage:
   python inspect_optuna.py \
     --storage "sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db" \
-    --study-name anp_masked_v6 \
+    --study-name anp_masked_lowvar_ellipsoidal_v1 \
     --output-dir results/optuna \
     --group-param batch_size \
     --top-n 5 \
     --importance-evaluator fanova \
     --importance-seed 0 \
     --make-plots
+
+ For the RANP model (RANP-specific params are auto-detected; pass --model ranp to force):
+    python inspect_optuna.py \
+        --storage "sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_ranp.db" \
+        --study-name ranp_masked_lowvar_ellipsoidal_v1 \
+        --model ranp \
+        --output-dir results/optuna \
+        --group-param batch_size \
+        --top-n 5 \
+        --importance-evaluator fanova \
+        --importance-seed 0 \
+        --make-plots
 
 Notes:
 - Importances are computed using only COMPLETE trials (Optuna requirement).
@@ -281,24 +293,18 @@ def _try_make_plots(
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--storage", type=str,
-                    default="sqlite:////home/fernando/tesis/underwater-localization-topologies/optuna_anp.db")
+    ap.add_argument("--storage", type=str, default="sqlite:////home/fernando/tesis/underwater-localization-topologies/optuna_anp.db")
     ap.add_argument("--study-name", type=str, default="anp_masked_v2")
     ap.add_argument("--output-dir", type=str, default="results/optuna")
 
-    ap.add_argument("--group-param", type=str, default="batch_size",
-                    help="Group trials by this parameter name (without 'params_' prefix)." )
+    ap.add_argument("--group-param", type=str, default="batch_size", help="Group trials by this parameter name (without 'params_' prefix)." )
     ap.add_argument("--top-n", type=int, default=5)
 
-    ap.add_argument("--importance-evaluator", type=str, default="fanova",
-                    choices=["fanova", "pedanova"],
-                    help="Importance evaluator. fanova needs scikit-learn; pedanova is lighter.")
-    ap.add_argument("--importance-seed", type=int, default=0,
-                    help="Seed for fANOVA (ignored by PED-ANOVA).")
-    ap.add_argument("--min-trials-importance", type=int, default=7,
-                    help="Minimum COMPLETE trials required to compute per-group importances.")
-    ap.add_argument("--make-plots", action="store_true",
-                    help="If set, save Optuna interactive plots as HTML (requires plotly).")
+    ap.add_argument("--importance-evaluator", type=str, default="fanova", choices=["fanova", "pedanova"], help="Importance evaluator. fanova needs scikit-learn; pedanova is lighter.")
+    ap.add_argument("--importance-seed", type=int, default=0, help="Seed for fANOVA (ignored by PED-ANOVA).")
+    ap.add_argument("--min-trials-importance", type=int, default=7, help="Minimum COMPLETE trials required to compute per-group importances.")
+    ap.add_argument("--make-plots", action="store_true", help="If set, save Optuna interactive plots as HTML (requires plotly).")
+    ap.add_argument("--model", type=str, default="auto", choices=["auto", "anp", "ranp"], help="Model type for parameter display. 'auto' detects from trial params.")
 
     args = ap.parse_args()
 
@@ -314,6 +320,17 @@ def main() -> None:
     print("DIRECTION:", study.direction)
     print("BEST VALUE:", study.best_value)
     print("BEST PARAMS:", json.dumps(study.best_params, indent=2))
+
+    # Auto-detect whether this is a RANP study
+    if args.model == "auto":
+        is_ranp = any(
+            "rnn_type" in t.params
+            for t in study.trials
+            if t.state.name == "COMPLETE"
+        )
+    else:
+        is_ranp = args.model == "ranp"
+    print(f"Model type: {'RANP' if is_ranp else 'ANP'} ({'auto-detected' if args.model == 'auto' else 'forced'})")
 
     # Export all trials (including PRUNED/FAIL) to CSV
     df_all = study.trials_dataframe(attrs=("number", "value", "state", "params", "user_attrs"))
@@ -376,6 +393,11 @@ def main() -> None:
         "params_kl_warmup_epochs", "params_sensor_drop_mode", "params_sensor_drop_p",
         "params_mask_fill",
     ]
+    if is_ranp:
+        cols += [
+            "params_rnn_type", "params_rnn_hidden_dim",
+            "params_rnn_layers", "params_rnn_dropout",
+        ]
     top_per_group = _top_trials_per_group(df, group_col, args.top_n, cols)
 
     for gv, tdf in top_per_group.items():
@@ -448,10 +470,39 @@ def main() -> None:
         print("\n[export] wrote:", wide_csv)
 
     # -----------------------
+    # RANP-specific: RNN hyperparameter summary
+    # -----------------------
+    if is_ranp:
+        ranp_cols = [
+            c for c in [
+                "number", "value",
+                "params_rnn_type", "params_rnn_hidden_dim",
+                "params_rnn_layers", "params_rnn_dropout",
+                "params_lr", "params_num_hidden", "params_weight_decay",
+                "params_kl_warmup_epochs",
+            ] if c in df.columns
+        ]
+        print("\n=== RANP: top-10 by RNN config ===")
+        print(df.sort_values("value").head(10)[ranp_cols].to_string(index=False))
+
+        for rnn_col in ["params_rnn_type", "params_rnn_hidden_dim", "params_rnn_layers"]:
+            if rnn_col not in df.columns:
+                continue
+            param_name = rnn_col.replace("params_", "")
+            rnn_summary = _group_summary(df, rnn_col)
+            rnn_csv = outdir / f"{args.study_name}_summary_by_{param_name}.csv"
+            rnn_summary.to_csv(rnn_csv)
+            print(f"\n=== RANP summary by {param_name} ===")
+            print(rnn_summary.to_string())
+            print("[export] wrote:", rnn_csv)
+
+    # -----------------------
     # Optional plots (global)
     # -----------------------
     if args.make_plots:
         candidate_params = ["lr", "num_hidden", "weight_decay", "kl_warmup_epochs", "sensor_drop_p"]
+        if is_ranp:
+            candidate_params += ["rnn_type", "rnn_hidden_dim", "rnn_layers", "rnn_dropout"]
         plot_params = [p for p in candidate_params if p in all_param_names]
 
         # Build per-group trial lists for per-batch-size slice plots
