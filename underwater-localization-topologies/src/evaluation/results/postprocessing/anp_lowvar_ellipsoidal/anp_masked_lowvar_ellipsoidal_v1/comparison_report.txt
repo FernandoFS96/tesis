@@ -6,7 +6,7 @@ POSTPROCESSING COMPARISON — TRAJECTORY LOCALIZATION
   Topology    : ellipsoidal
   Context     : 20%  (first points)
   Val / Test  : 120 / 60 trajectories
-  Date        : 2026-03-12 07:56:52
+  Date        : 2026-03-12 13:33:16
 
 MAE (x-z plane, non-context points)
 --------------------------------------------------------------------------------
@@ -19,16 +19,16 @@ EKF                    5.5376     2.5591     4.6346     6.3217  (-0.9447)
 UKF                    5.5376     2.5591     4.6346     6.3217  (-0.9447)
 Mahalanobis            5.5512     2.6568     4.6073     6.3298  (-0.9311)
 
-Postprocessing latency (per trajectory, seconds)
+Latency per trajectory (ms)   [Infer = model forward pass | PP = postprocessing overhead]
 --------------------------------------------------------------------------------
-Method                Mean (ms)     Std (ms)     p95 (ms)
+Method               Infer (ms)      PP (ms)   Total (ms)   PP p95 (ms)
 --------------------------------------------------------------------------------
-Raw                       0.012        0.004        0.019
-EMA                       0.223        0.042        0.311
-EMA-Var                   1.111        0.233        1.389
-EKF                       3.544        0.808        5.357
-UKF                       7.109        0.825        9.087
-Mahalanobis               4.569        0.692        6.281
+Raw                       0.000        0.011        0.011         0.013
+EMA                       0.000        0.213        0.213         0.235
+EMA-Var                   0.000        1.004        1.004         1.069
+EKF                       0.000        3.053        3.053         3.177
+UKF                       0.000        6.556        6.556         6.722
+Mahalanobis               0.000        4.142        4.142         4.427
 
 Best hyperparameters (from val-set random search)
 --------------------------------------------------------------------------------
