@@ -12,6 +12,8 @@ Postprocessors implemented
 4. EKF          - Kalman filter, constant-velocity model [ sigma_a, R_scale ]
 5. UKF          - Unscented Kalman filter (CV)           [ sigma_a, R_scale, ukf_alpha ]
 6. Mahalanobis  - Gated KF: outlier rejection via Mahalanobis distance [ mahal_thresh, sigma_a, R_scale ]
+7. BiasAR       - Decaying bias correction from context residuals         [ rho ]
+8. AR-p         - AR(p) residual correction fitted on context window      [ p, ridge ]
 
 All postprocessors are strictly causal (use only t <= current timestep).
 EKF/UKF use the model's predicted variance (sigma^2) as the measurement noise matrix R, making them naturally exploit the probabilistic ANP output.
@@ -833,6 +835,172 @@ class MahalanobisPostProcessor(PostProcessor):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# 7. BiasAR — Decaying bias correction from context residuals
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class BiasARPostProcessor(PostProcessor):
+    """Decaying bias correction using the mean residual observed during context.
+
+    During the context window GT is known, so the model's prediction errors
+    (residuals) are directly observable.  Their mean is used as a
+    trajectory-specific bias estimate and subtracted from subsequent
+    predictions with exponential decay:
+
+        r_bias   = mean( raw[ctx] - gt[ctx] )
+        output_t = raw_t - rho^(t - last_ctx_step) * r_bias
+
+    rho = 1 → constant correction (bias persists throughout trajectory).
+    rho = 0 → correction applied only at step 1 then vanishes immediately.
+
+    Parameters
+    ----------
+    rho : decay factor in [0, 1].
+    """
+
+    def __init__(self, rho: float = 0.9):
+        self._rho = float(rho)
+
+    @property
+    def name(self) -> str:
+        return "BiasAR"
+
+    @property
+    def params(self) -> dict:
+        return {"rho": self._rho}
+
+    def apply(self, bundle: PredBundle) -> np.ndarray:
+        raw = bundle.mean_real[:, :2]
+        ctx = bundle.ctx_mask
+        gt  = bundle.gt_real[:, :2]
+        T   = raw.shape[0]
+
+        ctx_idx  = np.where(ctx)[0]
+        out      = np.empty((T, 2), dtype=np.float64)
+
+        if len(ctx_idx) > 0:
+            r_bias   = (raw[ctx_idx] - gt[ctx_idx]).mean(axis=0)  # (2,)
+            last_ctx = int(ctx_idx[-1])
+        else:
+            r_bias   = np.zeros(2)
+            last_ctx = -1
+
+        for t in range(T):
+            if ctx[t]:
+                out[t] = gt[t]
+            else:
+                step   = t - last_ctx   # >= 1 for the first prediction step
+                out[t] = raw[t] - (self._rho ** step) * r_bias
+
+        return out.astype(np.float32)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 8. AR-p — AR(p) residual correction fitted on context window
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class ARpPostProcessor(PostProcessor):
+    """Autoregressive residual correction of order p.
+
+    Fitting phase (context window, GT known):
+        r_t = raw_t - gt_t
+        Fit AR(p) via ridge OLS independently per output dimension:
+            r_t = phi_1*r_{t-1} + ... + phi_p*r_{t-p}
+
+    Prediction phase (autoregressive, strictly causal):
+        r_hat_t  = phi_1*r_{t-1} + ... + phi_p*r_{t-p}
+        output_t = raw_t - r_hat_t
+        residual buffer updated with r_hat_t (GT not available)
+
+    Falls back to mean-bias correction when n_ctx <= p.
+
+    Parameters
+    ----------
+    p     : AR order.
+    ridge : L2 regularisation coefficient for OLS fitting.
+    """
+
+    def __init__(self, p: int = 3, ridge: float = 1.0):
+        self._p     = int(p)
+        self._ridge = float(ridge)
+
+    @property
+    def name(self) -> str:
+        return "AR-p"
+
+    @property
+    def params(self) -> dict:
+        return {"p": self._p, "ridge": self._ridge}
+
+    def _fit_ar_1d(self, residuals: np.ndarray) -> np.ndarray:
+        """Fit AR(p) coefficients for one dimension via ridge OLS."""
+        n, p = len(residuals), self._p
+        if n <= p:
+            return np.zeros(p)
+        rows = n - p
+        X = np.empty((rows, p), dtype=np.float64)
+        for i in range(rows):
+            X[i] = residuals[i:i + p][::-1]   # [r_{i+p-1}, ..., r_i]
+        y = residuals[p:].astype(np.float64)
+        A = X.T @ X + self._ridge * np.eye(p)
+        b = X.T @ y
+        try:
+            return np.linalg.solve(A, b)
+        except np.linalg.LinAlgError:
+            return np.zeros(p)
+
+    def apply(self, bundle: PredBundle) -> np.ndarray:
+        raw = bundle.mean_real[:, :2]
+        ctx = bundle.ctx_mask
+        gt  = bundle.gt_real[:, :2]
+        T   = raw.shape[0]
+        p   = self._p
+
+        ctx_idx = np.where(ctx)[0]
+        n_ctx   = len(ctx_idx)
+        out     = np.empty((T, 2), dtype=np.float64)
+
+        # Observable residuals on context window
+        r_ctx = (raw[ctx_idx] - gt[ctx_idx]).astype(np.float64)  # (n_ctx, 2)
+
+        # Stability clamp: AR recursion can diverge if roots are outside the unit circle. We clip predicted residuals to ±max_r to prevent float overflow.
+        # max_r is set to 5× the observed residual std (or a 1 m floor).
+        if n_ctx > 1:
+            max_r = np.maximum(5.0 * r_ctx.std(axis=0), 1.0)
+        else:
+            max_r = np.full(2, 1e3)
+
+        # Fit AR(p) per dimension
+        phi = np.stack(
+            [self._fit_ar_1d(r_ctx[:, d]) for d in range(2)], axis=1
+        )  # (p, 2)
+
+        # Initialise residual buffer with last p context residuals
+        r_buf = np.zeros((p, 2), dtype=np.float64)
+        if n_ctx > 0:
+            take = min(n_ctx, p)
+            r_buf[p - take:] = r_ctx[-take:]
+
+        # Context → GT
+        for t in ctx_idx:
+            out[t] = gt[t]
+
+        # Prediction phase: autoregressive residual correction
+        for t in range(T):
+            if ctx[t]:
+                continue
+            # r_hat = sum_k phi[k, d] * r_buf[p-1-k, d]  (r_buf[-1] = most recent)
+            r_hat  = (phi * r_buf[::-1]).sum(axis=0)  # (2,)
+            # Clamp to prevent explosive divergence of unstable AR processes
+            r_hat  = np.clip(r_hat, -max_r, max_r)
+            out[t] = raw[t] - r_hat
+            # Shift buffer and store clipped residual for next step
+            r_buf       = np.roll(r_buf, -1, axis=0)
+            r_buf[-1]   = r_hat
+
+        return out.astype(np.float32)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Hyperparameter search
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -942,6 +1110,13 @@ def _build_param_grids(dt: float) -> Dict[str, Dict[str, list]]:
             "dt":           [dt],
             "init_P":       [1.0, 10.0, 100.0],
         },
+        "BiasAR": {
+            "rho": [0.0, 0.5, 0.7, 0.8, 0.9, 0.95, 0.99, 1.0],
+        },
+        "AR-p": {
+            "p":     [1, 2, 3, 5, 8],
+            "ridge": [0.01, 0.1, 1.0, 10.0, 100.0],
+        },
     }
 
 
@@ -951,6 +1126,8 @@ _PP_CLASSES = {
     "EKF":          EKFPostProcessor,
     "UKF":          UKFPostProcessor,
     "Mahalanobis":  MahalanobisPostProcessor,
+    "BiasAR":       BiasARPostProcessor,
+    "AR-p":         ARpPostProcessor,
 }
 
 
@@ -1188,41 +1365,26 @@ def save_qualitative_plots(
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Online postprocessing comparison for ANP/RANP trajectory predictions.")
     # ── model ──
-    p.add_argument("--ckpt", required=True,
-                   help="Path to best_checkpoint.pth.tar")
-    p.add_argument("--model-type", default="anp", choices=["anp", "ranp"],
-                   help="Model architecture")
-    p.add_argument("--model-name", default=None,
-                   help="Human-readable model name (default: inferred from --ckpt)")
-    p.add_argument("--rnn-type", default="lstm", choices=["lstm", "gru"],
-                   help="(RANP only) RNN cell type")
-    p.add_argument("--rnn-layers", type=int, default=1,
-                   help="(RANP only) number of RNN layers")
+    p.add_argument("--ckpt", required=True, help="Path to best_checkpoint.pth.tar")
+    p.add_argument("--model-type", default="anp", choices=["anp", "ranp"], help="Model architecture")
+    p.add_argument("--model-name", default=None, help="Human-readable model name (default: inferred from --ckpt)")
+    p.add_argument("--rnn-type", default="lstm", choices=["lstm", "gru"], help="(RANP only) RNN cell type")
+    p.add_argument("--rnn-layers", type=int, default=1, help="(RANP only) number of RNN layers")
     # ── data ──
-    p.add_argument("--data-dir", required=True,
-                   help="Path to data_processed_topologies_* directory")
-    p.add_argument("--topology", default="ellipsoidal",
-                   choices=["ellipsoidal", "random", "aligned"],
-                   help="Sensor topology to evaluate on")
-    p.add_argument("--ctx-frac", type=float, default=0.3,
-                   help="Fraction of trajectory used as context (first points)")
-    p.add_argument("--dt", type=float, default=1.0,
-                   help="Timestep in seconds (used by KF / EKF / UKF)")
+    p.add_argument("--data-dir", required=True, help="Path to data_processed_topologies_* directory")
+    p.add_argument("--topology", default="ellipsoidal", choices=["ellipsoidal", "random", "aligned"], help="Sensor topology to evaluate on")
+    p.add_argument("--ctx-frac", type=float, default=0.3, help="Fraction of trajectory used as context (first points)")
+    p.add_argument("--dt", type=float, default=1.0, help="Timestep in seconds (used by KF / EKF / UKF)")
     # ── output ──
-    p.add_argument("--output-dir", default="results/postprocessing",
-                   help="Directory where reports and plots are saved")
-    p.add_argument("--n-qual-plots", type=int, default=4,
-                   help="Number of qualitative trajectory plots to generate")
+    p.add_argument("--output-dir", default="results/postprocessing", help="Directory where reports and plots are saved")
+    p.add_argument("--n-qual-plots", type=int, default=4, help="Number of qualitative trajectory plots to generate")
     # ── search ──
-    p.add_argument("--n-hparam-trials", type=int, default=50,
-                   help="Random search trials per postprocessor method")
+    p.add_argument("--n-hparam-trials", type=int, default=50, help="Random search trials per postprocessor method")
     # ── misc ──
-    p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    p.add_argument("--seed", type=int, default=18)
-    p.add_argument("--extra-configs", default=None,
-                   help="JSON string: list of extra ModelConfig dicts to also evaluate")
-    p.add_argument("--no-cache", action="store_true",
-                   help="Force re-running inference even if cached bundles exist")
+    p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu", help="Device to run inference on")
+    p.add_argument("--seed", type=int, default=18, help="Random seed")
+    p.add_argument("--extra-configs", default=None, help="JSON string: list of extra ModelConfig dicts to also evaluate")
+    p.add_argument("--no-cache", action="store_true", help="Force re-running inference even if cached bundles exist")
     return p
 
 
