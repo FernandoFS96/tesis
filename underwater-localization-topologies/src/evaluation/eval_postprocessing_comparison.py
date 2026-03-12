@@ -32,15 +32,27 @@ Outputs (saved to --output-dir)
 
 Usage
 -----
-cd /home/fernando/tesis/underwater-localization-topologies
-
+For example, to evaluate a single ANP model with ellipsoidal topology and low variance:
+cd /home/fernando/tesis/underwater-localization-topologies/src/evaluation
 python eval_postprocessing_comparison.py \
     --ckpt /home/fernando/tesis/underwater-localization-topologies/src/training/results/optuna/anp_masked_lowvar_ellipsoidal_v1/best_model/topology_ellipsoidal/best_checkpoint.pth.tar \
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
     --topology ellipsoidal \
     --output-dir /home/fernando/tesis/underwater-localization-topologies/src/evaluation/results/postprocessing/anp_lowvar_ellipsoidal \
-    --ctx-frac 0.3 \
-    --n-hparam-trials 50 \
+    --ctx-frac 0.2 \
+    --n-hparam-trials 100 \
+    --seed 18
+
+to evaluate a single RANP model with ellipsoidal topology and low variance:
+cd /home/fernando/tesis/underwater-localization-topologies/src/evaluation
+python eval_postprocessing_comparison.py \
+    --ckpt /home/fernando/tesis/underwater-localization-topologies/src/training/results/optuna/ranp_masked_lowvar_ellipsoidal_v1/best_model/topology_ellipsoidal/best_checkpoint.pth.tar \
+    --model-type ranp \
+    --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+    --topology ellipsoidal \
+    --output-dir /home/fernando/tesis/underwater-localization-topologies/src/evaluation/results/postprocessing/ranp_lowvar_ellipsoidal \
+    --ctx-frac 0.2 \
+    --n-hparam-trials 100 \
     --seed 18
 
 Additional models can be added via --extra-configs (JSON list of dicts):
@@ -95,9 +107,9 @@ XZ_DIMS        = slice(0, 2)                         # dimensions we filter in x
 @dataclass
 class ModelConfig:
     """Container for a model variant to evaluate."""
-    name: str                                    # human-readable label
-    ckpt_path: str                               # path to best_checkpoint.pth.tar
-    model_type: str = "anp"                      # "anp" | "ranp"
+    name: str
+    ckpt_path: str # path to best_checkpoint.pth.tar
+    model_type: str = "anp" # "anp" | "ranp"
     num_hidden: int = 128
     # RANP-specific
     rnn_type: str = "lstm"
