@@ -14,23 +14,36 @@ Run ANP (single process):
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
     --topologies ellipsoidal \
     --objective-topology ellipsoidal \
-    --n-trials 50 \
+    --n-trials 25 \
     --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
     --study-name anp_masked_lowvar_ellipsoidal_v1 \
     --constant-liar \
     --cleanup-trial-checkpoints \
     --disable-pruning
 
-    Resume with:
+    - Resume with:
     python optuna_anp_search.py \
     --model anp \
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
     --topologies ellipsoidal \
     --objective-topology ellipsoidal \
-    --n-trials 50 \
+    --n-trials 25 \
     --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
     --study-name anp_masked_lowvar_ellipsoidal_v1 \
     --device cuda
+
+    - High Variance data:
+    python optuna_anp_search.py \
+    --model anp \
+    --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
+    --topologies ellipsoidal \
+    --objective-topology ellipsoidal \
+    --n-trials 25 \
+    --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
+    --study-name anp_masked_highvar_ellipsoidal_v1 \
+    --constant-liar \
+    --cleanup-trial-checkpoints \
+    --disable-pruning
 
 Run RANP (single process):
     cd underwater-localization-topologies/src/training
@@ -39,7 +52,7 @@ Run RANP (single process):
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
     --topologies ellipsoidal \
     --objective-topology ellipsoidal \
-    --n-trials 50 \
+    --n-trials 25 \
     --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_ranp.db \
     --study-name ranp_masked_lowvar_ellipsoidal_v1 \
     --constant-liar \
@@ -52,10 +65,23 @@ Run RANP (single process):
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
     --topologies ellipsoidal \
     --objective-topology ellipsoidal \
-    --n-trials 50 \
+    --n-trials 25 \
     --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_ranp.db \
     --study-name ranp_masked_lowvar_ellipsoidal_v1 \
-    --device cuda   
+    --device cuda
+
+    - High Variance data:
+    python optuna_anp_search.py \
+    --model ranp \
+    --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
+    --topologies ellipsoidal \
+    --objective-topology ellipsoidal \
+    --n-trials 25 \
+    --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_ranp.db \
+    --study-name ranp_masked_highvar_ellipsoidal_v1 \
+    --constant-liar \
+    --cleanup-trial-checkpoints \
+    --disable-pruning
 
 With nohup and redirect to log:
     nohup python optuna_anp_search.py \
@@ -179,7 +205,6 @@ def make_objective(args):
         hp = {
             # model / optimizer
             "num_hidden": trial.suggest_int("num_hidden", 128, 256, step=64), 
-            "lr": trial.suggest_categorical("lr", [7e-4, 5e-4, 3e-4, 1e-4]),
             "weight_decay": trial.suggest_categorical("weight_decay", [1e-4, 5e-5, 1e-5, 5e-6]),
 
             # training dynamics
@@ -199,11 +224,13 @@ def make_objective(args):
 
         # RANP-specific: RNN encoder hyperparameters
         if args.model == "ranp":
-            hp["lr"] = trial.suggest_categorical("lr", [9e-4, 7e-4, 5e-4])
+            hp["lr"]             = trial.suggest_categorical("lr", [9e-4, 7e-4, 5e-4])
             hp["rnn_type"]       = trial.suggest_categorical("rnn_type", ["lstm", "gru"])
             hp["rnn_hidden_dim"] = trial.suggest_categorical("rnn_hidden_dim", [32, 64, 128])
             hp["rnn_layers"]     = trial.suggest_int("rnn_layers", 1, 2, step=1)
             hp["rnn_dropout"]    = trial.suggest_categorical("rnn_dropout", [0.1, 0.2])
+        else:
+            hp["lr"] = trial.suggest_categorical("lr", [5e-4, 3e-4, 1e-4])
 
         # ---------------------------
         # 2) Per-trial output folder
