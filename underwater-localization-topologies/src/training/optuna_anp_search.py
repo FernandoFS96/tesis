@@ -178,9 +178,9 @@ def make_objective(args):
         # ---------------------------
         hp = {
             # model / optimizer
-            "num_hidden": trial.suggest_int("num_hidden", 128, 320, step=64), 
+            "num_hidden": trial.suggest_int("num_hidden", 128, 256, step=64), 
             "lr": trial.suggest_categorical("lr", [7e-4, 5e-4, 3e-4, 1e-4]),
-            "weight_decay": trial.suggest_categorical("weight_decay", [1e-3, 5e-4, 1e-4, 5e-5, 1e-5]),
+            "weight_decay": trial.suggest_categorical("weight_decay", [1e-4, 5e-5, 1e-5, 5e-6]),
 
             # training dynamics
             "kl_warmup_epochs": trial.suggest_int("kl_warmup_epochs", 500, 3000, step=500),
@@ -195,14 +195,15 @@ def make_objective(args):
         }
 
         # batch-size often interacts with lr; keep a small menu
-        hp["batch_size"] = trial.suggest_categorical("batch_size", [4, 8, 16])
+        hp["batch_size"] = trial.suggest_categorical("batch_size", [8, 16])
 
         # RANP-specific: RNN encoder hyperparameters
         if args.model == "ranp":
+            hp["lr"] = trial.suggest_categorical("lr", [9e-4, 7e-4, 5e-4])
             hp["rnn_type"]       = trial.suggest_categorical("rnn_type", ["lstm", "gru"])
-            hp["rnn_hidden_dim"] = trial.suggest_categorical("rnn_hidden_dim", [64, 128, 192, 256])
-            hp["rnn_layers"]     = trial.suggest_int("rnn_layers", 1, 3, step=1)
-            hp["rnn_dropout"]    = trial.suggest_categorical("rnn_dropout", [0.0, 0.1, 0.2])
+            hp["rnn_hidden_dim"] = trial.suggest_categorical("rnn_hidden_dim", [32, 64, 128])
+            hp["rnn_layers"]     = trial.suggest_int("rnn_layers", 1, 2, step=1)
+            hp["rnn_dropout"]    = trial.suggest_categorical("rnn_dropout", [0.1, 0.2])
 
         # ---------------------------
         # 2) Per-trial output folder
