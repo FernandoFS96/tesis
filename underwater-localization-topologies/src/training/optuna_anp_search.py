@@ -206,6 +206,7 @@ def make_objective(args):
             # model / optimizer
             "num_hidden": trial.suggest_int("num_hidden", 128, 256, step=64), 
             "weight_decay": trial.suggest_categorical("weight_decay", [1e-4, 5e-5, 1e-5, 5e-6]),
+            "lr": None,  # set later based on model type
 
             # training dynamics
             "kl_warmup_epochs": trial.suggest_int("kl_warmup_epochs", 500, 3000, step=500),
