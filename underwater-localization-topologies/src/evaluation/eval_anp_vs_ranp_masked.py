@@ -20,37 +20,25 @@ Usage
 cd /home/fernando/tesis/underwater-localization-topologies
 python src/evaluation/eval_anp_vs_ranp_masked.py
 
-# Usage example with all arguments specified:
 python eval_anp_vs_ranp_masked.py \
-    --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-    --topology random \
-    --anp-ckpt /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies_masked/lowvar/masked_dropbernoulli_p0.2_train_mean_first/topology_random/best_checkpoint.pth.tar \
-    --ranp-ckpt /home/fernando/tesis/underwater-localization-topologies/src/training/results/RANP_topologies_masked/ranp_dropbernoulli_p0.2_train_mean_first_rnn-lstm_h128_l1/topology_random/best_checkpoint.pth.tar \
-    --output-dir results/eval_anp_vs_ranp/lowvar_random \
-    --ctx-fracs 0.05,0.10,0.20,0.30,0.50,0.70,0.90 \
-    --fixed-ctx-frac 0.40 \
-    --num-traj-plots 2 \
-    --seed 18
-
-python eval_anp_vs_ranp_masked.py \
-    --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-    --topology ellipsoidal \
-    --anp-ckpt /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies_masked/lowvar/masked_dropbernoulli_p0.2_train_mean_first/topology_ellipsoidal/best_checkpoint.pth.tar \
-    --ranp-ckpt /home/fernando/tesis/underwater-localization-topologies/src/training/results/RANP_topologies_masked/ranp_dropbernoulli_p0.2_train_mean_first_rnn-lstm_h128_l1/topology_ellipsoidal/best_checkpoint.pth.tar \
-    --ranp-gru-ckpt /home/fernando/tesis/underwater-localization-topologies/src/training/results/RANP_topologies_masked/ranp_dropbernoulli_p0.2_train_mean_first_rnn-gru_h128_l1/topology_ellipsoidal/best_checkpoint.pth.tar \
-    --output-dir results/eval_anp_vs_ranp/lowvar_ellipsoidal \
-    --ctx-fracs 0.05,0.10,0.20,0.30,0.50,0.70,0.90 \
-    --fixed-ctx-frac 0.40 \
-    --num-traj-plots 2 \
-    --run-nll-diagnosis \
-    --run-nll-ranking \
-    --diagnosis-max-samples 120 \
-    --diagnosis-top-k 8 \
-    --diagnosis-focus-model ANP \
-    --run-anp-simple-diagnosis \
-    --anp-simple-contexts 0.10,0.50,0.90 \
-    --anp-simple-max-samples 120 \
-    --seed 18
+  --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+  --topology ellipsoidal \
+  --anp-ckpt /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies_masked/lowvar/masked_dropbernoulli_p0.2_train_mean_first/topology_ellipsoidal/best_checkpoint.pth.tar \
+  --ranp-ckpt /home/fernando/tesis/underwater-localization-topologies/src/training/results/RANP_topologies_masked/ranp_dropbernoulli_p0.2_train_mean_first_rnn-lstm_h128_l1/topology_ellipsoidal/best_checkpoint.pth.tar \
+  --ranp-gru-ckpt /home/fernando/tesis/underwater-localization-topologies/src/training/results/RANP_topologies_masked/ranp_dropbernoulli_p0.2_train_mean_first_rnn-gru_h128_l1/topology_ellipsoidal/best_checkpoint.pth.tar \
+  --output-dir results/eval_anp_vs_ranp/lowvar_ellipsoidal \
+  --ctx-fracs 0.05,0.10,0.20,0.30,0.50,0.70,0.90 \
+  --fixed-ctx-frac 0.40 \
+  --num-traj-plots 2 \
+  --run-nll-diagnosis \
+  --run-nll-ranking \
+  --run-anp-simple-diagnosis \
+  --diagnosis-max-samples 120 \
+  --diagnosis-top-k 3 \
+  --diagnosis-focus-model ANP \
+  --anp-simple-contexts 0.10,0.50,0.90 \
+  --anp-simple-max-samples 120 \
+  --seed 18
 """
 from __future__ import annotations
 
@@ -349,9 +337,7 @@ def eval_vs_context_fraction(anp_model: torch.nn.Module,
 
     MAE is computed on a **fixed held-out tail** of the trajectory (last `holdout_frac` fraction of time steps) so that the evaluated points are identical across all context sizes. 
     This avoids the artefact where MAE appears to grow with context because the non-context set shifts towards harder, later time steps.
-
-    Context fracs that would overlap with the held-out tail are capped
-    at (1 - holdout_frac - 1/T).
+    Context fracs that would overlap with the held-out tail are capped at (1 - holdout_frac - 1/T).
 
     Returns:
         out[model_name]["mae"] = [mae_at_frac0, mae_at_frac1, ...]
@@ -745,9 +731,8 @@ def plot_variance_histograms(
 ) -> None:
     """Plot variance distributions for all context levels in a single figure.
 
-    The figure uses 2D histograms with context fraction on the x-axis and the
-    predicted standard deviation σ (in metres) on the y-axis. A subplot is
-    created for each model/output-dimension pair.
+    The figure uses 2D histograms with context fraction on the x-axis and the predicted standard deviation σ (in metres) on the y-axis. 
+    A subplot is created for each model/output-dimension pair.
     """
     dim_labels = ["σ_x (m)", "σ_y (m)"]
     dim_indices = [0, 1]
@@ -1222,13 +1207,59 @@ def diagnose_anp_simple_overlay(
     """ANP-only quick diagnosis with a single ranked trajectory and context overlays.
 
     Steps:
-    1) Sweep up to `max_samples` trajectories and pick the one with largest
-       positive slope of ANP NLL vs context.
-    2) On that trajectory, overlay ANP predictions for 2-3 selected contexts
-       on the same axes, including +-1 sigma bands.
+    1) Sweep up to `max_samples` trajectories and pick the one with largest positive slope of ANP NLL vs context.
+    2) On that trajectory, overlay ANP predictions for 2-3 selected contexts on the same axes, including +-1 sigma bands.
     """
     diag_dir = output_dir / "nll_diagnosis"
     diag_dir.mkdir(parents=True, exist_ok=True)
+
+    def _anp_only_metrics_for_traj(x_raw_np: np.ndarray, y_raw_np: np.ndarray):
+        x_raw = torch.tensor(x_raw_np[None], dtype=torch.float32, device=device)
+        y_raw = torch.tensor(y_raw_np[None], dtype=torch.float32, device=device)
+        T = x_raw.shape[1]
+        n_holdout = max(1, int(round(holdout_frac * T)))
+        holdout_idx = torch.arange(T - n_holdout, T, device=device)
+
+        x_aug = augment_x_with_full_mask(x_raw, x_means_SP, NUM_TIME_PTS, NUM_SENSORS)
+        y_norm = (y_raw - y_mean) / y_std
+
+        metrics = {"ANP": {"nll": [], "mae": [], "avg_std": []}}
+        pred_cache = []
+
+        for frac in ctx_fracs:
+            max_ctx = T - n_holdout - 1
+            n_ctx = max(1, min(max_ctx, int(round(frac * T))))
+            ctx_idx = ctx_indices_first(T, n_ctx, device)
+            tar_idx = torch.arange(T, device=device)
+            ctx_y = y_norm[:, ctx_idx, :]
+            tar_y = y_norm[:, tar_idx, :]
+
+            mean_a, var_a, _, _, _ = predict_anp(anp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
+            pred_denorm = mean_a * y_std + y_mean
+            std_denorm = torch.sqrt(var_a) * y_std
+
+            var_hold = var_a[:, holdout_idx, :].clamp_min(1e-8)
+            err_hold = y_norm[:, holdout_idx, :] - mean_a[:, holdout_idx, :]
+            nll_hold = 0.5 * (torch.log(2.0 * np.pi * var_hold) + (err_hold ** 2) / var_hold)
+            mae_hold = F.l1_loss(pred_denorm[:, holdout_idx, :], y_raw[:, holdout_idx, :], reduction="mean")
+            avg_std_hold = std_denorm[:, holdout_idx, :2].mean()
+
+            metrics["ANP"]["nll"].append(float(nll_hold.mean().item()))
+            metrics["ANP"]["mae"].append(float(mae_hold.item()))
+            metrics["ANP"]["avg_std"].append(float(avg_std_hold.item()))
+
+            pred_cache.append({
+                "frac": frac,
+                "n_ctx": n_ctx,
+                "preds": {
+                    "ANP": {
+                        "pred": pred_denorm.squeeze(0).detach().cpu().numpy(),
+                        "std": std_denorm.squeeze(0).detach().cpu().numpy(),
+                    }
+                },
+            })
+
+        return metrics, pred_cache
 
     n_total = len(test_data)
     n_use = min(max_samples, n_total)
@@ -1240,19 +1271,7 @@ def diagnose_anp_simple_overlay(
     best_delta = 0.0
     for idx in tqdm(indices, desc="ANP simple ranking"):
         x_raw_np, y_raw_np = test_data[int(idx)]
-        _, metrics, _ = _compute_single_traj_metrics(
-            anp_model=anp_model,
-            ranp_model=anp_model,
-            x_raw_np=x_raw_np,
-            y_raw_np=y_raw_np,
-            y_mean=y_mean,
-            y_std=y_std,
-            x_means_SP=x_means_SP,
-            ctx_fracs=ctx_fracs,
-            device=device,
-            holdout_frac=holdout_frac,
-            ranp_gru_model=None,
-        )
+        metrics, _ = _anp_only_metrics_for_traj(x_raw_np, y_raw_np)
         y_nll = np.array(metrics["ANP"]["nll"], dtype=float)
         slope = float(np.polyfit(x_ctx, y_nll, 1)[0]) if len(x_ctx) > 1 else 0.0
         delta = float(y_nll[-1] - y_nll[0]) if len(y_nll) > 1 else 0.0
@@ -1264,19 +1283,7 @@ def diagnose_anp_simple_overlay(
     # Recompute predictions for best trajectory.
     x_raw_np, y_raw_np = test_data[best_idx]
     theta_val = test_thetas[best_idx] if test_thetas is not None and len(test_thetas) > best_idx else None
-    _, metrics, pred_cache = _compute_single_traj_metrics(
-        anp_model=anp_model,
-        ranp_model=anp_model,
-        x_raw_np=x_raw_np,
-        y_raw_np=y_raw_np,
-        y_mean=y_mean,
-        y_std=y_std,
-        x_means_SP=x_means_SP,
-        ctx_fracs=ctx_fracs,
-        device=device,
-        holdout_frac=holdout_frac,
-        ranp_gru_model=None,
-    )
+    metrics, pred_cache = _anp_only_metrics_for_traj(x_raw_np, y_raw_np)
 
     # Pick contexts to overlay.
     if context_subset is None or len(context_subset) == 0:
