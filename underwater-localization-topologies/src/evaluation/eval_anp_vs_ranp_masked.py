@@ -1475,6 +1475,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--diagnosis-max-samples", type=int, default=100, help="Maximum number of test trajectories to include in NLL ranking sweep")
     p.add_argument("--diagnosis-top-k", type=int, default=5, help="Number of top-ranked trajectories to expand into full diagnostic plots")
     p.add_argument("--diagnosis-focus-model", default="ANP", help="Model used to sort ranking (ANP, RANP, RANP-GRU)")
+    p.add_argument("--run-anp-simple-diagnosis", action="store_true", help="Run ANP-only simplified diagnosis with overlay of 2-3 contexts")
+    p.add_argument("--anp-simple-contexts", default="0.10,0.50,0.90", help="Comma-separated context fractions to overlay in ANP simple diagnosis")
+    p.add_argument("--anp-simple-max-samples", type=int, default=120, help="Samples to scan when selecting trajectory with strongest ANP NLL increase")
     return p.parse_args()
 
 
@@ -1612,6 +1615,24 @@ def main() -> None:
             top_k=args.diagnosis_top_k,
             focus_model=args.diagnosis_focus_model,
             ranp_gru_model=ranp_gru_model,
+        )
+
+    if args.run_anp_simple_diagnosis:
+        print("\n[diag] ANP simple diagnosis …")
+        anp_ctx = [float(v) for v in args.anp_simple_contexts.split(",") if v.strip() != ""]
+        diagnose_anp_simple_overlay(
+            anp_model=anp_model,
+            test_data=test_data,
+            test_thetas=metadata["test_thetas"],
+            y_mean=y_mean,
+            y_std=y_std,
+            x_means_SP=x_means_SP,
+            ctx_fracs=ctx_fracs,
+            output_dir=output_dir,
+            device=device,
+            holdout_frac=HOLDOUT_FRAC,
+            max_samples=args.anp_simple_max_samples,
+            context_subset=anp_ctx,
         )
 
     print(f"\nAll results written to: {output_dir.resolve()}")
