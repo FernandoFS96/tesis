@@ -3,7 +3,7 @@
 Optuna wrapper for ANP and RANP masked training scripts.
 
 - Selects model with --model anp|ranp.
-- Minimizes validation MAE (default).
+- Minimizes validation MAE.
 - Uses SQLite storage for resume.
 - Supports pruning (requires trial.report + trial.should_prune hooks in the training function).
 
@@ -21,17 +21,6 @@ Run ANP (single process):
     --cleanup-trial-checkpoints \
     --disable-pruning
 
-    - Resume with:
-    python optuna_anp_search.py \
-    --model anp \
-    --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-    --topologies ellipsoidal \
-    --objective-topology ellipsoidal \
-    --n-trials 25 \
-    --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
-    --study-name anp_masked_lowvar_ellipsoidal_v1 \
-    --device cuda
-
     - High Variance data:
     python optuna_anp_search.py \
     --model anp \
@@ -44,6 +33,20 @@ Run ANP (single process):
     --constant-liar \
     --cleanup-trial-checkpoints \
     --disable-pruning
+
+    With nohup and redirect to log:
+    nohup python optuna_anp_search.py \
+        --model anp \
+        --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
+        --topologies random \
+        --objective-topology random \
+        --n-trials 200 \
+        --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
+        --study-name anp_masked_highvar_random_v1 \
+        --constant-liar \
+        --cleanup-trial-checkpoints \
+        --disable-pruning \
+        > optuna_anp_masked_highvar_random_v1_$(date +%F_%H%M%S)_$$.log 2>&1 & 
 
 Run RANP (single process):
     cd underwater-localization-topologies/src/training
@@ -59,17 +62,6 @@ Run RANP (single process):
     --cleanup-trial-checkpoints \
     --disable-pruning
 
-    Resume with:
-    python optuna_anp_search.py \
-    --model ranp \
-    --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-    --topologies ellipsoidal \
-    --objective-topology ellipsoidal \
-    --n-trials 25 \
-    --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_ranp.db \
-    --study-name ranp_masked_lowvar_ellipsoidal_v1 \
-    --device cuda
-
     - High Variance data:
     python optuna_anp_search.py \
     --model ranp \
@@ -83,18 +75,22 @@ Run RANP (single process):
     --cleanup-trial-checkpoints \
     --disable-pruning
 
-With nohup and redirect to log:
+    With nohup and redirect to log:
     nohup python optuna_anp_search.py \
+        --model ranp \
         --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-        --topologies ellipsoidal \
-        --objective-topology ellipsoidal \
+        --topologies random \
+        --objective-topology random \
         --n-trials 200 \
-        --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
-        --study-name anp_masked_lowvar_ellipsoidal_v1 \
-        > optuna_anp_masked_lowvar_ellipsoidal_v1_$(date +%F_%H%M%S)_$$.log 2>&1 &
+        --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_ranp.db \
+        --study-name ranp_masked_lowvar_random_v1 \
+        --constant-liar \
+        --cleanup-trial-checkpoints \
+        --disable-pruning \
+        > optuna_ranp_masked_lowvar_random_v1_$(date +%F_%H%M%S)_$$.log 2>&1 &
 
     monitor with:
-    tail -f optuna_anp_masked_lowvar_ellipsoidal_v1_$(date +%F_%H%M%S)_$$.log 2>&1 &
+    tail -f optuna_ranp_masked_lowvar_random_v1_$(date +%F_%H%M%S)_$$.log 2>&1 &
 
 Parallel: start multiple processes pointing to the same storage+study:
   # terminal 1
