@@ -20,7 +20,7 @@ Usage
 cd /home/fernando/tesis/underwater-localization-topologies
 python src/evaluation/eval_anp_vs_ranp_masked.py
 
-# Optional CLI overrides (all have sensible defaults):
+# Usage example with all arguments specified:
 python eval_anp_vs_ranp_masked.py \
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
     --topology random \
@@ -219,12 +219,12 @@ def predict_anp(model: torch.nn.Module,
     ctx_y: torch.Tensor,       # (B, Nc, output_dim)  - normalised
     tar_idx: torch.Tensor,     # (Nt,)
     tar_y: torch.Tensor,       # (B, Nt, output_dim)  - normalised
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Returns (mean_norm, var_norm, loss, nll)."""
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Returns (mean_norm, var_norm, loss, kl, nll)."""
     context_x = x_aug[:, ctx_idx, :]
     target_x  = x_aug[:, tar_idx, :]
     mean, var, loss, kl, nll = model(context_x, ctx_y, target_x, tar_y, beta=1.0)
-    return mean, var, loss, nll
+    return mean, var, loss, kl, nll
 
 
 @torch.no_grad()
@@ -234,8 +234,8 @@ def predict_ranp(model: torch.nn.Module,
     ctx_y: torch.Tensor,
     tar_idx: torch.Tensor,
     tar_y: torch.Tensor,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Returns (mean_norm, var_norm, loss, nll)."""
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Returns (mean_norm, var_norm, loss, kl, nll)."""
     mean, var, loss, kl, nll = model(
         x_seq=x_aug,
         context_indices=ctx_idx,
@@ -244,7 +244,7 @@ def predict_ranp(model: torch.nn.Module,
         target_y=tar_y,
         beta=1.0,
     )
-    return mean, var, loss, nll
+    return mean, var, loss, kl, nll
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -298,18 +298,18 @@ def eval_mae_per_theta(anp_model: torch.nn.Module,
             tar_y = y_norm[:, tar_idx, :]
 
             # ANP
-            mean_anp, _, _, _ = predict_anp(anp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
+            mean_anp, _, _, _, _ = predict_anp(anp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
             pred_anp = mean_anp * y_std + y_mean
             anp_maes.append(F.l1_loss(pred_anp, y_raw[:, tar_idx, :], reduction="mean").item())
 
             # RANP-LSTM
-            mean_ranp, _, _, _ = predict_ranp(ranp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
+            mean_ranp, _, _, _, _ = predict_ranp(ranp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
             pred_ranp = mean_ranp * y_std + y_mean
             ranp_maes.append(F.l1_loss(pred_ranp, y_raw[:, tar_idx, :], reduction="mean").item())
 
             # RANP-GRU (optional)
             if ranp_gru_model is not None:
-                mean_gru, _, _, _ = predict_ranp(ranp_gru_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
+                mean_gru, _, _, _, _ = predict_ranp(ranp_gru_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
                 pred_gru = mean_gru * y_std + y_mean
                 gru_maes.append(F.l1_loss(pred_gru, y_raw[:, tar_idx, :], reduction="mean").item())
 
@@ -322,7 +322,7 @@ def eval_mae_per_theta(anp_model: torch.nn.Module,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TEST 2 - MAE / NLL vs context fraction (sweep)
+# TEST 2 - MAE / NLL / KL vs context fraction (sweep)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def eval_vs_context_fraction(anp_model: torch.nn.Module,
@@ -337,7 +337,7 @@ def eval_vs_context_fraction(anp_model: torch.nn.Module,
     holdout_frac: float = 0.20,
     ranp_gru_model: torch.nn.Module = None,
 ) -> Dict[str, Dict[str, List[float]]]:
-    """Sweep context fractions and record MAE + NLL for each model.
+    """Sweep context fractions and record MAE + NLL + KL for each model.
 
     MAE is computed on a **fixed held-out tail** of the trajectory (last `holdout_frac` fraction of time steps) so that the evaluated points are identical across all context sizes. 
     This avoids the artefact where MAE appears to grow with context because the non-context set shifts towards harder, later time steps.
@@ -348,19 +348,21 @@ def eval_vs_context_fraction(anp_model: torch.nn.Module,
     Returns:
         out[model_name]["mae"] = [mae_at_frac0, mae_at_frac1, ...]
         out[model_name]["nll"] = [nll_at_frac0, ...]
+        out[model_name]["kl"]  = [kl_at_frac0, ...]
     """
     out = {
-        "ANP":  {"mae": [], "nll": []},
-        "RANP": {"mae": [], "nll": []},
+        "ANP":  {"mae": [], "nll": [], "kl": []},
+        "RANP": {"mae": [], "nll": [], "kl": []},
     }
     if ranp_gru_model is not None:
-        out["RANP-GRU"] = {"mae": [], "nll": []}
+        out["RANP-GRU"] = {"mae": [], "nll": [], "kl": []}
     ds     = NavigationTrajectoryDataset(test_data)
     loader = DataLoader(ds, batch_size=batch_size, shuffle=False)
 
     for frac in tqdm(ctx_fracs, desc="Context fraction sweep"):
         anp_maes, ranp_maes, gru_maes = [], [], []
         anp_nlls, ranp_nlls, gru_nlls = [], [], []
+        anp_kls, ranp_kls, gru_kls = [], [], []
 
         for x_raw, y_raw in loader:
             x_raw, y_raw = x_raw.to(device), y_raw.to(device)
@@ -383,31 +385,37 @@ def eval_vs_context_fraction(anp_model: torch.nn.Module,
             tar_y = y_norm[:, tar_idx, :]
 
             # ANP
-            mean_a, var_a, _, nll_a = predict_anp(anp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
+            mean_a, var_a, _, kl_a, nll_a = predict_anp(anp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
             pred_a = mean_a * y_std + y_mean
             anp_maes.append(F.l1_loss(pred_a[:, holdout_idx, :], y_raw[:, holdout_idx, :], reduction="mean").item())
             anp_nlls.append(nll_a.item())
+            anp_kls.append(kl_a.item())
 
             # RANP
-            mean_r, var_r, _, nll_r = predict_ranp(ranp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
+            mean_r, var_r, _, kl_r, nll_r = predict_ranp(ranp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
             pred_r = mean_r * y_std + y_mean
             ranp_maes.append(F.l1_loss(pred_r[:, holdout_idx, :], y_raw[:, holdout_idx, :], reduction="mean").item())
             ranp_nlls.append(nll_r.item())
+            ranp_kls.append(kl_r.item())
 
             # RANP-GRU (optional)
             if ranp_gru_model is not None:
-                mean_g, _, _, nll_g = predict_ranp(ranp_gru_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
+                mean_g, _, _, kl_g, nll_g = predict_ranp(ranp_gru_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
                 pred_g = mean_g * y_std + y_mean
                 gru_maes.append(F.l1_loss(pred_g[:, holdout_idx, :], y_raw[:, holdout_idx, :], reduction="mean").item())
                 gru_nlls.append(nll_g.item())
+                gru_kls.append(kl_g.item())
 
         out["ANP"]["mae"].append(float(np.mean(anp_maes)))
         out["ANP"]["nll"].append(float(np.mean(anp_nlls)))
+        out["ANP"]["kl"].append(float(np.mean(anp_kls)))
         out["RANP"]["mae"].append(float(np.mean(ranp_maes)))
         out["RANP"]["nll"].append(float(np.mean(ranp_nlls)))
+        out["RANP"]["kl"].append(float(np.mean(ranp_kls)))
         if ranp_gru_model is not None:
             out["RANP-GRU"]["mae"].append(float(np.mean(gru_maes)))
             out["RANP-GRU"]["nll"].append(float(np.mean(gru_nlls)))
+            out["RANP-GRU"]["kl"].append(float(np.mean(gru_kls)))
 
     return out
 
@@ -467,10 +475,10 @@ def plot_trajectories_for_theta(anp_model: torch.nn.Module,
             ctx_y = y_norm[:, ctx_idx, :]
             tar_y = y_norm[:, tar_idx, :]
 
-            mean_a, var_a, _, _ = predict_anp(anp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
-            mean_r, var_r, _, _ = predict_ranp(ranp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
+            mean_a, var_a, _, _, _ = predict_anp(anp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
+            mean_r, var_r, _, _, _ = predict_ranp(ranp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
             if ranp_gru_model is not None:
-                mean_g, var_g, _, _ = predict_ranp(ranp_gru_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
+                mean_g, var_g, _, _, _ = predict_ranp(ranp_gru_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
 
             # denormalise
             pred_a  = (mean_a * y_std + y_mean).squeeze(0).cpu().numpy()   # (T,3)
@@ -598,10 +606,10 @@ def plot_2d_paths_per_theta(anp_model: torch.nn.Module,
             ctx_y   = y_norm[:, ctx_idx, :]
             tar_y   = y_norm[:, tar_idx, :]
 
-            mean_a, _, _, _ = predict_anp(anp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
-            mean_r, _, _, _ = predict_ranp(ranp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
+            mean_a, _, _, _, _ = predict_anp(anp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
+            mean_r, _, _, _, _ = predict_ranp(ranp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
             if ranp_gru_model is not None:
-                mean_g, _, _, _ = predict_ranp(ranp_gru_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
+                mean_g, _, _, _, _ = predict_ranp(ranp_gru_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
 
             pred_a = (mean_a * y_std + y_mean).squeeze(0).cpu().numpy()
             pred_r = (mean_r * y_std + y_mean).squeeze(0).cpu().numpy()
@@ -679,12 +687,12 @@ def plot_mae_vs_context(sweep: Dict[str, Dict[str, List[float]]],
         "RANP":     ("s-", "#ff7f0e"),
         "RANP-GRU": ("^-", "#2ca02c"),
     }
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
     for ax, metric, ylabel in zip(
         axes,
-        ["mae", "nll"],
-        ["MAE (m)", "NLL (nats)"],
+        ["mae", "nll", "kl"],
+        ["MAE (m)", "NLL (nats)", "KL (nats)"],
     ):
         for name, data in sweep.items():
             marker, color = model_styles.get(name, ("x-", "grey"))
@@ -703,9 +711,9 @@ def plot_mae_vs_context(sweep: Dict[str, Dict[str, List[float]]],
         fontsize=11,
     )
     plt.tight_layout()
-    fig.savefig(output_dir / "mae_nll_vs_context.png", dpi=150)
+    fig.savefig(output_dir / "mae_nll_kl_vs_context.png", dpi=150)
     plt.close(fig)
-    print(f"  mae_nll_vs_context.png saved")
+    print(f"  mae_nll_kl_vs_context.png saved")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -727,33 +735,33 @@ def plot_variance_histograms(
     ranp_gru_model: torch.nn.Module = None,
     bins: int = 60,
 ) -> None:
-    """For each context fraction, plot histograms of predicted σ (√variance) in metres.
+    """Plot variance distributions for all context levels in a single figure.
 
-    σ is collected from the fixed held-out tail (last `holdout_frac` of each trajectory) across all test samples and all output dimensions (x, y).
-    One figure per context fraction is saved to output_dir/variance_histograms/. Each figure has one column per output dimension with all models overlaid.
+    The figure uses 2D histograms with context fraction on the x-axis and the
+    predicted standard deviation σ (in metres) on the y-axis. A subplot is
+    created for each model/output-dimension pair.
     """
-    model_styles = {
-        "ANP":      ("#1f77b4", 0.55),
-        "RANP":     ("#ff7f0e", 0.55),
-        "RANP-GRU": ("#2ca02c", 0.55),
-    }
     dim_labels = ["σ_x (m)", "σ_y (m)"]
     dim_indices = [0, 1]
-
-    hist_dir = output_dir / "variance_histograms"
-    hist_dir.mkdir(parents=True, exist_ok=True)
 
     ds     = NavigationTrajectoryDataset(test_data)
     loader = DataLoader(ds, batch_size=batch_size, shuffle=False)
 
     model_names = ["ANP", "RANP"] + (["RANP-GRU"] if ranp_gru_model is not None else [])
+    model_cmaps = {
+        "ANP": "Blues",
+        "RANP": "Oranges",
+        "RANP-GRU": "Greens",
+    }
+
+    sigma_vals: Dict[str, List[List[float]]] = {
+        name: [[], []] for name in model_names
+    }
+    ctx_vals: Dict[str, List[List[float]]] = {
+        name: [[], []] for name in model_names
+    }
 
     for frac in tqdm(ctx_fracs, desc="Variance histogram sweep"):
-        # sigma_vals[model_name][dim_idx] -> list of float
-        sigma_vals: Dict[str, List[List[float]]] = {
-            name: [[], []] for name in model_names
-        }
-
         for x_raw, y_raw in loader:
             x_raw, y_raw = x_raw.to(device), y_raw.to(device)
             B, T, _ = x_raw.shape
@@ -771,11 +779,11 @@ def plot_variance_histograms(
             ctx_y  = y_norm[:, ctx_idx, :]
             tar_y  = y_norm[:, tar_idx, :]
 
-            _, var_a, _, _ = predict_anp(anp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
-            _, var_r, _, _ = predict_ranp(ranp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
+            _, var_a, _, _, _ = predict_anp(anp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
+            _, var_r, _, _, _ = predict_ranp(ranp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
             var_g = None
             if ranp_gru_model is not None:
-                _, var_g, _, _ = predict_ranp(ranp_gru_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
+                _, var_g, _, _, _ = predict_ranp(ranp_gru_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
 
             # σ in metres: sqrt(var_norm) * y_std  →  (B, holdout, 3)
             std_a = (torch.sqrt(var_a[:, holdout_idx, :]) * y_std).cpu().numpy()  # (B, Nh, 3)
@@ -784,38 +792,63 @@ def plot_variance_histograms(
                 std_g = (torch.sqrt(var_g[:, holdout_idx, :]) * y_std).cpu().numpy()
 
             for di in dim_indices:
-                sigma_vals["ANP"][di].extend(std_a[:, :, di].ravel().tolist())
-                sigma_vals["RANP"][di].extend(std_r[:, :, di].ravel().tolist())
+                anp_vals = std_a[:, :, di].ravel().tolist()
+                ranp_vals = std_r[:, :, di].ravel().tolist()
+                sigma_vals["ANP"][di].extend(anp_vals)
+                sigma_vals["RANP"][di].extend(ranp_vals)
+                ctx_vals["ANP"][di].extend([frac * 100] * len(anp_vals))
+                ctx_vals["RANP"][di].extend([frac * 100] * len(ranp_vals))
                 if var_g is not None:
-                    sigma_vals["RANP-GRU"][di].extend(std_g[:, :, di].ravel().tolist())
+                    gru_vals = std_g[:, :, di].ravel().tolist()
+                    sigma_vals["RANP-GRU"][di].extend(gru_vals)
+                    ctx_vals["RANP-GRU"][di].extend([frac * 100] * len(gru_vals))
 
-        # ── Plot ──────────────────────────────────────────────────────────
-        n_ctx_pct = int(round(frac * 100))
-        fig, axes = plt.subplots(1, len(dim_indices), figsize=(6 * len(dim_indices), 4),
-                                  sharey=False)
-        fig.suptitle(
-            f"Predicted σ distribution — context {n_ctx_pct}%"
-            f"  (holdout last {holdout_frac*100:.0f}%)",
-            fontsize=11,
-        )
+    fig, axes = plt.subplots(
+        len(model_names),
+        len(dim_indices),
+        figsize=(6 * len(dim_indices), 3.8 * len(model_names)),
+        sharex=True,
+        squeeze=False,
+    )
+    fig.suptitle(
+        "Predicted σ distribution vs context fraction\n"
+        f"(holdout last {holdout_frac*100:.0f}% of trajectory)",
+        fontsize=11,
+    )
 
-        for di, (ax, dlabel) in enumerate(zip(axes, dim_labels)):
-            for name in model_names:
-                vals = np.array(sigma_vals[name][di])
-                color, alpha = model_styles.get(name, ("grey", 0.5))
-                ax.hist(vals, bins=bins, color=color, alpha=alpha, label=name, density=True)
-            ax.set_xlabel(dlabel)
-            ax.set_ylabel("Density")
-            ax.set_title(dlabel)
-            ax.legend(fontsize=8)
-            ax.grid(True, alpha=0.3)
+    ctx_bins = np.array(sorted(ctx_fracs)) * 100.0
+    if len(ctx_bins) == 1:
+        ctx_edges = np.array([ctx_bins[0] - 0.5, ctx_bins[0] + 0.5])
+    else:
+        mids = 0.5 * (ctx_bins[:-1] + ctx_bins[1:])
+        left = ctx_bins[0] - (mids[0] - ctx_bins[0])
+        right = ctx_bins[-1] + (ctx_bins[-1] - mids[-1])
+        ctx_edges = np.concatenate(([left], mids, [right]))
 
-        plt.tight_layout()
-        fname = hist_dir / f"var_hist_ctx{n_ctx_pct:03d}.png"
-        fig.savefig(fname, dpi=150)
-        plt.close(fig)
+    for row, name in enumerate(model_names):
+        for col, (di, dlabel) in enumerate(zip(dim_indices, dim_labels)):
+            ax = axes[row, col]
+            x = np.array(ctx_vals[name][di], dtype=float)
+            y = np.array(sigma_vals[name][di], dtype=float)
+            if y.size == 0:
+                continue
 
-    print(f"  Variance histograms saved to {hist_dir}")
+            y_max = float(np.percentile(y, 99.5))
+            y_edges = np.linspace(0.0, max(y_max, 1e-6), bins + 1)
+            hist = ax.hist2d(x, y, bins=[ctx_edges, y_edges], cmap=model_cmaps.get(name, "Greys"))
+            fig.colorbar(hist[3], ax=ax, label="Count")
+
+            ax.set_title(f"{name} — {dlabel}")
+            ax.set_xlabel("Context fraction (%)")
+            ax.set_ylabel(dlabel)
+            ax.set_xticks(ctx_bins)
+            ax.grid(True, alpha=0.2)
+
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    fig.savefig(output_dir / "variance_histograms_vs_context.png", dpi=150)
+    plt.close(fig)
+
+    print(f"  Variance histogram plot saved to {output_dir / 'variance_histograms_vs_context.png'}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -883,6 +916,16 @@ def save_summary(mae_per_theta: Dict[str, Dict[float, float]],
         row = "  ".join(f"{sweep[n]['nll'][i]:>{col_w}.4f}" for n in model_names)
         lines.append(f"{frac*100:>5.0f}%  {row}")
 
+    lines += [
+        "",
+        "KL vs context fraction",
+        "-" * 60,
+        f"{'ctx%':>6}  " + "  ".join(f"{n+' KL':>{col_w}}" for n in model_names),
+    ]
+    for i, frac in enumerate(ctx_fracs):
+        row = "  ".join(f"{sweep[n]['kl'][i]:>{col_w}.4f}" for n in model_names)
+        lines.append(f"{frac*100:>5.0f}%  {row}")
+
     summary_str = "\n".join(lines)
     print("\n" + summary_str)
 
@@ -902,11 +945,17 @@ def save_summary(mae_per_theta: Dict[str, Dict[float, float]],
 
     with open(output_dir / "sweep_vs_context.csv", "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["ctx_frac"] + [n + "_mae" for n in model_names] + [n + "_nll" for n in model_names])
+        w.writerow(
+            ["ctx_frac"]
+            + [n + "_mae" for n in model_names]
+            + [n + "_nll" for n in model_names]
+            + [n + "_kl" for n in model_names]
+        )
         for i, frac in enumerate(ctx_fracs):
             maes = [sweep[n]["mae"][i] for n in model_names]
             nlls = [sweep[n]["nll"][i] for n in model_names]
-            w.writerow([frac] + maes + nlls)
+            kls  = [sweep[n]["kl"][i] for n in model_names]
+            w.writerow([frac] + maes + nlls + kls)
 
     print(f"  Summary written to {output_dir}")
 
