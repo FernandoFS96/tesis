@@ -46,7 +46,10 @@ python eval_anp_vs_ranp_masked.py \
     --run-nll-ranking \
     --diagnosis-max-samples 120 \
     --diagnosis-top-k 8 \
-    --diagnosis-focus-model ANP
+    --diagnosis-focus-model ANP \
+    --run-anp-simple-diagnosis \
+    --anp-simple-contexts 0.10,0.50,0.90 \
+    --anp-simple-max-samples 120 \
     --seed 18
 """
 from __future__ import annotations
@@ -1294,7 +1297,7 @@ def diagnose_anp_simple_overlay(
     gt_np = y_raw.squeeze(0).detach().cpu().numpy()
     T = gt_np.shape[0]
     t_axis = np.arange(T)
-    cmap = plt.cm.viridis(np.linspace(0.15, 0.9, len(chosen_ctx)))
+    cmap = plt.get_cmap("viridis")(np.linspace(0.15, 0.9, len(chosen_ctx)))
 
     fig, axes = plt.subplots(2, 1, figsize=(12, 7), sharex=True)
     dim_labels = ["x (m)", "y (m)"]
