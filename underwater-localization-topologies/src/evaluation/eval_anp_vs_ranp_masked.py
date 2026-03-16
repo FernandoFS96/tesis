@@ -42,6 +42,7 @@ python eval_anp_vs_ranp_masked.py \
     --ctx-fracs 0.05,0.10,0.20,0.30,0.50,0.70,0.90 \
     --fixed-ctx-frac 0.40 \
     --num-traj-plots 2 \
+    --run-nll-diagnosis \
     --seed 18
 """
 from __future__ import annotations
@@ -852,6 +853,352 @@ def plot_variance_histograms(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# NLL diagnosis on a single trajectory across context sizes
+# ══════════════════════════════════════════════════════════════════════════════
+
+def diagnose_nll_single_trajectory(
+    anp_model: torch.nn.Module,
+    ranp_model: torch.nn.Module,
+    test_data: list,
+    test_thetas: list,
+    y_mean: torch.Tensor,
+    y_std: torch.Tensor,
+    x_means_SP: torch.Tensor,
+    ctx_fracs: List[float],
+    output_dir: Path,
+    device: torch.device,
+    holdout_frac: float = 0.20,
+    sample_index: int = 0,
+    ranp_gru_model: torch.nn.Module = None,
+    out_prefix: str = "single_traj",
+) -> None:
+    """Diagnose how NLL changes with context on a single trajectory.
+
+    Outputs:
+    - nll_diagnosis/metrics_vs_context_single_traj.png
+    - nll_diagnosis/trajectories_vs_context_single_traj.png
+    - nll_diagnosis/metrics_single_traj.csv
+    """
+    diag_dir = output_dir / "nll_diagnosis"
+    diag_dir.mkdir(parents=True, exist_ok=True)
+
+    idx = int(sample_index) % len(test_data)
+    x_raw_np, y_raw_np = test_data[idx]
+    theta_val = test_thetas[idx] if test_thetas is not None and len(test_thetas) > idx else None
+
+    model_colors = {
+        "ANP": "#1f77b4",
+        "RANP": "#ff7f0e",
+        "RANP-GRU": "#2ca02c",
+    }
+    model_names, metrics, pred_cache = _compute_single_traj_metrics(
+        anp_model=anp_model,
+        ranp_model=ranp_model,
+        x_raw_np=x_raw_np,
+        y_raw_np=y_raw_np,
+        y_mean=y_mean,
+        y_std=y_std,
+        x_means_SP=x_means_SP,
+        ctx_fracs=ctx_fracs,
+        device=device,
+        holdout_frac=holdout_frac,
+        ranp_gru_model=ranp_gru_model,
+    )
+
+    x_raw = torch.tensor(x_raw_np[None], dtype=torch.float32, device=device)
+    y_raw = torch.tensor(y_raw_np[None], dtype=torch.float32, device=device)
+    T = x_raw.shape[1]
+
+    # Plot 1: metrics vs context for the selected trajectory.
+    x_pct = [f * 100 for f in ctx_fracs]
+    fig, axes = plt.subplots(1, 3, figsize=(18, 4.8))
+    metric_info = [
+        ("nll", "NLL (nats)", "NLL vs context"),
+        ("mae", "MAE (m)", "MAE vs context"),
+        ("avg_std", "Mean σ_xy (m)", "Predicted σ vs context"),
+    ]
+    marker_map = {"ANP": "o-", "RANP": "s-", "RANP-GRU": "^-"}
+
+    for ax, (mkey, ylabel, title) in zip(axes, metric_info):
+        for name in model_names:
+            ax.plot(
+                x_pct,
+                metrics[name][mkey],
+                marker_map.get(name, "x-"),
+                color=model_colors.get(name, "grey"),
+                lw=2,
+                label=name,
+            )
+        ax.set_xlabel("Context fraction (%)")
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=8)
+
+    theta_txt = f" | theta={theta_val:.1f}" if theta_val is not None else ""
+    fig.suptitle(
+        f"Single-trajectory diagnosis (test idx={idx}{theta_txt})\n"
+        f"Holdout tail = last {holdout_frac*100:.0f}%",
+        fontsize=11,
+    )
+    plt.tight_layout(rect=[0, 0, 1, 0.92])
+    fig.savefig(diag_dir / f"metrics_vs_context_{out_prefix}_idx{idx}.png", dpi=150)
+    plt.close(fig)
+
+    # Plot 2: trajectory fit per context.
+    gt_np = y_raw.squeeze(0).detach().cpu().numpy()
+    t_axis = np.arange(T)
+    n_rows = len(pred_cache)
+    fig, axes = plt.subplots(n_rows, 2, figsize=(15, max(3.0 * n_rows, 6)), sharex=True)
+    if n_rows == 1:
+        axes = np.array([axes])
+
+    for r, item in enumerate(pred_cache):
+        frac = float(item["frac"])
+        n_ctx = int(item["n_ctx"])
+        preds = item["preds"]
+        nll_row = " | ".join([f"{n}: {metrics[n]['nll'][r]:.3f}" for n in model_names])
+
+        for c, dim_idx in enumerate([0, 1]):
+            ax = axes[r, c]
+            ax.axvspan(0, n_ctx - 1, alpha=0.08, color="grey")
+            ax.plot(t_axis, gt_np[:, dim_idx], "k-", lw=1.6, label="Ground truth" if r == 0 else "_")
+            ax.scatter(t_axis[:n_ctx], gt_np[:n_ctx, dim_idx], c="red", s=16, zorder=6,
+                       label="Context pts" if r == 0 else "_")
+            ax.scatter(t_axis[n_ctx:], gt_np[n_ctx:, dim_idx], c="#90EE90", s=10, zorder=5,
+                       edgecolors="none", label="Target pts" if r == 0 else "_")
+
+            for name in model_names:
+                pred = preds[name]["pred"]
+                std = preds[name]["std"]
+                color = model_colors.get(name, "grey")
+                ax.plot(t_axis, pred[:, dim_idx], color=color, lw=1.4, label=name if r == 0 else "_")
+                ax.fill_between(
+                    t_axis,
+                    pred[:, dim_idx] - std[:, dim_idx],
+                    pred[:, dim_idx] + std[:, dim_idx],
+                    color=color,
+                    alpha=0.12,
+                )
+
+            if c == 0:
+                ax.set_ylabel(f"ctx {frac*100:.0f}%")
+                ax.set_title(f"x (m) | NLL holdout: {nll_row}")
+            else:
+                ax.set_title("y (m)")
+            ax.grid(True, alpha=0.25)
+
+    axes[-1, 0].set_xlabel("Trajectory step")
+    axes[-1, 1].set_xlabel("Trajectory step")
+    axes[0, 0].legend(loc="upper right", fontsize=8)
+    plt.tight_layout()
+    fig.savefig(diag_dir / f"trajectories_vs_context_{out_prefix}_idx{idx}.png", dpi=150)
+    plt.close(fig)
+
+    # Save numeric diagnostics.
+    import csv
+    with open(diag_dir / f"metrics_{out_prefix}_idx{idx}.csv", "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["ctx_frac", "model", "nll", "mae", "avg_std_xy"])
+        for i, frac in enumerate(ctx_fracs):
+            for name in model_names:
+                w.writerow([
+                    frac,
+                    name,
+                    metrics[name]["nll"][i],
+                    metrics[name]["mae"][i],
+                    metrics[name]["avg_std"][i],
+                ])
+
+    print(f"  Single-trajectory NLL diagnosis saved to {diag_dir} (idx={idx})")
+
+
+def _compute_single_traj_metrics(
+    anp_model: torch.nn.Module,
+    ranp_model: torch.nn.Module,
+    x_raw_np: np.ndarray,
+    y_raw_np: np.ndarray,
+    y_mean: torch.Tensor,
+    y_std: torch.Tensor,
+    x_means_SP: torch.Tensor,
+    ctx_fracs: List[float],
+    device: torch.device,
+    holdout_frac: float = 0.20,
+    ranp_gru_model: torch.nn.Module = None,
+) -> Tuple[List[str], Dict[str, Dict[str, List[float]]], List[Dict[str, object]]]:
+    """Return per-context metrics and predictions for one trajectory."""
+    x_raw = torch.tensor(x_raw_np[None], dtype=torch.float32, device=device)
+    y_raw = torch.tensor(y_raw_np[None], dtype=torch.float32, device=device)
+    T = x_raw.shape[1]
+
+    n_holdout = max(1, int(round(holdout_frac * T)))
+    holdout_idx = torch.arange(T - n_holdout, T, device=device)
+
+    x_aug = augment_x_with_full_mask(x_raw, x_means_SP, NUM_TIME_PTS, NUM_SENSORS)
+    y_norm = (y_raw - y_mean) / y_std
+
+    model_names = ["ANP", "RANP"] + (["RANP-GRU"] if ranp_gru_model is not None else [])
+    metrics: Dict[str, Dict[str, List[float]]] = {
+        n: {"nll": [], "mae": [], "avg_std": []} for n in model_names
+    }
+    pred_cache: List[Dict[str, object]] = []
+
+    for frac in ctx_fracs:
+        max_ctx = T - n_holdout - 1
+        n_ctx = max(1, min(max_ctx, int(round(frac * T))))
+        ctx_idx = ctx_indices_first(T, n_ctx, device)
+        tar_idx = torch.arange(T, device=device)
+
+        ctx_y = y_norm[:, ctx_idx, :]
+        tar_y = y_norm[:, tar_idx, :]
+
+        per_ctx: Dict[str, Dict[str, np.ndarray]] = {}
+        mean_a, var_a, _, _, _ = predict_anp(anp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
+        mean_r, var_r, _, _, _ = predict_ranp(ranp_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
+        mean_g, var_g = None, None
+        if ranp_gru_model is not None:
+            mean_g, var_g, _, _, _ = predict_ranp(ranp_gru_model, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
+
+        model_outputs = {
+            "ANP": (mean_a, var_a),
+            "RANP": (mean_r, var_r),
+        }
+        if ranp_gru_model is not None:
+            model_outputs["RANP-GRU"] = (mean_g, var_g)
+
+        for name, (mean_m, var_m) in model_outputs.items():
+            pred_denorm = (mean_m * y_std + y_mean)
+            std_denorm = (torch.sqrt(var_m) * y_std)
+
+            var_hold = var_m[:, holdout_idx, :].clamp_min(1e-8)
+            err_hold = y_norm[:, holdout_idx, :] - mean_m[:, holdout_idx, :]
+            nll_hold = 0.5 * (torch.log(2.0 * np.pi * var_hold) + (err_hold ** 2) / var_hold)
+            mae_hold = F.l1_loss(pred_denorm[:, holdout_idx, :], y_raw[:, holdout_idx, :], reduction="mean")
+            avg_std_hold = std_denorm[:, holdout_idx, :2].mean()
+
+            metrics[name]["nll"].append(float(nll_hold.mean().item()))
+            metrics[name]["mae"].append(float(mae_hold.item()))
+            metrics[name]["avg_std"].append(float(avg_std_hold.item()))
+
+            per_ctx[name] = {
+                "pred": pred_denorm.squeeze(0).detach().cpu().numpy(),
+                "std": std_denorm.squeeze(0).detach().cpu().numpy(),
+            }
+
+        pred_cache.append({"frac": frac, "n_ctx": n_ctx, "preds": per_ctx})
+
+    return model_names, metrics, pred_cache
+
+
+def diagnose_nll_ranking(
+    anp_model: torch.nn.Module,
+    ranp_model: torch.nn.Module,
+    test_data: list,
+    test_thetas: list,
+    y_mean: torch.Tensor,
+    y_std: torch.Tensor,
+    x_means_SP: torch.Tensor,
+    ctx_fracs: List[float],
+    output_dir: Path,
+    device: torch.device,
+    holdout_frac: float = 0.20,
+    max_samples: int = 100,
+    top_k: int = 5,
+    focus_model: str = "ANP",
+    ranp_gru_model: torch.nn.Module = None,
+) -> None:
+    """Sweep many test trajectories and rank those with strongest NLL increase."""
+    diag_dir = output_dir / "nll_diagnosis"
+    diag_dir.mkdir(parents=True, exist_ok=True)
+
+    n_total = len(test_data)
+    n_use = min(max_samples, n_total)
+    indices = np.arange(n_use)
+
+    rows: List[Dict[str, float]] = []
+    model_names = ["ANP", "RANP"] + (["RANP-GRU"] if ranp_gru_model is not None else [])
+    x_ctx = np.array(ctx_fracs, dtype=float)
+
+    for idx in tqdm(indices, desc="NLL ranking sweep"):
+        x_raw_np, y_raw_np = test_data[int(idx)]
+        theta_val = test_thetas[int(idx)] if test_thetas is not None and len(test_thetas) > int(idx) else np.nan
+        _, metrics, _ = _compute_single_traj_metrics(
+            anp_model=anp_model,
+            ranp_model=ranp_model,
+            x_raw_np=x_raw_np,
+            y_raw_np=y_raw_np,
+            y_mean=y_mean,
+            y_std=y_std,
+            x_means_SP=x_means_SP,
+            ctx_fracs=ctx_fracs,
+            device=device,
+            holdout_frac=holdout_frac,
+            ranp_gru_model=ranp_gru_model,
+        )
+
+        row: Dict[str, float] = {"idx": float(idx), "theta": float(theta_val)}
+        for name in model_names:
+            y_nll = np.array(metrics[name]["nll"], dtype=float)
+            slope = float(np.polyfit(x_ctx, y_nll, 1)[0]) if len(x_ctx) > 1 else 0.0
+            delta = float(y_nll[-1] - y_nll[0]) if len(y_nll) > 1 else 0.0
+            row[f"slope_{name}"] = slope
+            row[f"delta_{name}"] = delta
+        row["score_max_slope"] = max(row[f"slope_{n}"] for n in model_names)
+        rows.append(row)
+
+    if not rows:
+        print("  [ranking] No rows computed.")
+        return
+
+    focus = focus_model if focus_model in model_names else "ANP"
+    rows_sorted = sorted(rows, key=lambda r: r[f"slope_{focus}"], reverse=True)
+
+    import csv
+    ranking_csv = diag_dir / "nll_increase_ranking.csv"
+    with open(ranking_csv, "w", newline="") as f:
+        w = csv.writer(f)
+        headers = ["idx", "theta"] + [f"slope_{n}" for n in model_names] + [f"delta_{n}" for n in model_names] + ["score_max_slope"]
+        w.writerow(headers)
+        for r in rows_sorted:
+            w.writerow([r[h] for h in headers])
+
+    # Plot ranking bars for chosen focus model.
+    top = rows_sorted[:max(1, min(top_k, len(rows_sorted)))]
+    labels = [str(int(r["idx"])) for r in top]
+    vals = [r[f"slope_{focus}"] for r in top]
+    fig, ax = plt.subplots(figsize=(10, 4.5))
+    ax.bar(labels, vals, color="#d62728", alpha=0.85)
+    ax.set_xlabel("Test trajectory index")
+    ax.set_ylabel(f"NLL slope vs context ({focus})")
+    ax.set_title(f"Top-{len(top)} trajectories with strongest NLL increase ({focus})")
+    ax.grid(axis="y", alpha=0.3)
+    plt.tight_layout()
+    fig.savefig(diag_dir / f"nll_increase_top_{focus}.png", dpi=150)
+    plt.close(fig)
+
+    # Generate full per-context diagnostic plots for top-k trajectories.
+    for r in top:
+        diagnose_nll_single_trajectory(
+            anp_model=anp_model,
+            ranp_model=ranp_model,
+            test_data=test_data,
+            test_thetas=test_thetas,
+            y_mean=y_mean,
+            y_std=y_std,
+            x_means_SP=x_means_SP,
+            ctx_fracs=ctx_fracs,
+            output_dir=output_dir,
+            device=device,
+            holdout_frac=holdout_frac,
+            sample_index=int(r["idx"]),
+            ranp_gru_model=ranp_gru_model,
+            out_prefix="ranked",
+        )
+
+    print(f"  NLL ranking saved to {ranking_csv}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Summary CSV / TXT
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -977,6 +1324,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--num-traj-plots", type=int, default=2, help="Number of sample trajectories to plot per theta group")
     p.add_argument("--batch-size",     type=int, default=8)
     p.add_argument("--seed",           type=int, default=18)
+    p.add_argument("--run-nll-diagnosis", action="store_true", help="Run single-trajectory NLL diagnosis across context sizes")
+    p.add_argument("--diagnosis-sample-index", type=int, default=0, help="Index in test_data used for the single-trajectory NLL diagnosis")
+    p.add_argument("--run-nll-ranking", action="store_true", help="Sweep many test trajectories and rank strongest NLL increase vs context")
+    p.add_argument("--diagnosis-max-samples", type=int, default=100, help="Maximum number of test trajectories to include in NLL ranking sweep")
+    p.add_argument("--diagnosis-top-k", type=int, default=5, help="Number of top-ranked trajectories to expand into full diagnostic plots")
+    p.add_argument("--diagnosis-focus-model", default="ANP", help="Model used to sort ranking (ANP, RANP, RANP-GRU)")
     return p.parse_args()
 
 
@@ -1077,6 +1430,44 @@ def main() -> None:
     # ── Summary ──────────────────────────────────────────────────────────────
     print("\n[7/7] Saving summary …")
     save_summary(mae_per_theta, sweep, ctx_fracs, args.fixed_ctx_frac, output_dir)
+
+    if args.run_nll_diagnosis:
+        print("\n[diag] Single-trajectory NLL diagnosis …")
+        diagnose_nll_single_trajectory(
+            anp_model=anp_model,
+            ranp_model=ranp_model,
+            test_data=test_data,
+            test_thetas=metadata["test_thetas"],
+            y_mean=y_mean,
+            y_std=y_std,
+            x_means_SP=x_means_SP,
+            ctx_fracs=ctx_fracs,
+            output_dir=output_dir,
+            device=device,
+            holdout_frac=HOLDOUT_FRAC,
+            sample_index=args.diagnosis_sample_index,
+            ranp_gru_model=ranp_gru_model,
+        )
+
+    if args.run_nll_ranking:
+        print("\n[diag] NLL ranking sweep …")
+        diagnose_nll_ranking(
+            anp_model=anp_model,
+            ranp_model=ranp_model,
+            test_data=test_data,
+            test_thetas=metadata["test_thetas"],
+            y_mean=y_mean,
+            y_std=y_std,
+            x_means_SP=x_means_SP,
+            ctx_fracs=ctx_fracs,
+            output_dir=output_dir,
+            device=device,
+            holdout_frac=HOLDOUT_FRAC,
+            max_samples=args.diagnosis_max_samples,
+            top_k=args.diagnosis_top_k,
+            focus_model=args.diagnosis_focus_model,
+            ranp_gru_model=ranp_gru_model,
+        )
 
     print(f"\nAll results written to: {output_dir.resolve()}")
 
