@@ -1098,7 +1098,7 @@ def diagnose_nll_ranking(
     top_k: int = 5,
     focus_model: str = "ANP",
     ranp_gru_model: torch.nn.Module = None,
-) -> None:
+) -> int:
     """Sweep many test trajectories and rank those with strongest NLL increase."""
     diag_dir = output_dir / "nll_diagnosis"
     diag_dir.mkdir(parents=True, exist_ok=True)
@@ -1140,7 +1140,7 @@ def diagnose_nll_ranking(
 
     if not rows:
         print("  [ranking] No rows computed.")
-        return
+        return 0
 
     focus = focus_model if focus_model in model_names else "ANP"
     rows_sorted = sorted(rows, key=lambda r: r[f"slope_{focus}"], reverse=True)
@@ -1188,6 +1188,7 @@ def diagnose_nll_ranking(
         )
 
     print(f"  NLL ranking saved to {ranking_csv}")
+    return int(top[0]["idx"])
 
 
 def diagnose_anp_simple_overlay(
