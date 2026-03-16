@@ -43,6 +43,10 @@ python eval_anp_vs_ranp_masked.py \
     --fixed-ctx-frac 0.40 \
     --num-traj-plots 2 \
     --run-nll-diagnosis \
+    --run-nll-ranking \
+    --diagnosis-max-samples 120 \
+    --diagnosis-top-k 8 \
+    --diagnosis-focus-model ANP
     --seed 18
 """
 from __future__ import annotations
@@ -1196,6 +1200,147 @@ def diagnose_nll_ranking(
         )
 
     print(f"  NLL ranking saved to {ranking_csv}")
+
+
+def diagnose_anp_simple_overlay(
+    anp_model: torch.nn.Module,
+    test_data: list,
+    test_thetas: list,
+    y_mean: torch.Tensor,
+    y_std: torch.Tensor,
+    x_means_SP: torch.Tensor,
+    ctx_fracs: List[float],
+    output_dir: Path,
+    device: torch.device,
+    holdout_frac: float = 0.20,
+    max_samples: int = 120,
+    context_subset: List[float] = None,
+) -> None:
+    """ANP-only quick diagnosis with a single ranked trajectory and context overlays.
+
+    Steps:
+    1) Sweep up to `max_samples` trajectories and pick the one with largest
+       positive slope of ANP NLL vs context.
+    2) On that trajectory, overlay ANP predictions for 2-3 selected contexts
+       on the same axes, including +-1 sigma bands.
+    """
+    diag_dir = output_dir / "nll_diagnosis"
+    diag_dir.mkdir(parents=True, exist_ok=True)
+
+    n_total = len(test_data)
+    n_use = min(max_samples, n_total)
+    indices = np.arange(n_use)
+    x_ctx = np.array(ctx_fracs, dtype=float)
+
+    best_idx = 0
+    best_slope = -1e18
+    best_delta = 0.0
+    for idx in tqdm(indices, desc="ANP simple ranking"):
+        x_raw_np, y_raw_np = test_data[int(idx)]
+        _, metrics, _ = _compute_single_traj_metrics(
+            anp_model=anp_model,
+            ranp_model=anp_model,
+            x_raw_np=x_raw_np,
+            y_raw_np=y_raw_np,
+            y_mean=y_mean,
+            y_std=y_std,
+            x_means_SP=x_means_SP,
+            ctx_fracs=ctx_fracs,
+            device=device,
+            holdout_frac=holdout_frac,
+            ranp_gru_model=None,
+        )
+        y_nll = np.array(metrics["ANP"]["nll"], dtype=float)
+        slope = float(np.polyfit(x_ctx, y_nll, 1)[0]) if len(x_ctx) > 1 else 0.0
+        delta = float(y_nll[-1] - y_nll[0]) if len(y_nll) > 1 else 0.0
+        if slope > best_slope:
+            best_slope = slope
+            best_delta = delta
+            best_idx = int(idx)
+
+    # Recompute predictions for best trajectory.
+    x_raw_np, y_raw_np = test_data[best_idx]
+    theta_val = test_thetas[best_idx] if test_thetas is not None and len(test_thetas) > best_idx else None
+    _, metrics, pred_cache = _compute_single_traj_metrics(
+        anp_model=anp_model,
+        ranp_model=anp_model,
+        x_raw_np=x_raw_np,
+        y_raw_np=y_raw_np,
+        y_mean=y_mean,
+        y_std=y_std,
+        x_means_SP=x_means_SP,
+        ctx_fracs=ctx_fracs,
+        device=device,
+        holdout_frac=holdout_frac,
+        ranp_gru_model=None,
+    )
+
+    # Pick contexts to overlay.
+    if context_subset is None or len(context_subset) == 0:
+        context_subset = [0.10, 0.50, 0.90]
+    chosen_ctx = []
+    for c in context_subset:
+        nearest = min(ctx_fracs, key=lambda x: abs(x - c))
+        if nearest not in chosen_ctx:
+            chosen_ctx.append(nearest)
+    if len(chosen_ctx) < 2:
+        chosen_ctx = list(dict.fromkeys(ctx_fracs[:min(3, len(ctx_fracs))]))
+
+    # Build lookup by fraction.
+    pred_by_frac = {float(item["frac"]): item for item in pred_cache}
+
+    x_raw = torch.tensor(x_raw_np[None], dtype=torch.float32, device=device)
+    y_raw = torch.tensor(y_raw_np[None], dtype=torch.float32, device=device)
+    gt_np = y_raw.squeeze(0).detach().cpu().numpy()
+    T = gt_np.shape[0]
+    t_axis = np.arange(T)
+    cmap = plt.cm.viridis(np.linspace(0.15, 0.9, len(chosen_ctx)))
+
+    fig, axes = plt.subplots(2, 1, figsize=(12, 7), sharex=True)
+    dim_labels = ["x (m)", "y (m)"]
+    for row, dim_idx in enumerate([0, 1]):
+        ax = axes[row]
+        ax.plot(t_axis, gt_np[:, dim_idx], "k-", lw=1.8, label="Ground truth")
+
+        for color, frac in zip(cmap, chosen_ctx):
+            item = pred_by_frac[float(frac)]
+            n_ctx = int(item["n_ctx"])
+            pred = item["preds"]["ANP"]["pred"]
+            std = item["preds"]["ANP"]["std"]
+
+            label = f"ANP ctx={frac*100:.0f}% | NLL={metrics['ANP']['nll'][ctx_fracs.index(frac)]:.3f}"
+            ax.plot(t_axis, pred[:, dim_idx], color=color, lw=1.5, label=label)
+            ax.fill_between(
+                t_axis,
+                pred[:, dim_idx] - std[:, dim_idx],
+                pred[:, dim_idx] + std[:, dim_idx],
+                color=color,
+                alpha=0.16,
+            )
+            ax.scatter(t_axis[:n_ctx], gt_np[:n_ctx, dim_idx], color=color, s=9, alpha=0.9)
+
+        ax.set_ylabel(dim_labels[row])
+        ax.grid(True, alpha=0.3)
+
+    axes[-1].set_xlabel("Trajectory step")
+    axes[0].legend(loc="upper right", fontsize=8)
+    theta_txt = f", theta={theta_val:.1f}" if theta_val is not None else ""
+    fig.suptitle(
+        f"ANP simple diagnosis | selected idx={best_idx}{theta_txt}\n"
+        f"max NLL slope={best_slope:.4f}, delta(1st->last)={best_delta:.4f}",
+        fontsize=11,
+    )
+    plt.tight_layout(rect=[0, 0, 1, 0.93])
+    fig.savefig(diag_dir / "anp_simple_overlay.png", dpi=150)
+    plt.close(fig)
+
+    import csv
+    with open(diag_dir / "anp_simple_selected.csv", "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["selected_idx", "theta", "max_nll_slope", "delta_nll_first_last", "contexts_used"]) 
+        w.writerow([best_idx, theta_val, best_slope, best_delta, ",".join([str(c) for c in chosen_ctx])])
+
+    print(f"  ANP simple diagnosis saved to {diag_dir / 'anp_simple_overlay.png'}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
