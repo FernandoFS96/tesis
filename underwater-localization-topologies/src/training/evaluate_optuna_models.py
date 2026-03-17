@@ -9,22 +9,14 @@ Usage
 -----
 Run from the project root (underwater-localization-topologies/):
 
-    python -m src.training.evaluate_optuna_models \
-        --topology ellipsoidal \
-        --data-dir data/data/data_processed_topologies_low_variance \
-        --anp-dir  src/training/results/optuna/anp_masked_lowvar_ellipsoidal_v1/best_model \
-        --ranp-dir src/training/results/optuna/ranp_masked_lowvar_ellipsoidal_v1/best_model \
-        --device   cuda
-
-    python -m src.training.evaluate_optuna_models \
-        --run-all \
-        --device cuda \
-        --optuna-results-root src/training/results/optuna \
-        --data-root data/data \
-        --boxplot-context-frac 0.4 \
-        --boxplot-split test \
-        --save-boxplot src/training/results/optuna/boxplot_ctx40_test.png \
-        --save-csv src/training/results/optuna/all_eval_summary.csv
+python -m src.training.evaluate_optuna_models \
+  --run-all \
+  --device cuda \
+  --optuna-results-root src/training/results/optuna \
+  --data-root data/data \
+  --output-dir src/training/results/optuna/models_evaluation \
+  --boxplot-split test \
+  --context-frac 0.3
 
 Either --anp-dir or --ranp-dir can be omitted if only one model is available.
 """
@@ -42,6 +34,8 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from torch.utils.data import DataLoader, TensorDataset
+
+DEFAULT_OUTPUT_DIR = "src/training/results/optuna/models_evaluation"
 
 # -------------------------------------
 # Helpers shared with training scripts
@@ -305,6 +299,156 @@ def _plot_boxplot_by_variance(
     plt.close(fig)
 
 
+def _plot_mae_heatmaps_by_split(all_rows: list[dict], save_path: str) -> None:
+    """Plot MAE heatmaps with axes topology x (model,variance), split into val/test."""
+    if len(all_rows) == 0:
+        return
+
+    split_order = ["val", "test"]
+    splits = [s for s in split_order if any(r["split"] == s for r in all_rows)]
+    if len(splits) == 0:
+        return
+
+    topologies = ["aligned", "ellipsoidal", "random"]
+    col_pairs = [("anp", "lowvar"), ("ranp", "lowvar"), ("anp", "highvar"), ("ranp", "highvar")]
+    col_labels = [f"{m}-{v}" for m, v in col_pairs]
+
+    fig, axes = plt.subplots(
+        1,
+        len(splits),
+        figsize=(7.2 * len(splits), 5.8),
+        sharey=True,
+        constrained_layout=True,
+    )
+    if len(splits) == 1:
+        axes = [axes]
+
+    vmin = min(r["mean_mae"] for r in all_rows)
+    vmax = max(r["mean_mae"] for r in all_rows)
+
+    for ax, split in zip(axes, splits):
+        mat = np.full((len(topologies), len(col_pairs)), np.nan, dtype=float)
+        for i, topo in enumerate(topologies):
+            for j, (model, variance) in enumerate(col_pairs):
+                candidates = [
+                    r["mean_mae"]
+                    for r in all_rows
+                    if r["split"] == split and r["topology"] == topo and r["model"] == model and r["variance"] == variance
+                ]
+                if len(candidates) > 0:
+                    mat[i, j] = float(candidates[0])
+
+        im = ax.imshow(mat, cmap="viridis", vmin=vmin, vmax=vmax, aspect="auto")
+        ax.set_title(f"Mean MAE ({split})")
+        ax.set_xticks(np.arange(len(col_labels)))
+        ax.set_xticklabels(col_labels, rotation=30, ha="right")
+        ax.set_yticks(np.arange(len(topologies)))
+        ax.set_yticklabels(topologies)
+        ax.set_xlabel("(model, variance)")
+
+        for i in range(mat.shape[0]):
+            for j in range(mat.shape[1]):
+                txt = "-" if np.isnan(mat[i, j]) else f"{mat[i, j]:.3f}"
+                ax.text(j, i, txt, ha="center", va="center", color="white", fontsize=9)
+
+    axes[0].set_ylabel("Topology")
+    cbar = fig.colorbar(im, ax=axes, fraction=0.035, pad=0.02, shrink=0.95)
+    cbar.set_label("MAE (m)")
+
+    out_dir = os.path.dirname(save_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+    fig.savefig(save_path, dpi=180)
+    plt.close(fig)
+
+
+def _plot_delta_heatmaps_by_split(all_rows: list[dict], save_path: str) -> None:
+    """Plot delta heatmaps (RANP - ANP) by topology x variance, split into val/test."""
+    if len(all_rows) == 0:
+        return
+
+    split_order = ["val", "test"]
+    splits = [s for s in split_order if any(r["split"] == s for r in all_rows)]
+    if len(splits) == 0:
+        return
+
+    topologies = ["aligned", "ellipsoidal", "random"]
+    variances = ["lowvar", "highvar"]
+
+    # Build all deltas first to set a symmetric color scale around 0.
+    all_deltas = []
+    for split in splits:
+        for topo in topologies:
+            for var in variances:
+                ranp = [
+                    r["mean_mae"]
+                    for r in all_rows
+                    if r["split"] == split and r["topology"] == topo and r["variance"] == var and r["model"] == "ranp"
+                ]
+                anp = [
+                    r["mean_mae"]
+                    for r in all_rows
+                    if r["split"] == split and r["topology"] == topo and r["variance"] == var and r["model"] == "anp"
+                ]
+                if len(ranp) > 0 and len(anp) > 0:
+                    all_deltas.append(float(ranp[0] - anp[0]))
+
+    if len(all_deltas) == 0:
+        return
+
+    abs_max = max(abs(min(all_deltas)), abs(max(all_deltas)))
+
+    fig, axes = plt.subplots(
+        1,
+        len(splits),
+        figsize=(7.2 * len(splits), 5.8),
+        sharey=True,
+        constrained_layout=True,
+    )
+    if len(splits) == 1:
+        axes = [axes]
+
+    for ax, split in zip(axes, splits):
+        mat = np.full((len(topologies), len(variances)), np.nan, dtype=float)
+        for i, topo in enumerate(topologies):
+            for j, var in enumerate(variances):
+                ranp = [
+                    r["mean_mae"]
+                    for r in all_rows
+                    if r["split"] == split and r["topology"] == topo and r["variance"] == var and r["model"] == "ranp"
+                ]
+                anp = [
+                    r["mean_mae"]
+                    for r in all_rows
+                    if r["split"] == split and r["topology"] == topo and r["variance"] == var and r["model"] == "anp"
+                ]
+                if len(ranp) > 0 and len(anp) > 0:
+                    mat[i, j] = float(ranp[0] - anp[0])
+
+        im = ax.imshow(mat, cmap="coolwarm", vmin=-abs_max, vmax=abs_max, aspect="auto")
+        ax.set_title(f"Delta MAE (RANP - ANP) ({split})")
+        ax.set_xticks(np.arange(len(variances)))
+        ax.set_xticklabels(variances)
+        ax.set_yticks(np.arange(len(topologies)))
+        ax.set_yticklabels(topologies)
+        ax.set_xlabel("Variance")
+
+        for i in range(mat.shape[0]):
+            for j in range(mat.shape[1]):
+                txt = "-" if np.isnan(mat[i, j]) else f"{mat[i, j]:+.3f}"
+                ax.text(j, i, txt, ha="center", va="center", color="black", fontsize=9)
+
+    axes[0].set_ylabel("Topology")
+    cbar = fig.colorbar(im, ax=axes, fraction=0.035, pad=0.02, shrink=0.95)
+    cbar.set_label("Delta MAE (m), negative means RANP better")
+
+    out_dir = os.path.dirname(save_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+    fig.savefig(save_path, dpi=180)
+    plt.close(fig)
+
+
 def _default_study_name(model_type: str, variance: str, topology: str) -> str:
     return f"{model_type}_masked_{variance}_{topology}_v1"
 
@@ -312,6 +456,15 @@ def _default_study_name(model_type: str, variance: str, topology: str) -> str:
 def _resolve_best_model_dir(optuna_root: str, model_type: str, variance: str, topology: str) -> str:
     study = _default_study_name(model_type, variance, topology)
     return os.path.join(optuna_root, study, "best_model")
+
+
+def _resolve_output_path(output_dir: str, path_or_name: str | None, default_filename: str) -> str:
+    """Force outputs to be stored under *output_dir*.
+
+    If a custom name/path is provided, only its basename is used.
+    """
+    filename = default_filename if path_or_name is None else os.path.basename(path_or_name)
+    return os.path.join(output_dir, filename)
 
 
 def _evaluate_one_configuration(
@@ -322,7 +475,7 @@ def _evaluate_one_configuration(
     args,
     context_fracs,
     boxplot_split: str = "test",
-    boxplot_context_frac: float = 0.4,
+    context_frac: float = 0.4,
 ):
     from src.utils.load_optuna_model import load_optuna_best_model
 
@@ -411,7 +564,7 @@ def _evaluate_one_configuration(
                 x_means_SP=x_means_SP,
                 num_time_points=args.num_time_points,
                 num_sensors=args.num_sensors,
-                context_frac=boxplot_context_frac,
+                context_frac=context_frac,
                 device=args.device,
             )
 
@@ -431,17 +584,44 @@ def main():
     parser.add_argument("--run-all", action="store_true", help="Evaluate all combinations: model in {anp,ranp}, variance in {lowvar,highvar}, topology in {aligned,ellipsoidal,random}.")
     parser.add_argument("--optuna-results-root", default="src/training/results/optuna", help="Root containing Optuna study folders when --run-all is used.")
     parser.add_argument("--data-root", default="data/data", help="Root containing data_processed_topologies_low_variance and data_processed_topologies_high_variance when --run-all is used.")
-    parser.add_argument("--save-csv", default=None, help="Optional path to save consolidated results as CSV.")
-    parser.add_argument("--save-boxplot", default=None, help="Optional path for PNG boxplot (recommended with --run-all).")
+    parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="Directory where CSV and plots are saved.")
+    parser.add_argument("--save-csv", default=None, help="Optional CSV filename override (stored inside --output-dir).")
+    parser.add_argument("--save-boxplot", default=None, help="Optional boxplot filename override (stored inside --output-dir).")
+    parser.add_argument("--save-heatmap", default=None, help="Optional MAE heatmap filename override (stored inside --output-dir).")
+    parser.add_argument("--save-delta-heatmap", default=None, help="Optional delta heatmap filename override (stored inside --output-dir).")
     parser.add_argument("--boxplot-split", default="test", choices=["val", "test"], help="Which split to use for boxplot distributions.")
-    parser.add_argument("--boxplot-context-frac", type=float, default=0.4, help="Context fraction used to build MAE boxplot (default: 0.4).")
+    parser.add_argument("--context-frac", type=float, default=0.4, help="Context fraction used by all metrics and plots (default: 0.4).")
     parser.add_argument("--device", default="cpu", help="Torch device: cpu | cuda | cuda:0 ...")
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--num-sensors", type=int, default=10)
     parser.add_argument("--num-time-points", type=int, default=201)
     args = parser.parse_args()
 
-    context_fracs = [0.2, 0.4, 0.6]
+    context_fracs = [args.context_frac]
+    ctx_pct = int(round(args.context_frac * 100))
+
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    csv_path = _resolve_output_path(
+        args.output_dir,
+        args.save_csv,
+        "all_eval_summary.csv",
+    )
+    boxplot_path = _resolve_output_path(
+        args.output_dir,
+        args.save_boxplot,
+        f"boxplot_ctx{ctx_pct}_{args.boxplot_split}.png",
+    )
+    heatmap_path = _resolve_output_path(
+        args.output_dir,
+        args.save_heatmap,
+        f"mae_heatmap_ctx{ctx_pct}_{args.boxplot_split}.png",
+    )
+    delta_heatmap_path = _resolve_output_path(
+        args.output_dir,
+        args.save_delta_heatmap,
+        f"delta_heatmap_ranp_minus_anp_ctx{ctx_pct}_{args.boxplot_split}.png",
+    )
 
     all_rows = []
     boxplot_store = defaultdict(lambda: defaultdict(dict))
@@ -474,7 +654,7 @@ def main():
                             args=args,
                             context_fracs=context_fracs,
                             boxplot_split=args.boxplot_split,
-                            boxplot_context_frac=args.boxplot_context_frac,
+                            context_frac=args.context_frac,
                         )
                         for row in rows:
                             row["variance"] = variance
@@ -503,7 +683,7 @@ def main():
                     args=args,
                     context_fracs=context_fracs,
                     boxplot_split=args.boxplot_split,
-                    boxplot_context_frac=args.boxplot_context_frac,
+                    context_frac=args.context_frac,
                 )
                 for row in rows:
                     row["variance"] = "custom"
@@ -514,21 +694,21 @@ def main():
     if len(all_rows) > 0:
         print(f"\n{'='*90}")
         print("Consolidated summary")
-        print("model | variance | topology | split | ctx20 | ctx40 | ctx60 | mean")
+        print(f"model | variance | topology | split | ctx{ctx_pct:02d} | mean")
         print("-" * 90)
         for row in all_rows:
             print(
                 f"{row['model']:<5} | {row['variance']:<8} | {row['topology']:<11} | {row['split']:<4} | "
-                f"{row['mae_ctx_20']:.4f} | {row['mae_ctx_40']:.4f} | {row['mae_ctx_60']:.4f} | {row['mean_mae']:.4f}"
+                f"{row[f'mae_ctx_{ctx_pct}']:.4f} | {row['mean_mae']:.4f}"
             )
 
-    if args.save_csv is not None and len(all_rows) > 0:
+    if len(all_rows) > 0:
         import csv
 
-        out_dir = os.path.dirname(args.save_csv)
+        out_dir = os.path.dirname(csv_path)
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
-        with open(args.save_csv, "w", newline="") as f:
+        with open(csv_path, "w", newline="") as f:
             writer = csv.DictWriter(
                 f,
                 fieldnames=[
@@ -536,27 +716,33 @@ def main():
                     "variance",
                     "topology",
                     "split",
-                    "mae_ctx_20",
-                    "mae_ctx_40",
-                    "mae_ctx_60",
+                    f"mae_ctx_{ctx_pct}",
                     "mean_mae",
                 ],
             )
             writer.writeheader()
             writer.writerows(all_rows)
-        print(f"\nSaved CSV summary to: {args.save_csv}")
+        print(f"\nSaved CSV summary to: {csv_path}")
 
-    if args.save_boxplot is not None:
+    if len(all_rows) > 0:
         if not args.run_all:
             print("\n--save-boxplot is most useful with --run-all; skipping plot in manual mode.")
         else:
             _plot_boxplot_by_variance(
                 boxplot_store=boxplot_store,
-                save_path=args.save_boxplot,
-                context_frac=args.boxplot_context_frac,
+                save_path=boxplot_path,
+                context_frac=args.context_frac,
                 split_name=args.boxplot_split,
             )
-            print(f"Saved boxplot PNG to: {args.save_boxplot}")
+            print(f"Saved boxplot PNG to: {boxplot_path}")
+
+    if len(all_rows) > 0:
+        _plot_mae_heatmaps_by_split(all_rows=all_rows, save_path=heatmap_path)
+        print(f"Saved MAE heatmap PNG to: {heatmap_path}")
+
+    if len(all_rows) > 0:
+        _plot_delta_heatmaps_by_split(all_rows=all_rows, save_path=delta_heatmap_path)
+        print(f"Saved delta heatmap PNG to: {delta_heatmap_path}")
 
 
 if __name__ == "__main__":

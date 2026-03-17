@@ -38,15 +38,15 @@ Run ANP (single process):
     nohup python optuna_anp_search.py \
         --model anp \
         --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
-        --topologies random \
-        --objective-topology random \
+        --topologies aligned \
+        --objective-topology aligned \
         --n-trials 200 \
         --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
-        --study-name anp_masked_highvar_random_v1 \
+        --study-name anp_masked_highvar_aligned_v1 \
         --constant-liar \
         --cleanup-trial-checkpoints \
         --disable-pruning \
-        > optuna_anp_masked_highvar_random_v1_$(date +%F_%H%M%S)_$$.log 2>&1 & 
+        > optuna_anp_masked_highvar_aligned_v1_$(date +%F_%H%M%S)_$$.log 2>&1 & 
 
 Run RANP (single process):
     cd underwater-localization-topologies/src/training
