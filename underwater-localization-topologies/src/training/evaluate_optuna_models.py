@@ -16,6 +16,16 @@ Run from the project root (underwater-localization-topologies/):
         --ranp-dir src/training/results/optuna/ranp_masked_lowvar_ellipsoidal_v1/best_model \
         --device   cuda
 
+    python -m src.training.evaluate_optuna_models \
+        --run-all \
+        --device cuda \
+        --optuna-results-root src/training/results/optuna \
+        --data-root data/data \
+        --boxplot-context-frac 0.4 \
+        --boxplot-split test \
+        --save-boxplot src/training/results/optuna/boxplot_ctx40_test.png \
+        --save-csv src/training/results/optuna/all_eval_summary.csv
+
 Either --anp-dir or --ranp-dir can be omitted if only one model is available.
 """
 
@@ -23,12 +33,14 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
 import pickle
+from collections import defaultdict
 
 import numpy as np
 import torch
 import torch.nn.functional as F
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 from torch.utils.data import DataLoader, TensorDataset
 
 # -------------------------------------
@@ -173,89 +185,224 @@ def evaluate_model(
     return {f: mae_sums[f] / n_batches for f in context_fracs}
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+def evaluate_model_distribution(
+    model,
+    model_type: str,
+    val_loader,
+    y_mean: torch.Tensor,
+    y_std: torch.Tensor,
+    x_means_SP: torch.Tensor,
+    num_time_points: int,
+    num_sensors: int,
+    context_frac: float,
+    device: str | torch.device,
+) -> list[float]:
+    """Return per-trajectory MAE distribution for a fixed context fraction."""
+    y_mean = y_mean.to(device)
+    y_std = y_std.to(device)
+    x_means_SP = x_means_SP.to(device)
 
-def main():
-    parser = argparse.ArgumentParser(description="Evaluate Optuna best ANP/RANP models")
-    parser.add_argument("--topology",  default="ellipsoidal",
-                        help="Topology name (e.g. ellipsoidal, aligned, random)")
-    parser.add_argument("--data-dir",
-                        default="data/data/data_processed_topologies_low_variance",
-                        help="Path to the directory containing topology_<name>/ folders")
-    parser.add_argument("--anp-dir",   default=None,
-                        help="Path to ANP best_model/ dir (omit to skip ANP eval)")
-    parser.add_argument("--ranp-dir",  default=None,
-                        help="Path to RANP best_model/ dir (omit to skip RANP eval)")
-    parser.add_argument("--device",    default="cpu",
-                        help="Torch device: cpu | cuda | cuda:0 ...")
-    parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--num-sensors",     type=int, default=10)
-    parser.add_argument("--num-time-points", type=int, default=201)
-    args = parser.parse_args()
+    maes = []
+    model.eval()
 
-    if args.anp_dir is None and args.ranp_dir is None:
-        parser.error("Provide at least one of --anp-dir or --ranp-dir")
+    with torch.no_grad():
+        for x_batch, y_batch in val_loader:
+            x_batch = x_batch.to(device)
+            y_batch = y_batch.to(device)
+            B, T, _ = x_batch.shape
 
-    # ---- data ----------------------------------------------------------------
-    print(f"Loading data for topology '{args.topology}' from {args.data_dir} ...")
-    train_data, val_data, test_data = _load_topology_data(args.data_dir, args.topology)
-    print(f"  train: {len(train_data)} trajectories | val: {len(val_data)} trajectories", end="")
-    if test_data is not None:
-        print(f" | test: {len(test_data)} trajectories")
-    else:
-        print(" | test: not found (skipping)")
+            sensor_mask = torch.ones(B, num_sensors, device=device)
+            x_aug = _apply_mask_and_append(
+                x_batch, sensor_mask, x_means_SP, num_time_points, num_sensors
+            )
 
-    y_mean, y_std   = _compute_y_stats(train_data)
-    x_means_SP      = torch.tensor(
+            y_norm = (y_batch - y_mean) / y_std
+            ctx_size = max(1, min(T - 1, int(round(context_frac * T))))
+            ctx_idx = torch.arange(ctx_size, device=device)
+            tar_idx = torch.arange(ctx_size, T, device=device)
+
+            context_y = y_norm[:, ctx_idx, :]
+
+            if model_type == "anp":
+                context_x = x_aug[:, ctx_idx, :]
+                target_x = x_aug[:, tar_idx, :]
+                y_pred_norm, *_ = model(context_x, context_y, target_x)
+            elif model_type == "ranp":
+                y_pred_norm, *_ = model(
+                    x_seq=x_aug,
+                    context_indices=ctx_idx,
+                    context_y=context_y,
+                    target_indices=tar_idx,
+                )
+            else:
+                raise ValueError(f"Unknown model_type: {model_type}")
+
+            y_pred = y_pred_norm * y_std + y_mean
+            y_true = y_batch[:, tar_idx, :]
+            # Per-trajectory MAE across time and xyz dimensions.
+            per_traj = torch.mean(torch.abs(y_pred - y_true), dim=(1, 2))
+            maes.extend(per_traj.detach().cpu().tolist())
+
+    return maes
+
+
+def _plot_boxplot_by_variance(
+    boxplot_store: dict,
+    save_path: str,
+    context_frac: float,
+    split_name: str,
+) -> None:
+    """Create a 2-panel boxplot (lowvar/highvar) with ANP vs RANP per topology."""
+    variances = ["lowvar", "highvar"]
+    topologies = ["aligned", "ellipsoidal", "random"]
+    model_order = ["anp", "ranp"]
+
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
+    colors = {"anp": "#1f77b4", "ranp": "#ff7f0e"}
+
+    for ax, variance in zip(axes, variances):
+        centers = np.arange(len(topologies), dtype=float)
+        offsets = {"anp": -0.18, "ranp": 0.18}
+        width = 0.32
+
+        for topo_idx, topo in enumerate(topologies):
+            for model in model_order:
+                values = boxplot_store[variance][topo].get(model, [])
+                if len(values) == 0:
+                    continue
+                pos = centers[topo_idx] + offsets[model]
+                bp = ax.boxplot(
+                    [values],
+                    positions=[pos],
+                    widths=width,
+                    patch_artist=True,
+                    showfliers=False,
+                    medianprops={"color": "black", "linewidth": 1.4},
+                )
+                bp["boxes"][0].set_facecolor(colors[model])
+                bp["boxes"][0].set_alpha(0.6)
+
+        ax.set_title(f"{variance} ({split_name})")
+        ax.set_xticks(centers)
+        ax.set_xticklabels(topologies)
+        ax.set_xlabel("Topology")
+        ax.grid(axis="y", alpha=0.3)
+
+    axes[0].set_ylabel("MAE (m)")
+    handles = [
+        Line2D([0], [0], color=colors["anp"], lw=8, alpha=0.6, label="ANP"),
+        Line2D([0], [0], color=colors["ranp"], lw=8, alpha=0.6, label="RANP"),
+    ]
+    axes[1].legend(handles=handles, loc="upper right")
+
+    fig.suptitle(f"Per-trajectory MAE boxplots at context={int(round(context_frac * 100))}%")
+    fig.tight_layout()
+
+    out_dir = os.path.dirname(save_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+    fig.savefig(save_path, dpi=180)
+    plt.close(fig)
+
+
+def _default_study_name(model_type: str, variance: str, topology: str) -> str:
+    return f"{model_type}_masked_{variance}_{topology}_v1"
+
+
+def _resolve_best_model_dir(optuna_root: str, model_type: str, variance: str, topology: str) -> str:
+    study = _default_study_name(model_type, variance, topology)
+    return os.path.join(optuna_root, study, "best_model")
+
+
+def _evaluate_one_configuration(
+    model_label: str,
+    model_dir: str,
+    topology: str,
+    data_dir: str,
+    args,
+    context_fracs,
+    boxplot_split: str = "test",
+    boxplot_context_frac: float = 0.4,
+):
+    from src.utils.load_optuna_model import load_optuna_best_model
+
+    print(f"\n{'='*60}")
+    print(f"Loading data (topology={topology}) from: {data_dir}")
+    train_data, val_data, test_data = _load_topology_data(data_dir, topology)
+
+    print(
+        f"  train: {len(train_data)} | val: {len(val_data)}"
+        + (f" | test: {len(test_data)}" if test_data is not None else " | test: not found")
+    )
+
+    y_mean, y_std = _compute_y_stats(train_data)
+    x_means_SP = torch.tensor(
         _compute_x_sensor_means(train_data, args.num_time_points, args.num_sensors),
         dtype=torch.float32,
     )
-    val_loader  = _make_dataloader(val_data,  args.batch_size)
+
+    val_loader = _make_dataloader(val_data, args.batch_size)
     test_loader = _make_dataloader(test_data, args.batch_size) if test_data is not None else None
 
-    context_fracs = [0.2, 0.4, 0.6]
+    print(f"Loading {model_label} model from: {model_dir}")
+    model, hparams, meta = load_optuna_best_model(
+        best_model_dir=model_dir,
+        topology=topology,
+        model_type="auto",
+        num_sensors=args.num_sensors,
+        num_time_points=args.num_time_points,
+        output_dim=3,
+        device=args.device,
+    )
 
-    # ---- load & evaluate each model -----------------------------------------
-    from src.utils.load_optuna_model import load_optuna_best_model
+    n_params = sum(p.numel() for p in model.parameters())
+    trial_num = meta["trial_number"] if meta else "?"
+    trial_mae = meta.get("value", "?") if meta else "?"
+    print(f"  Trial: {trial_num} | Optuna MAE: {trial_mae} | Params: {n_params:,}")
+    print(f"  Hparams: {hparams}")
 
-    results = {}
+    model_type = "ranp" if model_label.lower() == "ranp" else "anp"
+    eval_sets = [("val", val_loader)]
+    if test_loader is not None:
+        eval_sets.append(("test", test_loader))
 
-    for label, model_dir in [("ANP", args.anp_dir), ("RANP", args.ranp_dir)]:
-        if model_dir is None:
-            continue
+    available_splits = {name for name, _ in eval_sets}
+    selected_boxplot_split = boxplot_split if boxplot_split in available_splits else "val"
 
-        print(f"\n{'='*60}")
-        print(f"Loading {label} model from: {model_dir}")
-        try:
-            model, hparams, meta = load_optuna_best_model(
-                best_model_dir=model_dir,
-                topology=args.topology,
-                model_type="auto",
-                num_sensors=args.num_sensors,
-                num_time_points=args.num_time_points,
-                output_dim=3,
-                device=args.device,
-            )
-        except FileNotFoundError as exc:
-            print(f"  Skipping {label}: {exc}")
-            continue
+    out_rows = []
+    boxplot_values = None
+    for split_name, loader in eval_sets:
+        print(f"\nEvaluating {model_label} on {split_name}...")
+        mae_by_frac = evaluate_model(
+            model=model,
+            model_type=model_type,
+            val_loader=loader,
+            y_mean=y_mean,
+            y_std=y_std,
+            x_means_SP=x_means_SP,
+            num_time_points=args.num_time_points,
+            num_sensors=args.num_sensors,
+            context_fracs=context_fracs,
+            device=args.device,
+        )
+        mean_mae = float(np.mean(list(mae_by_frac.values())))
 
-        model_type = "ranp" if label == "RANP" else "anp"
-        n_params = sum(p.numel() for p in model.parameters())
-        trial_num = meta["trial_number"] if meta else "?"
-        trial_mae = meta.get("value", "?") if meta else "?"
-        print(f"  Trial: {trial_num}  |  Optuna MAE: {trial_mae}  |  Params: {n_params:,}")
-        print(f"  Hparams: {hparams}")
+        row = {
+            "model": model_label.lower(),
+            "topology": topology,
+            "split": split_name,
+            "mean_mae": mean_mae,
+        }
+        for frac in context_fracs:
+            row[f"mae_ctx_{int(frac * 100)}"] = float(mae_by_frac[frac])
+        out_rows.append(row)
 
-        eval_sets = [("val", val_loader)]
-        if test_loader is not None:
-            eval_sets.append(("test", test_loader))
+        print(f"  {model_label} [{split_name}] mean MAE: {mean_mae:.4f} m")
+        for frac in context_fracs:
+            print(f"    ctx={int(frac * 100):3d}% -> {mae_by_frac[frac]:.4f} m")
 
-        for split_name, loader in eval_sets:
-            print(f"\nEvaluating {label} on {split_name} set ...")
-            mae_by_frac = evaluate_model(
+        if split_name == selected_boxplot_split:
+            boxplot_values = evaluate_model_distribution(
                 model=model,
                 model_type=model_type,
                 val_loader=loader,
@@ -264,28 +411,152 @@ def main():
                 x_means_SP=x_means_SP,
                 num_time_points=args.num_time_points,
                 num_sensors=args.num_sensors,
-                context_fracs=context_fracs,
+                context_frac=boxplot_context_frac,
                 device=args.device,
             )
-            mean_mae = np.mean(list(mae_by_frac.values()))
-            results[f"{label}_{split_name}"] = {"by_frac": mae_by_frac, "mean": mean_mae}
 
-            print(f"\n  {label} [{split_name}] Results (topology={args.topology}):")
-            for frac, mae in mae_by_frac.items():
-                print(f"    ctx={int(frac*100):3d}%  →  MAE = {mae:.4f} m")
-            print(f"    Mean MAE (avg over fracs) = {mean_mae:.4f} m")
+    return out_rows, boxplot_values
 
-    # ---- comparison summary --------------------------------------------------
-    if len(results) > 1:
-        print(f"\n{'='*60}")
-        print("Summary comparison:")
-        print(f"  {'Model+Split':<14} | " + " | ".join(f"ctx={int(f*100)}%" for f in context_fracs) + " | Mean MAE")
-        print(f"  {'-'*14}-+-" + "-+-".join("-"*7 for _ in context_fracs) + "-+----------")
-        for key, res in results.items():
-            row = f"  {key:<14} | "
-            row += " | ".join(f"{res['by_frac'][f]:.4f}" for f in context_fracs)
-            row += f" | {res['mean']:.4f} m"
-            print(row)
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(description="Evaluate Optuna best ANP/RANP models")
+    parser.add_argument("--topology", default="ellipsoidal", help="Topology name (e.g. ellipsoidal, aligned, random)")
+    parser.add_argument("--data-dir", default="data/data/data_processed_topologies_low_variance", help="Path to the directory containing topology_<name>/ folders")
+    parser.add_argument("--anp-dir", default=None, help="Path to ANP best_model/ dir (omit to skip ANP eval)")
+    parser.add_argument("--ranp-dir", default=None, help="Path to RANP best_model/ dir (omit to skip RANP eval)")
+    parser.add_argument("--run-all", action="store_true", help="Evaluate all combinations: model in {anp,ranp}, variance in {lowvar,highvar}, topology in {aligned,ellipsoidal,random}.")
+    parser.add_argument("--optuna-results-root", default="src/training/results/optuna", help="Root containing Optuna study folders when --run-all is used.")
+    parser.add_argument("--data-root", default="data/data", help="Root containing data_processed_topologies_low_variance and data_processed_topologies_high_variance when --run-all is used.")
+    parser.add_argument("--save-csv", default=None, help="Optional path to save consolidated results as CSV.")
+    parser.add_argument("--save-boxplot", default=None, help="Optional path for PNG boxplot (recommended with --run-all).")
+    parser.add_argument("--boxplot-split", default="test", choices=["val", "test"], help="Which split to use for boxplot distributions.")
+    parser.add_argument("--boxplot-context-frac", type=float, default=0.4, help="Context fraction used to build MAE boxplot (default: 0.4).")
+    parser.add_argument("--device", default="cpu", help="Torch device: cpu | cuda | cuda:0 ...")
+    parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--num-sensors", type=int, default=10)
+    parser.add_argument("--num-time-points", type=int, default=201)
+    args = parser.parse_args()
+
+    context_fracs = [0.2, 0.4, 0.6]
+
+    all_rows = []
+    boxplot_store = defaultdict(lambda: defaultdict(dict))
+
+    if args.run_all:
+        model_types = ["anp", "ranp"]
+        variances = ["lowvar", "highvar"]
+        topologies = ["aligned", "ellipsoidal", "random"]
+
+        for model_type in model_types:
+            for variance in variances:
+                if variance == "lowvar":
+                    data_dir = os.path.join(args.data_root, "data_processed_topologies_low_variance")
+                else:
+                    data_dir = os.path.join(args.data_root, "data_processed_topologies_high_variance")
+
+                for topology in topologies:
+                    model_dir = _resolve_best_model_dir(
+                        args.optuna_results_root,
+                        model_type=model_type,
+                        variance=variance,
+                        topology=topology,
+                    )
+                    try:
+                        rows, box_values = _evaluate_one_configuration(
+                            model_label=model_type.upper(),
+                            model_dir=model_dir,
+                            topology=topology,
+                            data_dir=data_dir,
+                            args=args,
+                            context_fracs=context_fracs,
+                            boxplot_split=args.boxplot_split,
+                            boxplot_context_frac=args.boxplot_context_frac,
+                        )
+                        for row in rows:
+                            row["variance"] = variance
+                            all_rows.append(row)
+                        if box_values is not None:
+                            boxplot_store[variance][topology][model_type] = box_values
+                    except FileNotFoundError as exc:
+                        print(f"\nSkipping {model_type.upper()}-{variance}-{topology}: {exc}")
+    else:
+        if args.anp_dir is None and args.ranp_dir is None:
+            parser.error("Provide at least one of --anp-dir or --ranp-dir, or use --run-all")
+
+        runs = []
+        if args.anp_dir is not None:
+            runs.append(("ANP", args.anp_dir))
+        if args.ranp_dir is not None:
+            runs.append(("RANP", args.ranp_dir))
+
+        for label, model_dir in runs:
+            try:
+                rows, _ = _evaluate_one_configuration(
+                    model_label=label,
+                    model_dir=model_dir,
+                    topology=args.topology,
+                    data_dir=args.data_dir,
+                    args=args,
+                    context_fracs=context_fracs,
+                    boxplot_split=args.boxplot_split,
+                    boxplot_context_frac=args.boxplot_context_frac,
+                )
+                for row in rows:
+                    row["variance"] = "custom"
+                    all_rows.append(row)
+            except FileNotFoundError as exc:
+                print(f"\nSkipping {label}: {exc}")
+
+    if len(all_rows) > 0:
+        print(f"\n{'='*90}")
+        print("Consolidated summary")
+        print("model | variance | topology | split | ctx20 | ctx40 | ctx60 | mean")
+        print("-" * 90)
+        for row in all_rows:
+            print(
+                f"{row['model']:<5} | {row['variance']:<8} | {row['topology']:<11} | {row['split']:<4} | "
+                f"{row['mae_ctx_20']:.4f} | {row['mae_ctx_40']:.4f} | {row['mae_ctx_60']:.4f} | {row['mean_mae']:.4f}"
+            )
+
+    if args.save_csv is not None and len(all_rows) > 0:
+        import csv
+
+        out_dir = os.path.dirname(args.save_csv)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        with open(args.save_csv, "w", newline="") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=[
+                    "model",
+                    "variance",
+                    "topology",
+                    "split",
+                    "mae_ctx_20",
+                    "mae_ctx_40",
+                    "mae_ctx_60",
+                    "mean_mae",
+                ],
+            )
+            writer.writeheader()
+            writer.writerows(all_rows)
+        print(f"\nSaved CSV summary to: {args.save_csv}")
+
+    if args.save_boxplot is not None:
+        if not args.run_all:
+            print("\n--save-boxplot is most useful with --run-all; skipping plot in manual mode.")
+        else:
+            _plot_boxplot_by_variance(
+                boxplot_store=boxplot_store,
+                save_path=args.save_boxplot,
+                context_frac=args.boxplot_context_frac,
+                split_name=args.boxplot_split,
+            )
+            print(f"Saved boxplot PNG to: {args.save_boxplot}")
 
 
 if __name__ == "__main__":
