@@ -1351,6 +1351,53 @@ def diagnose_anp_simple_overlay(
         w.writerow(["selected_idx", "theta", "max_nll_slope", "delta_nll_first_last", "contexts_used"]) 
         w.writerow([best_idx, theta_val, best_slope, best_delta, ",".join([str(c) for c in chosen_ctx])])
 
+    # Extra diagnostics for KL analysis: histograms of mean error and predicted variance.
+    fig_h, axes_h = plt.subplots(1, 2, figsize=(12, 4.5))
+    hist_rows = []
+    for color, frac in zip(cmap, chosen_ctx):
+        item = pred_by_frac[float(frac)]
+        n_ctx = int(item["n_ctx"])
+        pred = item["preds"]["ANP"]["pred"]
+        std = item["preds"]["ANP"]["std"]
+
+        # Use non-context region to align with the analysis objective.
+        err_vals = (pred[n_ctx:, :2] - gt_np[n_ctx:, :2]).ravel()
+        var_vals = (std[n_ctx:, :2] ** 2).ravel()
+
+        axes_h[0].hist(err_vals, bins=50, alpha=0.45, density=True, color=color,
+                       label=f"ctx={frac*100:.0f}%")
+        axes_h[1].hist(var_vals, bins=50, alpha=0.45, density=True, color=color,
+                       label=f"ctx={frac*100:.0f}%")
+
+        hist_rows.append([
+            frac,
+            float(np.mean(np.abs(err_vals))),
+            float(np.std(err_vals)),
+            float(np.mean(var_vals)),
+            float(np.std(var_vals)),
+        ])
+
+    axes_h[0].set_title("Residual histogram (pred mean - GT)")
+    axes_h[0].set_xlabel("Error (m)")
+    axes_h[0].set_ylabel("Density")
+    axes_h[0].grid(True, alpha=0.25)
+    axes_h[0].legend(fontsize=8)
+
+    axes_h[1].set_title("Predicted variance histogram")
+    axes_h[1].set_xlabel("Variance ($m^2$)")
+    axes_h[1].set_ylabel("Density")
+    axes_h[1].grid(True, alpha=0.25)
+    axes_h[1].legend(fontsize=8)
+
+    plt.tight_layout()
+    fig_h.savefig(diag_dir / "anp_simple_histograms.png", dpi=150)
+    plt.close(fig_h)
+
+    with open(diag_dir / "anp_simple_hist_stats.csv", "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["ctx_frac", "mean_abs_error_m", "std_error_m", "mean_variance_m2", "std_variance_m2"])
+        w.writerows(hist_rows)
+
     print(f"  ANP simple diagnosis saved to {diag_dir / 'anp_simple_overlay.png'}")
 
 
