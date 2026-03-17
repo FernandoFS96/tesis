@@ -1351,52 +1351,124 @@ def diagnose_anp_simple_overlay(
         w.writerow(["selected_idx", "theta", "max_nll_slope", "delta_nll_first_last", "contexts_used"]) 
         w.writerow([best_idx, theta_val, best_slope, best_delta, ",".join([str(c) for c in chosen_ctx])])
 
-    # Extra diagnostics for KL analysis: histograms of mean error and predicted variance.
-    fig_h, axes_h = plt.subplots(1, 2, figsize=(12, 4.5))
-    hist_rows = []
-    for color, frac in zip(cmap, chosen_ctx):
+    def _save_hist_pair(
+        hist_data: Dict[float, Dict[str, np.ndarray]],
+        png_name: str,
+        csv_name: str,
+        title: str,
+    ) -> None:
+        fig_h, axes_h = plt.subplots(1, 2, figsize=(12, 4.5))
+        hist_rows = []
+
+        for color, frac in zip(cmap, chosen_ctx):
+            err_vals = np.asarray(hist_data[float(frac)]["err"], dtype=float)
+            var_vals = np.asarray(hist_data[float(frac)]["var"], dtype=float)
+            if err_vals.size == 0 or var_vals.size == 0:
+                continue
+
+            axes_h[0].hist(
+                err_vals,
+                bins=50,
+                alpha=0.45,
+                density=True,
+                color=color,
+                label=f"ctx={frac*100:.0f}%",
+            )
+            axes_h[1].hist(
+                var_vals,
+                bins=50,
+                alpha=0.45,
+                density=True,
+                color=color,
+                label=f"ctx={frac*100:.0f}%",
+            )
+
+            hist_rows.append([
+                frac,
+                float(np.mean(np.abs(err_vals))),
+                float(np.std(err_vals)),
+                float(np.mean(var_vals)),
+                float(np.std(var_vals)),
+                int(err_vals.size),
+            ])
+
+        axes_h[0].set_title("Residual histogram (pred mean - GT)")
+        axes_h[0].set_xlabel("Error (m)")
+        axes_h[0].set_ylabel("Density")
+        axes_h[0].grid(True, alpha=0.25)
+        axes_h[0].legend(fontsize=8)
+
+        axes_h[1].set_title("Predicted variance histogram")
+        axes_h[1].set_xlabel("Variance ($m^2$)")
+        axes_h[1].set_ylabel("Density")
+        axes_h[1].grid(True, alpha=0.25)
+        axes_h[1].legend(fontsize=8)
+
+        fig_h.suptitle(title, fontsize=10)
+        plt.tight_layout(rect=[0, 0, 1, 0.94])
+        fig_h.savefig(diag_dir / png_name, dpi=150)
+        plt.close(fig_h)
+
+        with open(diag_dir / csv_name, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow([
+                "ctx_frac",
+                "mean_abs_error_m",
+                "std_error_m",
+                "mean_variance_m2",
+                "std_variance_m2",
+                "n_points",
+            ])
+            w.writerows(hist_rows)
+
+    # Histogram set 1: selected worst-case trajectory.
+    selected_hist: Dict[float, Dict[str, np.ndarray]] = {}
+    for frac in chosen_ctx:
         item = pred_by_frac[float(frac)]
         n_ctx = int(item["n_ctx"])
         pred = item["preds"]["ANP"]["pred"]
         std = item["preds"]["ANP"]["std"]
+        selected_hist[float(frac)] = {
+            "err": (pred[n_ctx:, :2] - gt_np[n_ctx:, :2]).ravel(),
+            "var": (std[n_ctx:, :2] ** 2).ravel(),
+        }
 
-        # Use non-context region to align with the analysis objective.
-        err_vals = (pred[n_ctx:, :2] - gt_np[n_ctx:, :2]).ravel()
-        var_vals = (std[n_ctx:, :2] ** 2).ravel()
+    _save_hist_pair(
+        hist_data=selected_hist,
+        png_name="anp_simple_histograms.png",
+        csv_name="anp_simple_hist_stats.csv",
+        title=(
+            "ANP simple histograms | selected worst-case trajectory "
+            f"(idx={best_idx})"
+        ),
+    )
 
-        axes_h[0].hist(err_vals, bins=50, alpha=0.45, density=True, color=color,
-                       label=f"ctx={frac*100:.0f}%")
-        axes_h[1].hist(var_vals, bins=50, alpha=0.45, density=True, color=color,
-                       label=f"ctx={frac*100:.0f}%")
+    # Histogram set 2: aggregate all trajectories from the test set.
+    all_test_hist: Dict[float, Dict[str, List[float]]] = {
+        float(frac): {"err": [], "var": []} for frac in chosen_ctx
+    }
 
-        hist_rows.append([
-            frac,
-            float(np.mean(np.abs(err_vals))),
-            float(np.std(err_vals)),
-            float(np.mean(var_vals)),
-            float(np.std(var_vals)),
-        ])
+    for x_i, y_i in tqdm(test_data, desc="ANP simple all-test hist"):
+        _, pred_cache_i = _anp_only_metrics_for_traj(x_i, y_i)
+        pred_by_frac_i = {float(item["frac"]): item for item in pred_cache_i}
 
-    axes_h[0].set_title("Residual histogram (pred mean - GT)")
-    axes_h[0].set_xlabel("Error (m)")
-    axes_h[0].set_ylabel("Density")
-    axes_h[0].grid(True, alpha=0.25)
-    axes_h[0].legend(fontsize=8)
+        for frac in chosen_ctx:
+            item_i = pred_by_frac_i[float(frac)]
+            n_ctx_i = int(item_i["n_ctx"])
+            pred_i = item_i["preds"]["ANP"]["pred"]
+            std_i = item_i["preds"]["ANP"]["std"]
 
-    axes_h[1].set_title("Predicted variance histogram")
-    axes_h[1].set_xlabel("Variance ($m^2$)")
-    axes_h[1].set_ylabel("Density")
-    axes_h[1].grid(True, alpha=0.25)
-    axes_h[1].legend(fontsize=8)
+            err_i = (pred_i[n_ctx_i:, :2] - y_i[n_ctx_i:, :2]).ravel().tolist()
+            var_i = (std_i[n_ctx_i:, :2] ** 2).ravel().tolist()
+            all_test_hist[float(frac)]["err"].extend(err_i)
+            all_test_hist[float(frac)]["var"].extend(var_i)
 
-    plt.tight_layout()
-    fig_h.savefig(diag_dir / "anp_simple_histograms.png", dpi=150)
-    plt.close(fig_h)
-
-    with open(diag_dir / "anp_simple_hist_stats.csv", "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["ctx_frac", "mean_abs_error_m", "std_error_m", "mean_variance_m2", "std_variance_m2"])
-        w.writerows(hist_rows)
+    _save_hist_pair(
+        hist_data=all_test_hist,
+        png_name="anp_simple_histograms_all_test.png",
+        csv_name="anp_simple_hist_stats_all_test.csv",
+        title="ANP simple histograms | aggregated over full test set",
+    )
 
     print(f"  ANP simple diagnosis saved to {diag_dir / 'anp_simple_overlay.png'}")
 
