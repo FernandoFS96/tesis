@@ -10,13 +10,14 @@ Usage
 Run from the project root (underwater-localization-topologies/):
 
 python -m src.training.evaluate_optuna_models \
-  --run-all \
-  --device cuda \
-  --optuna-results-root src/training/results/optuna \
-  --data-root data/data \
-  --output-dir src/training/results/optuna/models_evaluation \
-  --boxplot-split test \
-  --context-frac 0.3
+    --run-all \
+    --device cuda \
+    --optuna-results-root src/training/results/optuna \
+    --data-root data/data \
+    --output-dir src/training/results/optuna/models_evaluation \
+    --boxplot-split test \
+    --context-fracs 0.1,0.15,0.2,0.25,0.3,0.4,0.5,0.6,0.7,0.8,0.9\
+    --context-frac 0.3
 
 Either --anp-dir or --ranp-dir can be omitted if only one model is available.
 """
@@ -449,6 +450,230 @@ def _plot_delta_heatmaps_by_split(all_rows: list[dict], save_path: str) -> None:
     plt.close(fig)
 
 
+def _plot_cdf_mae_by_scenario(cdf_records: list[dict], save_path: str, context_frac: float, split_name: str) -> None:
+    """Plot CDF of per-trajectory MAE for each scenario on a given split."""
+    if len(cdf_records) == 0:
+        return
+
+    selected = [r for r in cdf_records if r["split"] == split_name]
+    if len(selected) == 0:
+        selected = cdf_records
+
+    fig, ax = plt.subplots(figsize=(10, 7), constrained_layout=True)
+    for rec in selected:
+        values = np.asarray(rec["values"], dtype=float)
+        if values.size == 0:
+            continue
+        x = np.sort(values)
+        y = np.arange(1, x.size + 1) / x.size
+        label = f"{rec['model']}-{rec['variance']}-{rec['topology']}"
+        ax.plot(x, y, linewidth=1.2, alpha=0.9, label=label)
+
+    ax.set_title(f"CDF of MAE by scenario ({split_name}, ctx={int(round(context_frac * 100))}%)")
+    ax.set_xlabel("MAE (m)")
+    ax.set_ylabel("CDF")
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=8, ncol=2)
+
+    out_dir = os.path.dirname(save_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+    fig.savefig(save_path, dpi=180)
+    plt.close(fig)
+
+
+def _plot_barplot_ci_mean_mae(cdf_records: list[dict], save_path: str, context_frac: float, split_name: str) -> None:
+    """Barplot of mean MAE with bootstrap 95% CI for each scenario."""
+    if len(cdf_records) == 0:
+        return
+
+    selected = [r for r in cdf_records if r["split"] == split_name]
+    if len(selected) == 0:
+        selected = cdf_records
+
+    labels, means, low_err, up_err = [], [], [], []
+    rng = np.random.default_rng(1234)
+
+    def _sort_key(rec: dict):
+        return (rec["variance"], rec["topology"], rec["model"])
+
+    for rec in sorted(selected, key=_sort_key):
+        values = np.asarray(rec["values"], dtype=float)
+        if values.size == 0:
+            continue
+        mean_val = float(values.mean())
+
+        boots = []
+        for _ in range(500):
+            sample = rng.choice(values, size=values.size, replace=True)
+            boots.append(float(sample.mean()))
+        lo = float(np.percentile(boots, 2.5))
+        hi = float(np.percentile(boots, 97.5))
+
+        labels.append(f"{rec['model']}-{rec['variance']}-{rec['topology']}")
+        means.append(mean_val)
+        low_err.append(mean_val - lo)
+        up_err.append(hi - mean_val)
+
+    if len(labels) == 0:
+        return
+
+    x = np.arange(len(labels))
+    fig, ax = plt.subplots(figsize=(max(12, 0.8 * len(labels)), 6), constrained_layout=True)
+    ax.bar(
+        x,
+        means,
+        yerr=np.vstack([low_err, up_err]),
+        capsize=3,
+        alpha=0.85,
+        color="#4C78A8",
+        edgecolor="black",
+        linewidth=0.4,
+    )
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=45, ha="right")
+    ax.set_ylabel("Mean MAE (m)")
+    ax.set_title(f"Mean MAE with 95% CI ({split_name}, ctx={int(round(context_frac * 100))}%)")
+    ax.grid(axis="y", alpha=0.3)
+
+    out_dir = os.path.dirname(save_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+    fig.savefig(save_path, dpi=180)
+    plt.close(fig)
+
+
+def _plot_scatter_optuna_vs_test(scenario_rows: list[dict], save_path: str, context_fracs: list[float]) -> None:
+    """Scatter Optuna MAE (trial_info) vs test MAE for each scenario."""
+    valid = [
+        r for r in scenario_rows
+        if r["split"] == "test" and np.isfinite(r.get("optuna_mae", np.nan))
+    ]
+    if len(valid) == 0:
+        return
+
+    markers = {"anp": "o", "ranp": "s"}
+    colors = {"lowvar": "#1f77b4", "highvar": "#ff7f0e", "custom": "#2ca02c"}
+
+    fig, ax = plt.subplots(figsize=(8, 7), constrained_layout=True)
+    for rec in valid:
+        x = rec["optuna_mae"]
+        y = rec["mean_mae"]
+        ax.scatter(
+            x,
+            y,
+            marker=markers.get(rec["model"], "o"),
+            c=colors.get(rec["variance"], "gray"),
+            s=70,
+            alpha=0.9,
+            edgecolors="black",
+            linewidths=0.4,
+        )
+        ax.annotate(
+            f"{rec['model']}-{rec['variance']}-{rec['topology']}",
+            (x, y),
+            textcoords="offset points",
+            xytext=(4, 3),
+            fontsize=7,
+            alpha=0.85,
+        )
+
+    all_vals = [min([v["optuna_mae"] for v in valid]), max([v["optuna_mae"] for v in valid]),
+                min([v["mean_mae"] for v in valid]), max([v["mean_mae"] for v in valid])]
+    lo, hi = min(all_vals), max(all_vals)
+    ax.plot([lo, hi], [lo, hi], linestyle="--", color="gray", linewidth=1)
+
+    ax.set_xlabel("MAE_optuna (trial_info)")
+    if len(context_fracs) == 1:
+        ax.set_ylabel(f"MAE_test_ctx{int(round(context_fracs[0] * 100))}")
+    else:
+        ctx_labels = ",".join(str(int(round(f * 100))) for f in context_fracs)
+        ax.set_ylabel(f"MAE_test_mean_ctx[{ctx_labels}]")
+    ax.set_title("Generalization Check: Optuna MAE vs Test MAE")
+    ax.grid(alpha=0.3)
+
+    out_dir = os.path.dirname(save_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+    fig.savefig(save_path, dpi=180)
+    plt.close(fig)
+
+
+def _plot_context_topology_curves(all_rows: list[dict], context_fracs: list[float], save_path: str) -> None:
+    """Plot MAE vs context size, faceted by variance (rows) and model (cols).
+
+    - Color encodes topology.
+    - Line style encodes split (val/test).
+    """
+    if len(all_rows) == 0:
+        return
+
+    model_order = ["anp", "ranp"]
+    variance_order = ["lowvar", "highvar"]
+    split_order = ["val", "test"]
+    topology_order = ["aligned", "ellipsoidal", "random"]
+
+    x = np.array([100.0 * f for f in context_fracs], dtype=float)
+    if x.size == 0:
+        return
+
+    colors = {"aligned": "#1f77b4", "ellipsoidal": "#ff7f0e", "random": "#2ca02c"}
+    linestyles = {"val": "--", "test": "-"}
+
+    fig, axes = plt.subplots(2, 2, figsize=(13, 9), sharex=True, sharey=True, constrained_layout=True)
+
+    for r, variance in enumerate(variance_order):
+        for c, model in enumerate(model_order):
+            ax = axes[r, c]
+            panel_rows = [row for row in all_rows if row["variance"] == variance and row["model"] == model]
+
+            for topo in topology_order:
+                for split in split_order:
+                    candidates = [
+                        row for row in panel_rows
+                        if row["topology"] == topo and row["split"] == split
+                    ]
+                    if len(candidates) == 0:
+                        continue
+                    row = candidates[0]
+                    y = [row.get(f"mae_ctx_{int(round(fr * 100))}", np.nan) for fr in context_fracs]
+                    ax.plot(
+                        x,
+                        y,
+                        color=colors[topo],
+                        linestyle=linestyles[split],
+                        linewidth=1.8,
+                        marker="o",
+                        markersize=3,
+                        alpha=0.9,
+                    )
+
+            ax.set_title(f"{model.upper()} | {variance}")
+            ax.grid(alpha=0.3)
+
+    for ax in axes[1, :]:
+        ax.set_xlabel("Context size (%)")
+    for ax in axes[:, 0]:
+        ax.set_ylabel("MAE (m)")
+
+    topo_handles = [
+        Line2D([0], [0], color=colors[t], lw=2.0, label=f"topology: {t}")
+        for t in topology_order
+    ]
+    split_handles = [
+        Line2D([0], [0], color="black", lw=2.0, linestyle=linestyles[s], label=f"split: {s}")
+        for s in split_order
+    ]
+    fig.legend(handles=topo_handles + split_handles, loc="upper right", ncol=1, frameon=False)
+    fig.suptitle("MAE vs Context Size by Topology, Model, and Variance", y=1.02)
+
+    out_dir = os.path.dirname(save_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+    fig.savefig(save_path, dpi=180)
+    plt.close(fig)
+
+
 def _default_study_name(model_type: str, variance: str, topology: str) -> str:
     return f"{model_type}_masked_{variance}_{topology}_v1"
 
@@ -510,7 +735,11 @@ def _evaluate_one_configuration(
 
     n_params = sum(p.numel() for p in model.parameters())
     trial_num = meta["trial_number"] if meta else "?"
-    trial_mae = meta.get("value", "?") if meta else "?"
+    trial_mae = meta.get("value", np.nan) if meta else np.nan
+    try:
+        trial_mae_float = float(trial_mae)
+    except (TypeError, ValueError):
+        trial_mae_float = np.nan
     print(f"  Trial: {trial_num} | Optuna MAE: {trial_mae} | Params: {n_params:,}")
     print(f"  Hparams: {hparams}")
 
@@ -545,6 +774,7 @@ def _evaluate_one_configuration(
             "topology": topology,
             "split": split_name,
             "mean_mae": mean_mae,
+            "optuna_mae": trial_mae_float,
         }
         for frac in context_fracs:
             row[f"mae_ctx_{int(frac * 100)}"] = float(mae_by_frac[frac])
@@ -568,7 +798,7 @@ def _evaluate_one_configuration(
                 device=args.device,
             )
 
-    return out_rows, boxplot_values
+    return out_rows, boxplot_values, selected_boxplot_split
 
 
 # ---------------------------------------------------------------------------
@@ -589,7 +819,12 @@ def main():
     parser.add_argument("--save-boxplot", default=None, help="Optional boxplot filename override (stored inside --output-dir).")
     parser.add_argument("--save-heatmap", default=None, help="Optional MAE heatmap filename override (stored inside --output-dir).")
     parser.add_argument("--save-delta-heatmap", default=None, help="Optional delta heatmap filename override (stored inside --output-dir).")
+    parser.add_argument("--save-cdf", default=None, help="Optional CDF filename override (stored inside --output-dir).")
+    parser.add_argument("--save-ci-barplot", default=None, help="Optional CI barplot filename override (stored inside --output-dir).")
+    parser.add_argument("--save-scatter", default=None, help="Optional scatter filename override (stored inside --output-dir).")
+    parser.add_argument("--save-context-curves", default=None, help="Optional context-response curves filename override (stored inside --output-dir).")
     parser.add_argument("--boxplot-split", default="test", choices=["val", "test"], help="Which split to use for boxplot distributions.")
+    parser.add_argument("--context-fracs", default=None, help="Comma-separated context fractions for table/CSV metrics, e.g. 0.2,0.3,0.4,0.6. If omitted, uses --context-frac.")
     parser.add_argument("--context-frac", type=float, default=0.4, help="Context fraction used by all metrics and plots (default: 0.4).")
     parser.add_argument("--device", default="cpu", help="Torch device: cpu | cuda | cuda:0 ...")
     parser.add_argument("--batch-size", type=int, default=16)
@@ -597,7 +832,14 @@ def main():
     parser.add_argument("--num-time-points", type=int, default=201)
     args = parser.parse_args()
 
-    context_fracs = [args.context_frac]
+    if args.context_fracs is not None:
+        context_fracs = [float(x.strip()) for x in args.context_fracs.split(",") if x.strip()]
+    else:
+        context_fracs = [args.context_frac]
+    for frac in context_fracs:
+        if not (0.0 < frac < 1.0):
+            raise ValueError(f"Invalid context fraction {frac}. Expected values in (0,1).")
+
     ctx_pct = int(round(args.context_frac * 100))
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -622,9 +864,30 @@ def main():
         args.save_delta_heatmap,
         f"delta_heatmap_ranp_minus_anp_ctx{ctx_pct}_{args.boxplot_split}.png",
     )
+    cdf_path = _resolve_output_path(
+        args.output_dir,
+        args.save_cdf,
+        f"cdf_mae_by_scenario_ctx{ctx_pct}_{args.boxplot_split}.png",
+    )
+    ci_barplot_path = _resolve_output_path(
+        args.output_dir,
+        args.save_ci_barplot,
+        f"barplot_ci_mean_mae_ctx{ctx_pct}_{args.boxplot_split}.png",
+    )
+    scatter_path = _resolve_output_path(
+        args.output_dir,
+        args.save_scatter,
+        f"scatter_optuna_vs_test_ctx{ctx_pct}.png",
+    )
+    context_curves_path = _resolve_output_path(
+        args.output_dir,
+        args.save_context_curves,
+        "context_curves_topology_model_variance.png",
+    )
 
     all_rows = []
     boxplot_store = defaultdict(lambda: defaultdict(dict))
+    cdf_records = []
 
     if args.run_all:
         model_types = ["anp", "ranp"]
@@ -646,7 +909,7 @@ def main():
                         topology=topology,
                     )
                     try:
-                        rows, box_values = _evaluate_one_configuration(
+                        rows, box_values, used_split = _evaluate_one_configuration(
                             model_label=model_type.upper(),
                             model_dir=model_dir,
                             topology=topology,
@@ -661,6 +924,15 @@ def main():
                             all_rows.append(row)
                         if box_values is not None:
                             boxplot_store[variance][topology][model_type] = box_values
+                            cdf_records.append(
+                                {
+                                    "model": model_type,
+                                    "variance": variance,
+                                    "topology": topology,
+                                    "split": used_split,
+                                    "values": box_values,
+                                }
+                            )
                     except FileNotFoundError as exc:
                         print(f"\nSkipping {model_type.upper()}-{variance}-{topology}: {exc}")
     else:
@@ -675,7 +947,7 @@ def main():
 
         for label, model_dir in runs:
             try:
-                rows, _ = _evaluate_one_configuration(
+                rows, box_values, used_split = _evaluate_one_configuration(
                     model_label=label,
                     model_dir=model_dir,
                     topology=args.topology,
@@ -688,18 +960,30 @@ def main():
                 for row in rows:
                     row["variance"] = "custom"
                     all_rows.append(row)
+                if box_values is not None:
+                    cdf_records.append(
+                        {
+                            "model": label.lower(),
+                            "variance": "custom",
+                            "topology": args.topology,
+                            "split": used_split,
+                            "values": box_values,
+                        }
+                    )
             except FileNotFoundError as exc:
                 print(f"\nSkipping {label}: {exc}")
 
     if len(all_rows) > 0:
         print(f"\n{'='*90}")
         print("Consolidated summary")
-        print(f"model | variance | topology | split | ctx{ctx_pct:02d} | mean")
+        ctx_headers = [f"ctx{int(round(f * 100)):02d}" for f in context_fracs]
+        print("model | variance | topology | split | " + " | ".join(ctx_headers) + " | mean")
         print("-" * 90)
         for row in all_rows:
+            ctx_vals = " | ".join(f"{row[f'mae_ctx_{int(round(f * 100))}']:.4f}" for f in context_fracs)
             print(
                 f"{row['model']:<5} | {row['variance']:<8} | {row['topology']:<11} | {row['split']:<4} | "
-                f"{row[f'mae_ctx_{ctx_pct}']:.4f} | {row['mean_mae']:.4f}"
+                f"{ctx_vals} | {row['mean_mae']:.4f}"
             )
 
     if len(all_rows) > 0:
@@ -709,6 +993,7 @@ def main():
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
         with open(csv_path, "w", newline="") as f:
+            ctx_fieldnames = [f"mae_ctx_{int(round(f * 100))}" for f in context_fracs]
             writer = csv.DictWriter(
                 f,
                 fieldnames=[
@@ -716,7 +1001,8 @@ def main():
                     "variance",
                     "topology",
                     "split",
-                    f"mae_ctx_{ctx_pct}",
+                    "optuna_mae",
+                    *ctx_fieldnames,
                     "mean_mae",
                 ],
             )
@@ -743,6 +1029,39 @@ def main():
     if len(all_rows) > 0:
         _plot_delta_heatmaps_by_split(all_rows=all_rows, save_path=delta_heatmap_path)
         print(f"Saved delta heatmap PNG to: {delta_heatmap_path}")
+
+    if len(cdf_records) > 0:
+        _plot_cdf_mae_by_scenario(
+            cdf_records=cdf_records,
+            save_path=cdf_path,
+            context_frac=args.context_frac,
+            split_name=args.boxplot_split,
+        )
+        print(f"Saved CDF PNG to: {cdf_path}")
+
+        _plot_barplot_ci_mean_mae(
+            cdf_records=cdf_records,
+            save_path=ci_barplot_path,
+            context_frac=args.context_frac,
+            split_name=args.boxplot_split,
+        )
+        print(f"Saved CI barplot PNG to: {ci_barplot_path}")
+
+    if len(all_rows) > 0:
+        _plot_scatter_optuna_vs_test(
+            scenario_rows=all_rows,
+            save_path=scatter_path,
+            context_fracs=context_fracs,
+        )
+        print(f"Saved Optuna-vs-test scatter PNG to: {scatter_path}")
+
+    if len(all_rows) > 0:
+        _plot_context_topology_curves(
+            all_rows=all_rows,
+            context_fracs=context_fracs,
+            save_path=context_curves_path,
+        )
+        print(f"Saved context-response curves PNG to: {context_curves_path}")
 
 
 if __name__ == "__main__":
