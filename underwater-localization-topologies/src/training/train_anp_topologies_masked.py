@@ -410,8 +410,8 @@ def train_anp_topology_masked(
 
             # dynamic context size
             total_points = T
-            min_context = max(1, int(0.05 * total_points))
-            max_context = min(int(0.95 * total_points), total_points - 1)
+            min_context = max(1, int(0.1 * total_points))
+            max_context = min(int(0.9 * total_points), total_points - 1)
             context_size = torch.randint(min_context, max_context + 1, (1,), device=device).item() \
                 if max_context > min_context else min_context
 
