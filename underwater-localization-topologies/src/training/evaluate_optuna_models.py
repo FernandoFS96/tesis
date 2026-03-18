@@ -16,9 +16,9 @@ python -m src.training.evaluate_optuna_models \
   --data-root data/data \
   --output-dir src/training/results/optuna/models_evaluation \
   --boxplot-split test \
-  --context-fracs 0.1,0.15,0.2,0.25,0.3,0.4,0.5,0.6,0.7,0.8,0.9 \
+  --context-fracs 0.1,0.15,0.2,0.25,0.3,0.4,0.5,0.6,0.7,0.8 \
   --context-frac 0.3 \
-  --eval-protocol fixed_holdout \
+  --eval-protocol both_holdouts \
   --holdout-frac 0.2
 
 Either --anp-dir or --ranp-dir can be omitted if only one model is available.
@@ -122,7 +122,9 @@ def _build_eval_indices(
     - legacy: target is all post-context points [ctx, T).
     - fixed_holdout: target is fixed tail [T-n_holdout, T), and context is capped
       to stay strictly before that tail (no overlap by construction).
-    - online_rolling: target is the immediate next point after context (1-step ahead).
+        - inverse_context_holdout: target is fixed tail [T-n_holdout, T), and context
+            is sampled from the block immediately before holdout (adjacent, no temporal gap).
+        - online_rolling: target is the immediate next point after context (1-step ahead).
     """
     if eval_protocol == "legacy":
         ctx_size = max(1, min(total_points - 1, int(round(context_frac * total_points))))
@@ -140,6 +142,17 @@ def _build_eval_indices(
         tar_idx = torch.arange(holdout_start, total_points, device=device)
         return ctx_idx, tar_idx
 
+    if eval_protocol == "inverse_context_holdout":
+        n_holdout = max(1, int(round(holdout_frac * total_points)))
+        holdout_start = total_points - n_holdout
+        # Context is pulled from the segment immediately before holdout.
+        max_ctx = max(1, holdout_start)
+        ctx_size = max(1, min(max_ctx, int(round(context_frac * total_points))))
+        ctx_start = holdout_start - ctx_size
+        ctx_idx = torch.arange(ctx_start, holdout_start, device=device)
+        tar_idx = torch.arange(holdout_start, total_points, device=device)
+        return ctx_idx, tar_idx
+
     if eval_protocol == "online_rolling":
         # Evaluate pure 1-step-ahead prediction after the context prefix.
         max_ctx = max(1, total_points - 2)
@@ -149,6 +162,11 @@ def _build_eval_indices(
         return ctx_idx, tar_idx
 
     raise ValueError(f"Unknown eval_protocol: {eval_protocol}")
+
+
+def _with_suffix(path: str, suffix: str) -> str:
+    root, ext = os.path.splitext(path)
+    return f"{root}_{suffix}{ext}"
 
 
 # ---------------------------------------------------------------------------
@@ -830,7 +848,13 @@ def _rollout_matrix_from_row(row: dict, context_fracs: list[float]) -> np.ndarra
     return mat
 
 
-def _plot_rollout_curves(all_rows: list[dict], context_frac: float, save_path: str) -> None:
+def _plot_rollout_curves(
+    all_rows: list[dict],
+    context_frac: float,
+    eval_protocol: str,
+    holdout_frac: float,
+    save_path: str,
+) -> None:
     """Plot MAE rollout curves (steps 1..5) at a fixed context, faceted by variance/model."""
     if len(all_rows) == 0:
         return
@@ -880,7 +904,10 @@ def _plot_rollout_curves(all_rows: list[dict], context_frac: float, save_path: s
     topo_handles = [Line2D([0], [0], color=colors[t], lw=2.0, label=f"topology: {t}") for t in topology_order]
     split_handles = [Line2D([0], [0], color="black", lw=2.0, linestyle=linestyles[s], label=f"split: {s}") for s in split_order]
     fig.legend(handles=topo_handles + split_handles, loc="upper right", ncol=1, frameon=False)
-    fig.suptitle(f"Rollout-5 MAE Curves at Context={p}%", y=1.02)
+    fig.suptitle(
+        f"Rollout-5 MAE Curves | context={p}% | protocol={eval_protocol} | holdout={int(round(100*holdout_frac))}%",
+        y=1.02,
+    )
 
     out_dir = os.path.dirname(save_path)
     if out_dir:
@@ -889,7 +916,13 @@ def _plot_rollout_curves(all_rows: list[dict], context_frac: float, save_path: s
     plt.close(fig)
 
 
-def _plot_rollout_heatmap_by_scenario(all_rows: list[dict], context_fracs: list[float], save_path: str) -> None:
+def _plot_rollout_heatmap_by_scenario(
+    all_rows: list[dict],
+    context_fracs: list[float],
+    eval_protocol: str,
+    holdout_frac: float,
+    save_path: str,
+) -> None:
     """Plot rollout heatmaps (horizon x context) for each scenario, split into val/test figures."""
     if len(all_rows) == 0:
         return
@@ -950,7 +983,10 @@ def _plot_rollout_heatmap_by_scenario(all_rows: list[dict], context_fracs: list[
 
         cbar = fig.colorbar(im, ax=axes, fraction=0.02, pad=0.01)
         cbar.set_label("MAE (m)")
-        fig.suptitle(f"Rollout-5 Heatmaps by Scenario ({split})", y=1.02)
+        fig.suptitle(
+            f"Rollout-5 Heatmaps by Scenario | split={split} | protocol={eval_protocol} | holdout={int(round(100*holdout_frac))}%",
+            y=1.02,
+        )
 
         out_dir = os.path.dirname(save_path)
         if out_dir:
@@ -960,7 +996,13 @@ def _plot_rollout_heatmap_by_scenario(all_rows: list[dict], context_fracs: list[
         plt.close(fig)
 
 
-def _plot_rollout_delta_heatmap(all_rows: list[dict], context_fracs: list[float], save_path: str) -> None:
+def _plot_rollout_delta_heatmap(
+    all_rows: list[dict],
+    context_fracs: list[float],
+    eval_protocol: str,
+    holdout_frac: float,
+    save_path: str,
+) -> None:
     """Plot rollout delta heatmaps (RANP-ANP) over horizon x context, split by val/test."""
     if len(all_rows) == 0:
         return
@@ -1015,7 +1057,10 @@ def _plot_rollout_delta_heatmap(all_rows: list[dict], context_fracs: list[float]
 
         cbar = fig.colorbar(im, ax=axes, fraction=0.025, pad=0.02)
         cbar.set_label("Delta MAE (m), RANP-ANP")
-        fig.suptitle(f"Rollout-5 Delta Heatmaps (RANP-ANP) ({split})", y=1.02)
+        fig.suptitle(
+            f"Rollout-5 Delta Heatmaps (RANP-ANP) | split={split} | protocol={eval_protocol} | holdout={int(round(100*holdout_frac))}%",
+            y=1.02,
+        )
 
         out_dir = os.path.dirname(save_path)
         if out_dir:
@@ -1049,6 +1094,7 @@ def _evaluate_one_configuration(
     topology: str,
     data_dir: str,
     args,
+    eval_protocol: str,
     context_fracs,
     boxplot_split: str = "test",
     context_frac: float = 0.4,
@@ -1093,7 +1139,7 @@ def _evaluate_one_configuration(
         trial_mae_float = np.nan
     print(f"  Trial: {trial_num} | Optuna MAE: {trial_mae} | Params: {n_params:,}")
     print(f"  Hparams: {hparams}")
-    print(f"  Eval protocol: {args.eval_protocol} | holdout_frac: {args.holdout_frac}")
+    print(f"  Eval protocol: {eval_protocol} | holdout_frac: {args.holdout_frac}")
 
     model_type = "ranp" if model_label.lower() == "ranp" else "anp"
     eval_sets = [("val", val_loader)]
@@ -1117,7 +1163,7 @@ def _evaluate_one_configuration(
             num_time_points=args.num_time_points,
             num_sensors=args.num_sensors,
             context_fracs=context_fracs,
-            eval_protocol=args.eval_protocol,
+            eval_protocol=eval_protocol,
             holdout_frac=args.holdout_frac,
             device=args.device,
         )
@@ -1139,7 +1185,7 @@ def _evaluate_one_configuration(
             "model": model_label.lower(),
             "topology": topology,
             "split": split_name,
-            "eval_protocol": args.eval_protocol,
+            "eval_protocol": eval_protocol,
             "holdout_frac": args.holdout_frac,
             "mean_mae": mean_mae,
             "optuna_mae": trial_mae_float,
@@ -1178,7 +1224,7 @@ def _evaluate_one_configuration(
                 num_time_points=args.num_time_points,
                 num_sensors=args.num_sensors,
                 context_frac=context_frac,
-                eval_protocol=args.eval_protocol,
+                eval_protocol=eval_protocol,
                 holdout_frac=args.holdout_frac,
                 device=args.device,
             )
@@ -1214,7 +1260,15 @@ def main():
     parser.add_argument("--boxplot-split", default="test", choices=["val", "test"], help="Which split to use for boxplot distributions.")
     parser.add_argument("--context-fracs", default=None, help="Comma-separated context fractions for table/CSV metrics, e.g. 0.2,0.3,0.4,0.6. If omitted, uses --context-frac.")
     parser.add_argument("--context-frac", type=float, default=0.4, help="Context fraction used by all metrics and plots (default: 0.4).")
-    parser.add_argument("--eval-protocol", default="fixed_holdout", choices=["fixed_holdout", "online_rolling", "legacy"], help="Evaluation protocol: fixed_holdout (no overlap), online_rolling (1-step ahead), or legacy (post-context tail).")
+    parser.add_argument(
+        "--eval-protocol",
+        default="fixed_holdout",
+        choices=["fixed_holdout", "inverse_context_holdout", "online_rolling", "legacy", "both_holdouts"],
+        help=(
+            "Evaluation protocol: fixed_holdout, inverse_context_holdout, "
+            "online_rolling, legacy, or both_holdouts."
+        ),
+    )
     parser.add_argument("--holdout-frac", type=float, default=0.2, help="Fraction reserved as fixed target tail when --eval-protocol=fixed_holdout.")
     parser.add_argument("--device", default="cpu", help="Torch device: cpu | cuda | cuda:0 ...")
     parser.add_argument("--batch-size", type=int, default=8, help="Evaluation batch size.")
@@ -1293,55 +1347,64 @@ def main():
     )
 
     all_rows = []
-    boxplot_store = defaultdict(lambda: defaultdict(dict))
+    boxplot_store = defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))
     cdf_records = []
+
+    eval_protocols_to_run = (
+        ["fixed_holdout", "inverse_context_holdout"]
+        if args.eval_protocol == "both_holdouts"
+        else [args.eval_protocol]
+    )
 
     if args.run_all:
         model_types = ["anp", "ranp"]
         variances = ["lowvar", "highvar"]
         topologies = ["aligned", "ellipsoidal", "random"]
 
-        for model_type in model_types:
-            for variance in variances:
-                if variance == "lowvar":
-                    data_dir = os.path.join(args.data_root, "data_processed_topologies_low_variance")
-                else:
-                    data_dir = os.path.join(args.data_root, "data_processed_topologies_high_variance")
+        for eval_protocol in eval_protocols_to_run:
+            for model_type in model_types:
+                for variance in variances:
+                    if variance == "lowvar":
+                        data_dir = os.path.join(args.data_root, "data_processed_topologies_low_variance")
+                    else:
+                        data_dir = os.path.join(args.data_root, "data_processed_topologies_high_variance")
 
-                for topology in topologies:
-                    model_dir = _resolve_best_model_dir(
-                        args.optuna_results_root,
-                        model_type=model_type,
-                        variance=variance,
-                        topology=topology,
-                    )
-                    try:
-                        rows, box_values, used_split = _evaluate_one_configuration(
-                            model_label=model_type.upper(),
-                            model_dir=model_dir,
+                    for topology in topologies:
+                        model_dir = _resolve_best_model_dir(
+                            args.optuna_results_root,
+                            model_type=model_type,
+                            variance=variance,
                             topology=topology,
-                            data_dir=data_dir,
-                            args=args,
-                            context_fracs=context_fracs,
-                            boxplot_split=args.boxplot_split,
-                            context_frac=args.context_frac,
                         )
-                        for row in rows:
-                            row["variance"] = variance
-                            all_rows.append(row)
-                        if box_values is not None:
-                            boxplot_store[variance][topology][model_type] = box_values
-                            cdf_records.append(
-                                {
-                                    "model": model_type,
-                                    "variance": variance,
-                                    "topology": topology,
-                                    "split": used_split,
-                                    "values": box_values,
-                                }
+                        try:
+                            rows, box_values, used_split = _evaluate_one_configuration(
+                                model_label=model_type.upper(),
+                                model_dir=model_dir,
+                                topology=topology,
+                                data_dir=data_dir,
+                                args=args,
+                                eval_protocol=eval_protocol,
+                                context_fracs=context_fracs,
+                                boxplot_split=args.boxplot_split,
+                                context_frac=args.context_frac,
                             )
-                    except FileNotFoundError as exc:
-                        print(f"\nSkipping {model_type.upper()}-{variance}-{topology}: {exc}")
+                            for row in rows:
+                                row["variance"] = variance
+                                all_rows.append(row)
+                            if box_values is not None:
+                                boxplot_store[eval_protocol][variance][topology][model_type] = box_values
+                                cdf_records.append(
+                                    {
+                                        "model": model_type,
+                                        "variance": variance,
+                                        "topology": topology,
+                                        "split": used_split,
+                                        "eval_protocol": eval_protocol,
+                                        "values": box_values,
+                                    }
+                                )
+                        except FileNotFoundError as exc:
+                            print(f"\nSkipping {model_type.upper()}-{variance}-{topology} ({eval_protocol}): {exc}")
     else:
         if args.anp_dir is None and args.ranp_dir is None:
             parser.error("Provide at least one of --anp-dir or --ranp-dir, or use --run-all")
@@ -1352,33 +1415,36 @@ def main():
         if args.ranp_dir is not None:
             runs.append(("RANP", args.ranp_dir))
 
-        for label, model_dir in runs:
-            try:
-                rows, box_values, used_split = _evaluate_one_configuration(
-                    model_label=label,
-                    model_dir=model_dir,
-                    topology=args.topology,
-                    data_dir=args.data_dir,
-                    args=args,
-                    context_fracs=context_fracs,
-                    boxplot_split=args.boxplot_split,
-                    context_frac=args.context_frac,
-                )
-                for row in rows:
-                    row["variance"] = "custom"
-                    all_rows.append(row)
-                if box_values is not None:
-                    cdf_records.append(
-                        {
-                            "model": label.lower(),
-                            "variance": "custom",
-                            "topology": args.topology,
-                            "split": used_split,
-                            "values": box_values,
-                        }
+        for eval_protocol in eval_protocols_to_run:
+            for label, model_dir in runs:
+                try:
+                    rows, box_values, used_split = _evaluate_one_configuration(
+                        model_label=label,
+                        model_dir=model_dir,
+                        topology=args.topology,
+                        data_dir=args.data_dir,
+                        args=args,
+                        eval_protocol=eval_protocol,
+                        context_fracs=context_fracs,
+                        boxplot_split=args.boxplot_split,
+                        context_frac=args.context_frac,
                     )
-            except FileNotFoundError as exc:
-                print(f"\nSkipping {label}: {exc}")
+                    for row in rows:
+                        row["variance"] = "custom"
+                        all_rows.append(row)
+                    if box_values is not None:
+                        cdf_records.append(
+                            {
+                                "model": label.lower(),
+                                "variance": "custom",
+                                "topology": args.topology,
+                                "split": used_split,
+                                "eval_protocol": eval_protocol,
+                                "values": box_values,
+                            }
+                        )
+                except FileNotFoundError as exc:
+                    print(f"\nSkipping {label} ({eval_protocol}): {exc}")
 
     if len(all_rows) > 0:
         print(f"\n{'='*90}")
@@ -1399,11 +1465,11 @@ def main():
         out_dir = os.path.dirname(csv_path)
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
-        with open(csv_path, "w", newline="") as f:
-            ctx_fieldnames = [f"mae_ctx_{int(round(f * 100))}" for f in context_fracs]
+        with open(csv_path, "w", newline="") as csv_file:
+            ctx_fieldnames = [f"mae_ctx_{int(round(cf * 100))}" for cf in context_fracs]
             rollout_fieldnames = []
-            for f in context_fracs:
-                p = int(round(f * 100))
+            for cf in context_fracs:
+                p = int(round(cf * 100))
                 rollout_fieldnames.extend(
                     [
                         f"mae_roll5_step1_ctx_{p}",
@@ -1415,7 +1481,7 @@ def main():
                     ]
                 )
             writer = csv.DictWriter(
-                f,
+                csv_file,
                 fieldnames=[
                     "model",
                     "variance",
@@ -1434,81 +1500,86 @@ def main():
         print(f"\nSaved CSV summary to: {csv_path}")
 
     if len(all_rows) > 0:
-        if not args.run_all:
-            print("\n--save-boxplot is most useful with --run-all; skipping plot in manual mode.")
-        else:
-            _plot_boxplot_by_variance(
-                boxplot_store=boxplot_store,
-                save_path=boxplot_path,
-                context_frac=args.context_frac,
-                split_name=args.boxplot_split,
+        protocols_present = sorted(set(r["eval_protocol"] for r in all_rows))
+        for protocol in protocols_present:
+            suffix = protocol
+            rows_p = [r for r in all_rows if r["eval_protocol"] == protocol]
+            cdf_p = [r for r in cdf_records if r.get("eval_protocol") == protocol]
+
+            if not args.run_all:
+                print("\n--save-boxplot is most useful with --run-all; skipping plot in manual mode.")
+            else:
+                _plot_boxplot_by_variance(
+                    boxplot_store=boxplot_store[protocol],
+                    save_path=_with_suffix(boxplot_path, suffix),
+                    context_frac=args.context_frac,
+                    split_name=args.boxplot_split,
+                )
+                print(f"Saved boxplot PNG to: {_with_suffix(boxplot_path, suffix)}")
+
+            _plot_mae_heatmaps_by_split(all_rows=rows_p, save_path=_with_suffix(heatmap_path, suffix))
+            print(f"Saved MAE heatmap PNG to: {_with_suffix(heatmap_path, suffix)}")
+
+            _plot_delta_heatmaps_by_split(all_rows=rows_p, save_path=_with_suffix(delta_heatmap_path, suffix))
+            print(f"Saved delta heatmap PNG to: {_with_suffix(delta_heatmap_path, suffix)}")
+
+            if len(cdf_p) > 0:
+                _plot_cdf_mae_by_scenario(
+                    cdf_records=cdf_p,
+                    save_path=_with_suffix(cdf_path, suffix),
+                    context_frac=args.context_frac,
+                    split_name=args.boxplot_split,
+                )
+                print(f"Saved CDF PNG to: {_with_suffix(cdf_path, suffix)}")
+
+                _plot_barplot_ci_mean_mae(
+                    cdf_records=cdf_p,
+                    save_path=_with_suffix(ci_barplot_path, suffix),
+                    context_frac=args.context_frac,
+                    split_name=args.boxplot_split,
+                )
+                print(f"Saved CI barplot PNG to: {_with_suffix(ci_barplot_path, suffix)}")
+
+            _plot_scatter_optuna_vs_test(
+                scenario_rows=rows_p,
+                save_path=_with_suffix(scatter_path, suffix),
+                context_fracs=context_fracs,
             )
-            print(f"Saved boxplot PNG to: {boxplot_path}")
+            print(f"Saved Optuna-vs-test scatter PNG to: {_with_suffix(scatter_path, suffix)}")
 
-    if len(all_rows) > 0:
-        _plot_mae_heatmaps_by_split(all_rows=all_rows, save_path=heatmap_path)
-        print(f"Saved MAE heatmap PNG to: {heatmap_path}")
+            _plot_context_topology_curves(
+                all_rows=rows_p,
+                context_fracs=context_fracs,
+                save_path=_with_suffix(context_curves_path, suffix),
+            )
+            print(f"Saved context-response curves PNG to: {_with_suffix(context_curves_path, suffix)}")
 
-    if len(all_rows) > 0:
-        _plot_delta_heatmaps_by_split(all_rows=all_rows, save_path=delta_heatmap_path)
-        print(f"Saved delta heatmap PNG to: {delta_heatmap_path}")
+            _plot_rollout_curves(
+                all_rows=rows_p,
+                context_frac=args.context_frac,
+                eval_protocol=protocol,
+                holdout_frac=args.holdout_frac,
+                save_path=_with_suffix(rollout_curves_path, suffix),
+            )
+            print(f"Saved rollout curves PNG to: {_with_suffix(rollout_curves_path, suffix)}")
 
-    if len(cdf_records) > 0:
-        _plot_cdf_mae_by_scenario(
-            cdf_records=cdf_records,
-            save_path=cdf_path,
-            context_frac=args.context_frac,
-            split_name=args.boxplot_split,
-        )
-        print(f"Saved CDF PNG to: {cdf_path}")
+            _plot_rollout_heatmap_by_scenario(
+                all_rows=rows_p,
+                context_fracs=context_fracs,
+                eval_protocol=protocol,
+                holdout_frac=args.holdout_frac,
+                save_path=_with_suffix(rollout_heatmap_path, suffix),
+            )
+            print(f"Saved rollout heatmap PNG(s) to: {_with_suffix(rollout_heatmap_path, suffix)}")
 
-        _plot_barplot_ci_mean_mae(
-            cdf_records=cdf_records,
-            save_path=ci_barplot_path,
-            context_frac=args.context_frac,
-            split_name=args.boxplot_split,
-        )
-        print(f"Saved CI barplot PNG to: {ci_barplot_path}")
-
-    if len(all_rows) > 0:
-        _plot_scatter_optuna_vs_test(
-            scenario_rows=all_rows,
-            save_path=scatter_path,
-            context_fracs=context_fracs,
-        )
-        print(f"Saved Optuna-vs-test scatter PNG to: {scatter_path}")
-
-    if len(all_rows) > 0:
-        _plot_context_topology_curves(
-            all_rows=all_rows,
-            context_fracs=context_fracs,
-            save_path=context_curves_path,
-        )
-        print(f"Saved context-response curves PNG to: {context_curves_path}")
-
-    if len(all_rows) > 0:
-        _plot_rollout_curves(
-            all_rows=all_rows,
-            context_frac=args.context_frac,
-            save_path=rollout_curves_path,
-        )
-        print(f"Saved rollout curves PNG to: {rollout_curves_path}")
-
-    if len(all_rows) > 0:
-        _plot_rollout_heatmap_by_scenario(
-            all_rows=all_rows,
-            context_fracs=context_fracs,
-            save_path=rollout_heatmap_path,
-        )
-        print(f"Saved rollout heatmap PNG(s) to: {rollout_heatmap_path}")
-
-    if len(all_rows) > 0:
-        _plot_rollout_delta_heatmap(
-            all_rows=all_rows,
-            context_fracs=context_fracs,
-            save_path=rollout_delta_heatmap_path,
-        )
-        print(f"Saved rollout delta heatmap PNG(s) to: {rollout_delta_heatmap_path}")
+            _plot_rollout_delta_heatmap(
+                all_rows=rows_p,
+                context_fracs=context_fracs,
+                eval_protocol=protocol,
+                holdout_frac=args.holdout_frac,
+                save_path=_with_suffix(rollout_delta_heatmap_path, suffix),
+            )
+            print(f"Saved rollout delta heatmap PNG(s) to: {_with_suffix(rollout_delta_heatmap_path, suffix)}")
 
 
 if __name__ == "__main__":
