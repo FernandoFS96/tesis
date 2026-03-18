@@ -10,14 +10,16 @@ Usage
 Run from the project root (underwater-localization-topologies/):
 
 python -m src.training.evaluate_optuna_models \
-    --run-all \
-    --device cuda \
-    --optuna-results-root src/training/results/optuna \
-    --data-root data/data \
-    --output-dir src/training/results/optuna/models_evaluation \
-    --boxplot-split test \
-    --context-fracs 0.1,0.15,0.2,0.25,0.3,0.4,0.5,0.6,0.7,0.8\
-    --context-frac 0.3
+  --run-all \
+  --device cuda \
+  --optuna-results-root src/training/results/optuna \
+  --data-root data/data \
+  --output-dir src/training/results/optuna/models_evaluation \
+  --boxplot-split test \
+  --context-fracs 0.1,0.15,0.2,0.25,0.3,0.4,0.5,0.6,0.7,0.8,0.9 \
+  --context-frac 0.3 \
+  --eval-protocol fixed_holdout \
+  --holdout-frac 0.2
 
 Either --anp-dir or --ranp-dir can be omitted if only one model is available.
 """
@@ -816,6 +818,213 @@ def _plot_context_topology_curves(all_rows: list[dict], context_fracs: list[floa
     plt.close(fig)
 
 
+def _rollout_matrix_from_row(row: dict, context_fracs: list[float]) -> np.ndarray:
+    """Return rollout matrix with shape (5 steps, n_contexts)."""
+    mat = np.full((5, len(context_fracs)), np.nan, dtype=float)
+    for j, frac in enumerate(context_fracs):
+        p = int(round(frac * 100))
+        for s in range(1, 6):
+            key = f"mae_roll5_step{s}_ctx_{p}"
+            if key in row:
+                mat[s - 1, j] = float(row[key])
+    return mat
+
+
+def _plot_rollout_curves(all_rows: list[dict], context_frac: float, save_path: str) -> None:
+    """Plot MAE rollout curves (steps 1..5) at a fixed context, faceted by variance/model."""
+    if len(all_rows) == 0:
+        return
+
+    model_order = ["anp", "ranp"]
+    variance_order = ["lowvar", "highvar"]
+    split_order = ["val", "test"]
+    topology_order = ["aligned", "ellipsoidal", "random"]
+    colors = {"aligned": "#1f77b4", "ellipsoidal": "#ff7f0e", "random": "#2ca02c"}
+    linestyles = {"val": "--", "test": "-"}
+    x = np.arange(1, 6)
+    p = int(round(context_frac * 100))
+
+    fig, axes = plt.subplots(2, 2, figsize=(13, 9), sharex=True, sharey=True, constrained_layout=True)
+    for r, variance in enumerate(variance_order):
+        for c, model in enumerate(model_order):
+            ax = axes[r, c]
+            panel_rows = [row for row in all_rows if row["variance"] == variance and row["model"] == model]
+            for topo in topology_order:
+                for split in split_order:
+                    candidates = [
+                        row for row in panel_rows
+                        if row["topology"] == topo and row["split"] == split
+                    ]
+                    if len(candidates) == 0:
+                        continue
+                    row = candidates[0]
+                    y = [row.get(f"mae_roll5_step{s}_ctx_{p}", np.nan) for s in range(1, 6)]
+                    ax.plot(
+                        x,
+                        y,
+                        color=colors[topo],
+                        linestyle=linestyles[split],
+                        linewidth=1.8,
+                        marker="o",
+                        markersize=3,
+                        alpha=0.9,
+                    )
+            ax.set_title(f"{model.upper()} | {variance}")
+            ax.grid(alpha=0.3)
+
+    for ax in axes[1, :]:
+        ax.set_xlabel("Rollout step (1 to 5)")
+    for ax in axes[:, 0]:
+        ax.set_ylabel("MAE (m)")
+
+    topo_handles = [Line2D([0], [0], color=colors[t], lw=2.0, label=f"topology: {t}") for t in topology_order]
+    split_handles = [Line2D([0], [0], color="black", lw=2.0, linestyle=linestyles[s], label=f"split: {s}") for s in split_order]
+    fig.legend(handles=topo_handles + split_handles, loc="upper right", ncol=1, frameon=False)
+    fig.suptitle(f"Rollout-5 MAE Curves at Context={p}%", y=1.02)
+
+    out_dir = os.path.dirname(save_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+    fig.savefig(save_path, dpi=180)
+    plt.close(fig)
+
+
+def _plot_rollout_heatmap_by_scenario(all_rows: list[dict], context_fracs: list[float], save_path: str) -> None:
+    """Plot rollout heatmaps (horizon x context) for each scenario, split into val/test figures."""
+    if len(all_rows) == 0:
+        return
+
+    split_order = ["val", "test"]
+    topologies = ["aligned", "ellipsoidal", "random"]
+    col_pairs = [("anp", "lowvar"), ("ranp", "lowvar"), ("anp", "highvar"), ("ranp", "highvar")]
+    col_labels = [f"{m}-{v}" for m, v in col_pairs]
+    ctx_labels = [int(round(f * 100)) for f in context_fracs]
+
+    for split in split_order:
+        split_rows = [r for r in all_rows if r["split"] == split]
+        if len(split_rows) == 0:
+            continue
+
+        mats = []
+        for topo in topologies:
+            for model, variance in col_pairs:
+                candidates = [
+                    r for r in split_rows
+                    if r["topology"] == topo and r["model"] == model and r["variance"] == variance
+                ]
+                if len(candidates) > 0:
+                    mats.append(_rollout_matrix_from_row(candidates[0], context_fracs))
+        if len(mats) == 0:
+            continue
+        vmin = float(np.nanmin([m for m in mats]))
+        vmax = float(np.nanmax([m for m in mats]))
+
+        fig, axes = plt.subplots(len(topologies), len(col_pairs), figsize=(4.1 * len(col_pairs), 2.9 * len(topologies)), constrained_layout=True)
+        if len(topologies) == 1:
+            axes = np.array([axes])
+        if len(col_pairs) == 1:
+            axes = axes[:, np.newaxis]
+
+        for i, topo in enumerate(topologies):
+            for j, (model, variance) in enumerate(col_pairs):
+                ax = axes[i, j]
+                candidates = [
+                    r for r in split_rows
+                    if r["topology"] == topo and r["model"] == model and r["variance"] == variance
+                ]
+                if len(candidates) == 0:
+                    mat = np.full((5, len(context_fracs)), np.nan)
+                else:
+                    mat = _rollout_matrix_from_row(candidates[0], context_fracs)
+
+                im = ax.imshow(mat, cmap="viridis", vmin=vmin, vmax=vmax, aspect="auto")
+                ax.set_title(f"{topo} | {col_labels[j]}")
+                ax.set_xticks(np.arange(len(ctx_labels)))
+                ax.set_xticklabels(ctx_labels, rotation=45, ha="right", fontsize=8)
+                ax.set_yticks(np.arange(5))
+                ax.set_yticklabels([1, 2, 3, 4, 5], fontsize=8)
+                if i == len(topologies) - 1:
+                    ax.set_xlabel("Context (%)")
+                if j == 0:
+                    ax.set_ylabel("Rollout step")
+
+        cbar = fig.colorbar(im, ax=axes, fraction=0.02, pad=0.01)
+        cbar.set_label("MAE (m)")
+        fig.suptitle(f"Rollout-5 Heatmaps by Scenario ({split})", y=1.02)
+
+        out_dir = os.path.dirname(save_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        root, ext = os.path.splitext(save_path)
+        fig.savefig(f"{root}_{split}{ext}", dpi=180)
+        plt.close(fig)
+
+
+def _plot_rollout_delta_heatmap(all_rows: list[dict], context_fracs: list[float], save_path: str) -> None:
+    """Plot rollout delta heatmaps (RANP-ANP) over horizon x context, split by val/test."""
+    if len(all_rows) == 0:
+        return
+
+    split_order = ["val", "test"]
+    topologies = ["aligned", "ellipsoidal", "random"]
+    variances = ["lowvar", "highvar"]
+    ctx_labels = [int(round(f * 100)) for f in context_fracs]
+
+    for split in split_order:
+        split_rows = [r for r in all_rows if r["split"] == split]
+        if len(split_rows) == 0:
+            continue
+
+        deltas = []
+        for topo in topologies:
+            for var in variances:
+                ranp = [r for r in split_rows if r["topology"] == topo and r["variance"] == var and r["model"] == "ranp"]
+                anp = [r for r in split_rows if r["topology"] == topo and r["variance"] == var and r["model"] == "anp"]
+                if len(ranp) > 0 and len(anp) > 0:
+                    deltas.append(_rollout_matrix_from_row(ranp[0], context_fracs) - _rollout_matrix_from_row(anp[0], context_fracs))
+        if len(deltas) == 0:
+            continue
+        abs_max = float(np.nanmax(np.abs(np.stack(deltas))))
+
+        fig, axes = plt.subplots(len(topologies), len(variances), figsize=(4.5 * len(variances), 3.0 * len(topologies)), constrained_layout=True)
+        if len(topologies) == 1:
+            axes = np.array([axes])
+        if len(variances) == 1:
+            axes = axes[:, np.newaxis]
+
+        for i, topo in enumerate(topologies):
+            for j, var in enumerate(variances):
+                ax = axes[i, j]
+                ranp = [r for r in split_rows if r["topology"] == topo and r["variance"] == var and r["model"] == "ranp"]
+                anp = [r for r in split_rows if r["topology"] == topo and r["variance"] == var and r["model"] == "anp"]
+                if len(ranp) > 0 and len(anp) > 0:
+                    mat = _rollout_matrix_from_row(ranp[0], context_fracs) - _rollout_matrix_from_row(anp[0], context_fracs)
+                else:
+                    mat = np.full((5, len(context_fracs)), np.nan)
+
+                im = ax.imshow(mat, cmap="coolwarm", vmin=-abs_max, vmax=abs_max, aspect="auto")
+                ax.set_title(f"{topo} | {var}")
+                ax.set_xticks(np.arange(len(ctx_labels)))
+                ax.set_xticklabels(ctx_labels, rotation=45, ha="right", fontsize=8)
+                ax.set_yticks(np.arange(5))
+                ax.set_yticklabels([1, 2, 3, 4, 5], fontsize=8)
+                if i == len(topologies) - 1:
+                    ax.set_xlabel("Context (%)")
+                if j == 0:
+                    ax.set_ylabel("Rollout step")
+
+        cbar = fig.colorbar(im, ax=axes, fraction=0.025, pad=0.02)
+        cbar.set_label("Delta MAE (m), RANP-ANP")
+        fig.suptitle(f"Rollout-5 Delta Heatmaps (RANP-ANP) ({split})", y=1.02)
+
+        out_dir = os.path.dirname(save_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        root, ext = os.path.splitext(save_path)
+        fig.savefig(f"{root}_{split}{ext}", dpi=180)
+        plt.close(fig)
+
+
 def _default_study_name(model_type: str, variance: str, topology: str) -> str:
     return f"{model_type}_masked_{variance}_{topology}_v1"
 
@@ -999,6 +1208,9 @@ def main():
     parser.add_argument("--save-ci-barplot", default=None, help="Optional CI barplot filename override (stored inside --output-dir).")
     parser.add_argument("--save-scatter", default=None, help="Optional scatter filename override (stored inside --output-dir).")
     parser.add_argument("--save-context-curves", default=None, help="Optional context-response curves filename override (stored inside --output-dir).")
+    parser.add_argument("--save-rollout-curves", default=None, help="Optional rollout curves filename override (stored inside --output-dir).")
+    parser.add_argument("--save-rollout-heatmap", default=None, help="Optional rollout heatmap filename override (stored inside --output-dir).")
+    parser.add_argument("--save-rollout-delta-heatmap", default=None, help="Optional rollout delta heatmap filename override (stored inside --output-dir).")
     parser.add_argument("--boxplot-split", default="test", choices=["val", "test"], help="Which split to use for boxplot distributions.")
     parser.add_argument("--context-fracs", default=None, help="Comma-separated context fractions for table/CSV metrics, e.g. 0.2,0.3,0.4,0.6. If omitted, uses --context-frac.")
     parser.add_argument("--context-frac", type=float, default=0.4, help="Context fraction used by all metrics and plots (default: 0.4).")
@@ -1063,6 +1275,21 @@ def main():
         args.output_dir,
         args.save_context_curves,
         "context_curves_topology_model_variance.png",
+    )
+    rollout_curves_path = _resolve_output_path(
+        args.output_dir,
+        args.save_rollout_curves,
+        f"rollout5_curves_ctx{ctx_pct}.png",
+    )
+    rollout_heatmap_path = _resolve_output_path(
+        args.output_dir,
+        args.save_rollout_heatmap,
+        "rollout5_heatmap_by_scenario.png",
+    )
+    rollout_delta_heatmap_path = _resolve_output_path(
+        args.output_dir,
+        args.save_rollout_delta_heatmap,
+        "rollout5_delta_heatmap_ranp_minus_anp.png",
     )
 
     all_rows = []
@@ -1258,6 +1485,30 @@ def main():
             save_path=context_curves_path,
         )
         print(f"Saved context-response curves PNG to: {context_curves_path}")
+
+    if len(all_rows) > 0:
+        _plot_rollout_curves(
+            all_rows=all_rows,
+            context_frac=args.context_frac,
+            save_path=rollout_curves_path,
+        )
+        print(f"Saved rollout curves PNG to: {rollout_curves_path}")
+
+    if len(all_rows) > 0:
+        _plot_rollout_heatmap_by_scenario(
+            all_rows=all_rows,
+            context_fracs=context_fracs,
+            save_path=rollout_heatmap_path,
+        )
+        print(f"Saved rollout heatmap PNG(s) to: {rollout_heatmap_path}")
+
+    if len(all_rows) > 0:
+        _plot_rollout_delta_heatmap(
+            all_rows=all_rows,
+            context_fracs=context_fracs,
+            save_path=rollout_delta_heatmap_path,
+        )
+        print(f"Saved rollout delta heatmap PNG(s) to: {rollout_delta_heatmap_path}")
 
 
 if __name__ == "__main__":
