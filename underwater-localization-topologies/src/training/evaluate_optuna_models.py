@@ -16,7 +16,7 @@ python -m src.training.evaluate_optuna_models \
     --data-root data/data \
     --output-dir src/training/results/optuna/models_evaluation \
     --boxplot-split test \
-    --context-fracs 0.1,0.15,0.2,0.25,0.3,0.4,0.5,0.6,0.7,0.8,0.9\
+    --context-fracs 0.1,0.15,0.2,0.25,0.3,0.4,0.5,0.6,0.7,0.8\
     --context-frac 0.3
 
 Either --anp-dir or --ranp-dir can be omitted if only one model is available.
@@ -107,6 +107,48 @@ def _make_dataloader(data, batch_size: int):
     return DataLoader(TensorDataset(xs, ys), batch_size=batch_size, shuffle=False)
 
 
+def _build_eval_indices(
+    total_points: int,
+    context_frac: float,
+    device: str | torch.device,
+    eval_protocol: str,
+    holdout_frac: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Create context and target indices according to the selected evaluation protocol.
+
+    Protocols:
+    - legacy: target is all post-context points [ctx, T).
+    - fixed_holdout: target is fixed tail [T-n_holdout, T), and context is capped
+      to stay strictly before that tail (no overlap by construction).
+    - online_rolling: target is the immediate next point after context (1-step ahead).
+    """
+    if eval_protocol == "legacy":
+        ctx_size = max(1, min(total_points - 1, int(round(context_frac * total_points))))
+        ctx_idx = torch.arange(ctx_size, device=device)
+        tar_idx = torch.arange(ctx_size, total_points, device=device)
+        return ctx_idx, tar_idx
+
+    if eval_protocol == "fixed_holdout":
+        n_holdout = max(1, int(round(holdout_frac * total_points)))
+        holdout_start = total_points - n_holdout
+        # Keep context strictly before holdout_start to avoid any overlap.
+        max_ctx = max(1, holdout_start - 1)
+        ctx_size = max(1, min(max_ctx, int(round(context_frac * total_points))))
+        ctx_idx = torch.arange(ctx_size, device=device)
+        tar_idx = torch.arange(holdout_start, total_points, device=device)
+        return ctx_idx, tar_idx
+
+    if eval_protocol == "online_rolling":
+        # Evaluate pure 1-step-ahead prediction after the context prefix.
+        max_ctx = max(1, total_points - 2)
+        ctx_size = max(1, min(max_ctx, int(round(context_frac * total_points))))
+        ctx_idx = torch.arange(ctx_size, device=device)
+        tar_idx = torch.arange(ctx_size, min(total_points, ctx_size + 1), device=device)
+        return ctx_idx, tar_idx
+
+    raise ValueError(f"Unknown eval_protocol: {eval_protocol}")
+
+
 # ---------------------------------------------------------------------------
 # Core evaluation function
 # ---------------------------------------------------------------------------
@@ -121,6 +163,8 @@ def evaluate_model(
     num_time_points: int,
     num_sensors: int,
     context_fracs: list,
+    eval_protocol: str,
+    holdout_frac: float,
     device: str | torch.device,
 ) -> dict[float, float]:
     """Evaluate *model* on *val_loader* for each context fraction.
@@ -150,9 +194,13 @@ def evaluate_model(
             y_norm = (y_batch - y_mean) / y_std
 
             for frac in context_fracs:
-                ctx_size = max(1, min(T - 1, int(round(frac * T))))
-                ctx_idx  = torch.arange(ctx_size, device=device)
-                tar_idx  = torch.arange(ctx_size, T, device=device)
+                ctx_idx, tar_idx = _build_eval_indices(
+                    total_points=T,
+                    context_frac=frac,
+                    device=device,
+                    eval_protocol=eval_protocol,
+                    holdout_frac=holdout_frac,
+                )
 
                 context_y = y_norm[:, ctx_idx, :]
                 target_y  = y_norm[:, tar_idx, :]
@@ -190,6 +238,8 @@ def evaluate_model_distribution(
     num_time_points: int,
     num_sensors: int,
     context_frac: float,
+    eval_protocol: str,
+    holdout_frac: float,
     device: str | torch.device,
 ) -> list[float]:
     """Return per-trajectory MAE distribution for a fixed context fraction."""
@@ -212,9 +262,13 @@ def evaluate_model_distribution(
             )
 
             y_norm = (y_batch - y_mean) / y_std
-            ctx_size = max(1, min(T - 1, int(round(context_frac * T))))
-            ctx_idx = torch.arange(ctx_size, device=device)
-            tar_idx = torch.arange(ctx_size, T, device=device)
+            ctx_idx, tar_idx = _build_eval_indices(
+                total_points=T,
+                context_frac=context_frac,
+                device=device,
+                eval_protocol=eval_protocol,
+                holdout_frac=holdout_frac,
+            )
 
             context_y = y_norm[:, ctx_idx, :]
 
@@ -239,6 +293,94 @@ def evaluate_model_distribution(
             maes.extend(per_traj.detach().cpu().tolist())
 
     return maes
+
+
+def evaluate_model_rollout5(
+    model,
+    model_type: str,
+    val_loader,
+    y_mean: torch.Tensor,
+    y_std: torch.Tensor,
+    x_means_SP: torch.Tensor,
+    num_time_points: int,
+    num_sensors: int,
+    context_fracs: list,
+    device: str | torch.device,
+) -> dict[float, dict[str, float]]:
+    """Always-on fixed rollout evaluation.
+
+    For each context fraction, evaluate MAE for the next 5 points after context:
+      step1..step5 and their mean.
+    Context is capped so that all 5 rollout steps exist (no overlap by design).
+    """
+    y_mean = y_mean.to(device)
+    y_std = y_std.to(device)
+    x_means_SP = x_means_SP.to(device)
+
+    sums = {
+        f: {"step1": 0.0, "step2": 0.0, "step3": 0.0, "step4": 0.0, "step5": 0.0}
+        for f in context_fracs
+    }
+    n_batches = 0
+
+    model.eval()
+    with torch.no_grad():
+        for x_batch, y_batch in val_loader:
+            x_batch = x_batch.to(device)
+            y_batch = y_batch.to(device)
+            B, T, _ = x_batch.shape
+
+            sensor_mask = torch.ones(B, num_sensors, device=device)
+            x_aug = _apply_mask_and_append(
+                x_batch, sensor_mask, x_means_SP, num_time_points, num_sensors
+            )
+            y_norm = (y_batch - y_mean) / y_std
+
+            # Need at least one context point + 5 future points.
+            max_ctx = max(1, T - 6)
+
+            for frac in context_fracs:
+                ctx_size = max(1, min(max_ctx, int(round(frac * T))))
+                ctx_idx = torch.arange(ctx_size, device=device)
+                tar_idx = torch.arange(ctx_size, ctx_size + 5, device=device)
+
+                context_y = y_norm[:, ctx_idx, :]
+
+                if model_type == "anp":
+                    context_x = x_aug[:, ctx_idx, :]
+                    target_x = x_aug[:, tar_idx, :]
+                    y_pred_norm, *_ = model(context_x, context_y, target_x)
+                elif model_type == "ranp":
+                    y_pred_norm, *_ = model(
+                        x_seq=x_aug,
+                        context_indices=ctx_idx,
+                        context_y=context_y,
+                        target_indices=tar_idx,
+                    )
+                else:
+                    raise ValueError(f"Unknown model_type: {model_type}")
+
+                y_pred = y_pred_norm * y_std + y_mean  # (B,5,3)
+                y_true = y_batch[:, tar_idx, :]       # (B,5,3)
+
+                abs_err = torch.abs(y_pred - y_true)  # (B,5,3)
+                for step_i in range(5):
+                    step_key = f"step{step_i + 1}"
+                    step_mae = abs_err[:, step_i, :].mean().item()
+                    sums[frac][step_key] += step_mae
+
+            n_batches += 1
+
+    out = {}
+    for frac in context_fracs:
+        step_vals = {
+            k: sums[frac][k] / max(1, n_batches)
+            for k in ["step1", "step2", "step3", "step4", "step5"]
+        }
+        step_vals["mean"] = float(np.mean(list(step_vals.values())))
+        out[frac] = step_vals
+
+    return out
 
 
 def _plot_boxplot_by_variance(
@@ -742,6 +884,7 @@ def _evaluate_one_configuration(
         trial_mae_float = np.nan
     print(f"  Trial: {trial_num} | Optuna MAE: {trial_mae} | Params: {n_params:,}")
     print(f"  Hparams: {hparams}")
+    print(f"  Eval protocol: {args.eval_protocol} | holdout_frac: {args.holdout_frac}")
 
     model_type = "ranp" if model_label.lower() == "ranp" else "anp"
     eval_sets = [("val", val_loader)]
@@ -765,24 +908,55 @@ def _evaluate_one_configuration(
             num_time_points=args.num_time_points,
             num_sensors=args.num_sensors,
             context_fracs=context_fracs,
+            eval_protocol=args.eval_protocol,
+            holdout_frac=args.holdout_frac,
             device=args.device,
         )
         mean_mae = float(np.mean(list(mae_by_frac.values())))
+        rollout5_by_frac = evaluate_model_rollout5(
+            model=model,
+            model_type=model_type,
+            val_loader=loader,
+            y_mean=y_mean,
+            y_std=y_std,
+            x_means_SP=x_means_SP,
+            num_time_points=args.num_time_points,
+            num_sensors=args.num_sensors,
+            context_fracs=context_fracs,
+            device=args.device,
+        )
 
         row = {
             "model": model_label.lower(),
             "topology": topology,
             "split": split_name,
+            "eval_protocol": args.eval_protocol,
+            "holdout_frac": args.holdout_frac,
             "mean_mae": mean_mae,
             "optuna_mae": trial_mae_float,
         }
         for frac in context_fracs:
             row[f"mae_ctx_{int(frac * 100)}"] = float(mae_by_frac[frac])
+            p = int(frac * 100)
+            row[f"mae_roll5_step1_ctx_{p}"] = float(rollout5_by_frac[frac]["step1"])
+            row[f"mae_roll5_step2_ctx_{p}"] = float(rollout5_by_frac[frac]["step2"])
+            row[f"mae_roll5_step3_ctx_{p}"] = float(rollout5_by_frac[frac]["step3"])
+            row[f"mae_roll5_step4_ctx_{p}"] = float(rollout5_by_frac[frac]["step4"])
+            row[f"mae_roll5_step5_ctx_{p}"] = float(rollout5_by_frac[frac]["step5"])
+            row[f"mae_roll5_mean_ctx_{p}"] = float(rollout5_by_frac[frac]["mean"])
         out_rows.append(row)
 
         print(f"  {model_label} [{split_name}] mean MAE: {mean_mae:.4f} m")
         for frac in context_fracs:
             print(f"    ctx={int(frac * 100):3d}% -> {mae_by_frac[frac]:.4f} m")
+        for frac in context_fracs:
+            p = int(frac * 100)
+            r = rollout5_by_frac[frac]
+            print(
+                f"    rollout5 ctx={p:3d}% -> "
+                f"s1={r['step1']:.4f}, s2={r['step2']:.4f}, s3={r['step3']:.4f}, "
+                f"s4={r['step4']:.4f}, s5={r['step5']:.4f}, mean={r['mean']:.4f}"
+            )
 
         if split_name == selected_boxplot_split:
             boxplot_values = evaluate_model_distribution(
@@ -795,6 +969,8 @@ def _evaluate_one_configuration(
                 num_time_points=args.num_time_points,
                 num_sensors=args.num_sensors,
                 context_frac=context_frac,
+                eval_protocol=args.eval_protocol,
+                holdout_frac=args.holdout_frac,
                 device=args.device,
             )
 
@@ -826,10 +1002,12 @@ def main():
     parser.add_argument("--boxplot-split", default="test", choices=["val", "test"], help="Which split to use for boxplot distributions.")
     parser.add_argument("--context-fracs", default=None, help="Comma-separated context fractions for table/CSV metrics, e.g. 0.2,0.3,0.4,0.6. If omitted, uses --context-frac.")
     parser.add_argument("--context-frac", type=float, default=0.4, help="Context fraction used by all metrics and plots (default: 0.4).")
+    parser.add_argument("--eval-protocol", default="fixed_holdout", choices=["fixed_holdout", "online_rolling", "legacy"], help="Evaluation protocol: fixed_holdout (no overlap), online_rolling (1-step ahead), or legacy (post-context tail).")
+    parser.add_argument("--holdout-frac", type=float, default=0.2, help="Fraction reserved as fixed target tail when --eval-protocol=fixed_holdout.")
     parser.add_argument("--device", default="cpu", help="Torch device: cpu | cuda | cuda:0 ...")
-    parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--num-sensors", type=int, default=10)
-    parser.add_argument("--num-time-points", type=int, default=201)
+    parser.add_argument("--batch-size", type=int, default=8, help="Evaluation batch size.")
+    parser.add_argument("--num-sensors", type=int, default=10, help="Number of sensors.")
+    parser.add_argument("--num-time-points", type=int, default=201, help="Number of time points.")
     args = parser.parse_args()
 
     if args.context_fracs is not None:
@@ -839,6 +1017,8 @@ def main():
     for frac in context_fracs:
         if not (0.0 < frac < 1.0):
             raise ValueError(f"Invalid context fraction {frac}. Expected values in (0,1).")
+    if not (0.0 < args.holdout_frac < 1.0):
+        raise ValueError(f"Invalid holdout fraction {args.holdout_frac}. Expected values in (0,1).")
 
     ctx_pct = int(round(args.context_frac * 100))
 
@@ -977,12 +1157,12 @@ def main():
         print(f"\n{'='*90}")
         print("Consolidated summary")
         ctx_headers = [f"ctx{int(round(f * 100)):02d}" for f in context_fracs]
-        print("model | variance | topology | split | " + " | ".join(ctx_headers) + " | mean")
+        print("model | variance | topology | split | protocol | " + " | ".join(ctx_headers) + " | mean")
         print("-" * 90)
         for row in all_rows:
             ctx_vals = " | ".join(f"{row[f'mae_ctx_{int(round(f * 100))}']:.4f}" for f in context_fracs)
             print(
-                f"{row['model']:<5} | {row['variance']:<8} | {row['topology']:<11} | {row['split']:<4} | "
+                f"{row['model']:<5} | {row['variance']:<8} | {row['topology']:<11} | {row['split']:<4} | {row['eval_protocol']:<12} | "
                 f"{ctx_vals} | {row['mean_mae']:.4f}"
             )
 
@@ -994,6 +1174,19 @@ def main():
             os.makedirs(out_dir, exist_ok=True)
         with open(csv_path, "w", newline="") as f:
             ctx_fieldnames = [f"mae_ctx_{int(round(f * 100))}" for f in context_fracs]
+            rollout_fieldnames = []
+            for f in context_fracs:
+                p = int(round(f * 100))
+                rollout_fieldnames.extend(
+                    [
+                        f"mae_roll5_step1_ctx_{p}",
+                        f"mae_roll5_step2_ctx_{p}",
+                        f"mae_roll5_step3_ctx_{p}",
+                        f"mae_roll5_step4_ctx_{p}",
+                        f"mae_roll5_step5_ctx_{p}",
+                        f"mae_roll5_mean_ctx_{p}",
+                    ]
+                )
             writer = csv.DictWriter(
                 f,
                 fieldnames=[
@@ -1001,8 +1194,11 @@ def main():
                     "variance",
                     "topology",
                     "split",
+                    "eval_protocol",
+                    "holdout_frac",
                     "optuna_mae",
                     *ctx_fieldnames,
+                    *rollout_fieldnames,
                     "mean_mae",
                 ],
             )

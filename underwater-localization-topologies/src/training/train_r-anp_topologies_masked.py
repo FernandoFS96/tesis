@@ -402,7 +402,7 @@ def train_ranp_topology_masked(
     val_mae_02_list, val_mae_04_list, val_mae_06_list = [], [], []
 
     # validation context fractions; VAL_ES_FRAC drives early stopping
-    val_fracs = [0.2, 0.4, 0.6]
+    val_fracs = [0.2, 0.4, 0.6, 0.8]
     VAL_ES_FRAC = 0.4
 
     t_init = time.time()

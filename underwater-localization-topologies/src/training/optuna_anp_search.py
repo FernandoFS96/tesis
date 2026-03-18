@@ -66,11 +66,11 @@ Run RANP (single process):
     python optuna_anp_search.py \
     --model ranp \
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
-    --topologies ellipsoidal \
-    --objective-topology ellipsoidal \
-    --n-trials 25 \
+    --topologies random \
+    --objective-topology random \
+    --n-trials 20 \
     --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_ranp.db \
-    --study-name ranp_masked_highvar_ellipsoidal_v1 \
+    --study-name ranp_masked_highvar_random_v1 \
     --constant-liar \
     --cleanup-trial-checkpoints \
     --disable-pruning
