@@ -287,6 +287,7 @@ def make_objective(args):
                 es_context_frac=args.es_context_frac,
                 es_weight_fixed=args.es_weight_fixed,
                 es_weight_inverse=args.es_weight_inverse,
+                include_fixed_holdout_in_es=args.include_fixed_holdout_in_es,
             )
             if args.model == "ranp":
                 train_kwargs.update(
@@ -336,8 +337,9 @@ def main():
     p.add_argument("--mask-in-val", action="store_true", help="If set, apply masking also during validation (harder).")
     p.add_argument("--holdout-frac", type=float, default=0.2, help="Validation holdout tail fraction for fixed/inverse metrics.")
     p.add_argument("--es-context-frac", type=float, default=0.4, help="Context fraction of pre-holdout window for holdout validation metrics.")
-    p.add_argument("--es-weight-fixed", type=float, default=0.2, help="Weight for fixed-holdout MAE in weighted validation score.")
-    p.add_argument("--es-weight-inverse", type=float, default=0.8, help="Weight for inverse-holdout MAE in weighted validation score.")
+    p.add_argument("--es-weight-fixed", type=float, default=0.2, help="Weight for fixed-holdout MAE in weighted validation score (used only with --include-fixed-holdout-in-es).")
+    p.add_argument("--es-weight-inverse", type=float, default=0.8, help="Weight for inverse-holdout MAE in weighted validation score (used only with --include-fixed-holdout-in-es).")
+    p.add_argument("--include-fixed-holdout-in-es", action="store_true", help="Include fixed-holdout metric in training early stopping/objective. Default optimizes inverse holdout only.")
 
     # optuna
     p.add_argument("--n-trials", type=int, default=200)
