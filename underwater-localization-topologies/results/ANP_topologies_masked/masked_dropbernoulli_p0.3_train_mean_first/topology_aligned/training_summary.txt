@@ -1,0 +1,37 @@
+ANP MASKED Training Summary - Topology: aligned
+============================================================
+Training samples: 420 trajectories
+Validation samples: 120 trajectories
+Best validation weighted score: 10.071297
+Best validation inverse holdout MAE: 10.071297
+Best validation fixed holdout MAE: inf
+Best validation legacy MAE (ctx=40%): 10.508287
+Best robust inverse mean MAE: 10.283436
+Best robust inverse worst-case MAE: 11.092175
+Best robust score: 10.113724
+Worst observed robust gap: 13.469488
+Final epoch: 877
+Early stopping counter: 250/250
+Training time: 39.09 minutes
+
+Validation score config:
+  holdout_frac: 0.2
+  es_context_frac: 0.4
+  include_fixed_holdout_in_es: False
+  es_weight_fixed: 0.0000
+  es_weight_inverse: 1.0000
+  robust_context_fracs: [0.2, 0.4, 0.6, 0.8]
+  robust_eval_every: 1
+  robust_alpha: 0.8000
+
+Masking config:
+  num_sensors: 10
+  num_time_points: 201
+  sensor_drop_mode: bernoulli
+  sensor_drop_p: 0.3
+  mask_fill: train_mean
+  mask_in_val: True
+
+Best checkpoint files saved:
+  - best_checkpoint.pth.tar
+  - best_checkpoint_legacy_ctx040.pth.tar

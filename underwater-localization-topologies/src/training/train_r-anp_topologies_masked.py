@@ -438,7 +438,7 @@ def train_ranp_topology_masked(
     es_context_frac: float = 0.4,
     include_fixed_holdout_in_es: bool = False,
     robust_context_fracs=None,
-    robust_eval_every: int = 5,
+    robust_eval_every: int = 1,
     robust_alpha: float = 0.8,
 ):
     os.makedirs(save_dir, exist_ok=True)
@@ -1133,7 +1133,7 @@ def main():
     parser.add_argument("--es-weight-inverse", type=float, default=0.8, help="Used only with --include-fixed-holdout-in-es")
     parser.add_argument("--include-fixed-holdout-in-es", action="store_true", help="Include fixed holdout in early stopping; default uses only inverse holdout")
     parser.add_argument("--robust-context-fracs", type=str, default="0.2,0.4,0.6,0.8", help="Comma-separated context fractions for robust inverse-holdout monitoring")
-    parser.add_argument("--robust-eval-every", type=int, default=5, help="Run robust multi-context validation every N epochs")
+    parser.add_argument("--robust-eval-every", type=int, default=1, help="Run robust multi-context validation every N epochs")
     parser.add_argument("--robust-alpha", type=float, default=0.8, help="Blend factor for robust score: alpha*primary + (1-alpha)*robust_mean")
 
     args = parser.parse_args()

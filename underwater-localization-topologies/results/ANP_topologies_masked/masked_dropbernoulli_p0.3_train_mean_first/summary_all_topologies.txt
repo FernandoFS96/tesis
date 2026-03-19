@@ -1,0 +1,5 @@
+Best validation metrics per topology (weighted objective)
+============================================================
+random       : weighted=10.670506, inverse=10.670506, fixed=inf, legacy040=11.176111
+ellipsoidal  : weighted=11.271496, inverse=11.271496, fixed=inf, legacy040=10.907043
+aligned      : weighted=10.071297, inverse=10.071297, fixed=inf, legacy040=10.508287

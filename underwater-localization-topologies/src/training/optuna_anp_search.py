@@ -14,6 +14,7 @@ Run ANP (single process):
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
     --topologies ellipsoidal \
     --objective-topology ellipsoidal \
+    --mask-in-val \
     --n-trials 25 \
     --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
     --study-name anp_masked_lowvar_ellipsoidal_v1 \
@@ -27,6 +28,7 @@ Run ANP (single process):
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
     --topologies ellipsoidal \
     --objective-topology ellipsoidal \
+    --mask-in-val \
     --n-trials 25 \
     --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
     --study-name anp_masked_highvar_ellipsoidal_v1 \
@@ -40,6 +42,7 @@ Run ANP (single process):
         --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
         --topologies aligned \
         --objective-topology aligned \
+        --mask-in-val \
         --n-trials 200 \
         --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
         --study-name anp_masked_highvar_aligned_v1 \
@@ -55,6 +58,7 @@ Run RANP (single process):
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
     --topologies ellipsoidal \
     --objective-topology ellipsoidal \
+    --mask-in-val \
     --n-trials 25 \
     --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_ranp.db \
     --study-name ranp_masked_lowvar_ellipsoidal_v1 \
@@ -68,6 +72,7 @@ Run RANP (single process):
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
     --topologies random \
     --objective-topology random \
+    --mask-in-val \
     --n-trials 20 \
     --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_ranp.db \
     --study-name ranp_masked_highvar_random_v1 \
@@ -81,6 +86,7 @@ Run RANP (single process):
         --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
         --topologies random \
         --objective-topology random \
+        --mask-in-val \
         --n-trials 200 \
         --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_ranp.db \
         --study-name ranp_masked_lowvar_random_v1 \
