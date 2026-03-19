@@ -8,24 +8,25 @@ Using bernoulli dropout with 20% drop probability and filling masked sensors wit
     cd /home/fernando/tesis/underwater-localization-topologies/src/training
 
     python train_anp_topologies_masked.py \
-      --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-      --save-dir /home/fernando/tesis/underwater-localization-topologies/results/ANP_topologies_masked \
-      --topologies aligned,ellipsoidal,random \
-      --batch-size 8 \
-      --epochs 3000 \
-      --patience 300 \
-      --device cuda \
-      --ctx-sample-mode first \
-      --num-sensors 10 \
-      --num-time-points 201 \
-      --sensor-drop-mode bernoulli \
-      --sensor-drop-p 0.2 \
-      --mask-fill train_mean \
-      --kl-warmup-epochs 10000 \
-      --holdout-frac 0.2 \
-      --es-context-frac 0.4 \
-      --es-weight-fixed 0.2 \
-      --es-weight-inverse 0.8
+        --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+        --save-dir /home/fernando/tesis/underwater-localization-topologies/results/ANP_topologies_masked \
+        --topologies aligned,ellipsoidal,random \
+        --batch-size 8 \
+        --epochs 3000 \
+        --patience 300 \
+        --device cuda \
+        --ctx-sample-mode first \
+        --num-sensors 10 \
+        --num-time-points 201 \
+        --sensor-drop-mode bernoulli \
+        --sensor-drop-p 0.2 \
+        --mask-fill train_mean \
+        --kl-warmup-epochs 10000 \
+        --holdout-frac 0.2 \
+        --es-context-frac 0.4 \
+        --es-weight-fixed 0.2 \
+        --es-weight-inverse 0.8 \
+        --mask-in-val
 
 Using bernoulli dropout with 20% drop probability and filling masked sensors with training mean but for high variance data:
     cd underwater-localization-topologies/src/training
@@ -47,7 +48,8 @@ Using bernoulli dropout with 20% drop probability and filling masked sensors wit
       --holdout-frac 0.2 \
       --es-context-frac 0.4 \
       --es-weight-fixed 0.2 \
-      --es-weight-inverse 0.8
+      --es-weight-inverse 0.8 \
+      --mask-in-val
 '''
 
 import csv
@@ -352,6 +354,7 @@ def train_anp_topology_masked(
     es_weight_inverse: float = 0.7,
     holdout_frac: float = 0.2,
     es_context_frac: float = 0.4,
+    include_fixed_holdout_in_es: bool = False,
 ):
     os.makedirs(save_dir, exist_ok=True)
 
@@ -407,13 +410,17 @@ def train_anp_topology_masked(
     val_mae_fixed_holdout_list, val_mae_inverse_holdout_list = [], []
     val_weighted_score_list = []
 
-    weight_sum = es_weight_fixed + es_weight_inverse
-    if weight_sum <= 0:
-        raise ValueError("es_weight_fixed + es_weight_inverse must be > 0")
-    es_weight_fixed = es_weight_fixed / weight_sum
-    es_weight_inverse = es_weight_inverse / weight_sum
+    if include_fixed_holdout_in_es:
+        weight_sum = es_weight_fixed + es_weight_inverse
+        if weight_sum <= 0:
+            raise ValueError("es_weight_fixed + es_weight_inverse must be > 0 when include_fixed_holdout_in_es is enabled")
+        es_weight_fixed = es_weight_fixed / weight_sum
+        es_weight_inverse = es_weight_inverse / weight_sum
+    else:
+        es_weight_fixed = 0.0
+        es_weight_inverse = 1.0
 
-    # validation context fractions; VAL_ES_FRAC drives early stopping
+    # validation context fractions; VAL_ES_FRAC drives early stopping (legacy)
     val_fracs = [0.2, 0.4, 0.6, 0.8]
     VAL_ES_FRAC = 0.4
 
@@ -537,9 +544,12 @@ def train_anp_topology_masked(
         val_loss = 0.0
         val_mae_per_frac = {f: 0.0 for f in val_fracs}
         val_mae_holdout = {
-            "fixed_holdout": 0.0,
             "inverse_context_holdout": 0.0,
         }
+        holdout_protocols = ["inverse_context_holdout"]
+        if include_fixed_holdout_in_es:
+            val_mae_holdout["fixed_holdout"] = 0.0
+            holdout_protocols.append("fixed_holdout")
         val_nll, val_kl = 0.0, 0.0
         val_var_min, val_var_mean, val_var_max = 0.0, 0.0, 0.0
         val_nll_nonctx = 0.0
@@ -605,7 +615,7 @@ def train_anp_topology_masked(
                                     + 0.5 * ((target_y - y_pred_mean_norm) ** 2) / y_pred_var_norm
                     val_nll_nonctx += nll_pointwise.mean().item()
 
-                for protocol in ("fixed_holdout", "inverse_context_holdout"):
+                for protocol in holdout_protocols:
                     ctx_idx, tar_idx = build_holdout_indices(
                         total_points=total_points,
                         holdout_frac=holdout_frac,
@@ -635,12 +645,18 @@ def train_anp_topology_masked(
         val_loss /= len(val_loader)
         val_mae_per_frac = {f: v / len(val_loader) for f, v in val_mae_per_frac.items()}
         val_mae = val_mae_per_frac[VAL_ES_FRAC]
-        val_mae_fixed_holdout = val_mae_holdout["fixed_holdout"] / len(val_loader)
+        if include_fixed_holdout_in_es:
+            val_mae_fixed_holdout = val_mae_holdout["fixed_holdout"] / len(val_loader)
+        else:
+            val_mae_fixed_holdout = float("nan")
         val_mae_inverse_holdout = val_mae_holdout["inverse_context_holdout"] / len(val_loader)
-        val_weighted_score = (
-            es_weight_fixed * val_mae_fixed_holdout
-            + es_weight_inverse * val_mae_inverse_holdout
-        )
+        if include_fixed_holdout_in_es:
+            val_weighted_score = (
+                es_weight_fixed * val_mae_fixed_holdout
+                + es_weight_inverse * val_mae_inverse_holdout
+            )
+        else:
+            val_weighted_score = val_mae_inverse_holdout
 
         val_loss_list.append(val_loss)
         val_mae_list.append(val_mae)
@@ -685,7 +701,7 @@ def train_anp_topology_masked(
                     os.path.join(save_dir, 'best_checkpoint_legacy_ctx040.pth.tar')
                 )
 
-        if val_mae_fixed_holdout < best_val_mae_fixed_holdout:
+        if include_fixed_holdout_in_es and val_mae_fixed_holdout < best_val_mae_fixed_holdout:
             best_val_mae_fixed_holdout = val_mae_fixed_holdout
             if save_checkpoints:
                 torch.save(
@@ -695,7 +711,7 @@ def train_anp_topology_masked(
 
         if val_mae_inverse_holdout < best_val_mae_inverse_holdout:
             best_val_mae_inverse_holdout = val_mae_inverse_holdout
-            if save_checkpoints:
+            if save_checkpoints and include_fixed_holdout_in_es:
                 torch.save(
                     {'model': model.state_dict(), 'optimizer': optimizer.state_dict()},
                     os.path.join(save_dir, 'best_checkpoint_inverse_holdout.pth.tar')
@@ -707,7 +723,8 @@ def train_anp_topology_masked(
             early_stop_counter = 0
             if save_checkpoints:
                 ckpt = {'model': model.state_dict(), 'optimizer': optimizer.state_dict()}
-                torch.save(ckpt, os.path.join(save_dir, 'best_checkpoint_weighted_score.pth.tar'))
+                if include_fixed_holdout_in_es:
+                    torch.save(ckpt, os.path.join(save_dir, 'best_checkpoint_weighted_score.pth.tar'))
                 torch.save(ckpt, os.path.join(save_dir, 'best_checkpoint.pth.tar'))
         else:
             early_stop_counter += 1
@@ -726,7 +743,7 @@ def train_anp_topology_masked(
             'MAE': f"{train_mae:.2f}",
             'Val(w)': f"{val_weighted_score:.2f}",
             'Inv': f"{val_mae_inverse_holdout:.2f}",
-            'Fix': f"{val_mae_fixed_holdout:.2f}",
+            'Fix': f"{val_mae_fixed_holdout:.2f}" if include_fixed_holdout_in_es else "off",
             'Best(w)': f"{best_val_weighted_score:.2f}",
             'ES': f"{early_stop_counter}"
         })
@@ -791,6 +808,18 @@ def train_anp_topology_masked(
     plot_training_metrics(metrics_file, output_plot)
 
     # summary
+    best_ckpt_candidates = [
+        'best_checkpoint.pth.tar',
+        'best_checkpoint_legacy_ctx040.pth.tar',
+        'best_checkpoint_inverse_holdout.pth.tar',
+        'best_checkpoint_weighted_score.pth.tar',
+        'best_checkpoint_fixed_holdout.pth.tar',
+    ]
+    best_ckpts_saved = [
+        ck for ck in best_ckpt_candidates
+        if os.path.exists(os.path.join(save_dir, ck))
+    ]
+
     with open(os.path.join(save_dir, 'training_summary.txt'), 'w') as f:
         f.write(f"ANP MASKED Training Summary - Topology: {topology_name}\n")
         f.write("="*60 + "\n")
@@ -806,6 +835,7 @@ def train_anp_topology_masked(
         f.write("\nValidation score config:\n")
         f.write(f"  holdout_frac: {holdout_frac}\n")
         f.write(f"  es_context_frac: {es_context_frac}\n")
+        f.write(f"  include_fixed_holdout_in_es: {include_fixed_holdout_in_es}\n")
         f.write(f"  es_weight_fixed: {es_weight_fixed:.4f}\n")
         f.write(f"  es_weight_inverse: {es_weight_inverse:.4f}\n")
         f.write("\nMasking config:\n")
@@ -815,6 +845,12 @@ def train_anp_topology_masked(
         f.write(f"  sensor_drop_p: {sensor_drop_p}\n")
         f.write(f"  mask_fill: {mask_fill}\n")
         f.write(f"  mask_in_val: {mask_in_val}\n")
+        f.write("\nBest checkpoint files saved:\n")
+        if best_ckpts_saved:
+            for ckpt_name in best_ckpts_saved:
+                f.write(f"  - {ckpt_name}\n")
+        else:
+            f.write("  (none)\n")
 
     print(f"  Best weighted score: {best_val_weighted_score:.6f}")
     print(f"  Best inverse holdout MAE: {best_val_mae_inverse_holdout:.6f}")
@@ -852,8 +888,9 @@ def main():
     # validation score config
     parser.add_argument("--holdout-frac", type=float, default=0.2, help="Fraction of points to hold out in holdout-based val protocols")
     parser.add_argument("--es-context-frac", type=float, default=0.4, help="Fraction of context points to use in early stopping")
-    parser.add_argument("--es-weight-fixed", type=float, default=0.2, help="Weight for fixed holdout in early stopping")
-    parser.add_argument("--es-weight-inverse", type=float, default=0.8, help="Weight for inverse holdout in early stopping")
+    parser.add_argument("--es-weight-fixed", type=float, default=0.2, help="Weight for fixed holdout in early stopping (used only with --include-fixed-holdout-in-es)")
+    parser.add_argument("--es-weight-inverse", type=float, default=0.8, help="Weight for inverse holdout in early stopping (used only with --include-fixed-holdout-in-es)")
+    parser.add_argument("--include-fixed-holdout-in-es", action="store_true", help="Include fixed holdout metric in early-stopping score; default uses only inverse holdout")
 
     args = parser.parse_args()
 
@@ -904,6 +941,7 @@ def main():
             es_context_frac=args.es_context_frac,
             es_weight_fixed=args.es_weight_fixed,
             es_weight_inverse=args.es_weight_inverse,
+            include_fixed_holdout_in_es=args.include_fixed_holdout_in_es,
         )
         results[topo] = best_metrics
 
