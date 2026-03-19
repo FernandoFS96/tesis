@@ -124,6 +124,27 @@ def sample_context_indices(total_points, context_size, mode="first", device="cpu
     raise ValueError(f"Unknown context sampling mode: {mode}")
 
 
+def build_holdout_indices(total_points, holdout_frac, context_frac, protocol, device):
+    holdout_size = max(1, int(round(total_points * holdout_frac)))
+    holdout_start = max(1, total_points - holdout_size)
+    target_idx = torch.arange(holdout_start, total_points, device=device)
+
+    max_ctx = max(1, holdout_start)
+    context_size = max(1, min(max_ctx, int(round(context_frac * max_ctx))))
+
+    if protocol == "fixed_holdout":
+        context_start = 0
+        context_end = context_size
+    elif protocol == "inverse_context_holdout":
+        context_end = holdout_start
+        context_start = max(0, context_end - context_size)
+    else:
+        raise ValueError(f"Unknown holdout protocol: {protocol}")
+
+    context_idx = torch.arange(context_start, context_end, device=device)
+    return context_idx, target_idx
+
+
 # ---------------------------
 # Masking / dropout
 # ---------------------------
@@ -222,7 +243,10 @@ def save_all_metrics(train_loss, val_loss, train_mae, val_mae,
                      train_var_min=None, train_var_mean=None, train_var_max=None,
                      val_var_min=None,   val_var_mean=None,   val_var_max=None,
                      train_nll_nonctx=None, val_nll_nonctx=None,
-                     val_mae_02=None, val_mae_04=None, val_mae_06=None):
+                     val_mae_02=None, val_mae_04=None, val_mae_06=None,
+                     val_mae_fixed_holdout=None,
+                     val_mae_inverse_holdout=None,
+                     val_weighted_score=None):
     metrics = {
         'train_loss': train_loss,
         'val_loss': val_loss,
@@ -244,6 +268,9 @@ def save_all_metrics(train_loss, val_loss, train_mae, val_mae,
         'val_mae_02': val_mae_02,
         'val_mae_04': val_mae_04,
         'val_mae_06': val_mae_06,
+        'val_mae_fixed_holdout': val_mae_fixed_holdout,
+        'val_mae_inverse_holdout': val_mae_inverse_holdout,
+        'val_weighted_score': val_weighted_score,
     }
     with open(os.path.join(experiment_dir, "metrics.pkl"), "wb") as f:
         pickle.dump(metrics, f)
@@ -340,6 +367,10 @@ def train_ranp_topology_masked(
     rnn_layers: int = 1,
     rnn_dropout: float = 0.0,
     dry_run: bool = False,
+    es_weight_fixed: float = 0.3,
+    es_weight_inverse: float = 0.7,
+    holdout_frac: float = 0.2,
+    es_context_frac: float = 0.4,
 ):
     os.makedirs(save_dir, exist_ok=True)
 
@@ -389,6 +420,9 @@ def train_ranp_topology_masked(
 
     # logs
     best_val_mae = float("inf")
+    best_val_mae_fixed_holdout = float("inf")
+    best_val_mae_inverse_holdout = float("inf")
+    best_val_weighted_score = float("inf")
     early_stop_counter = 0
 
     train_loss_list, val_loss_list = [], []
@@ -400,6 +434,14 @@ def train_ranp_topology_masked(
     val_var_min_list,   val_var_mean_list,   val_var_max_list   = [], [], []
     train_nll_nonctx_list, val_nll_nonctx_list = [], []
     val_mae_02_list, val_mae_04_list, val_mae_06_list = [], [], []
+    val_mae_fixed_holdout_list, val_mae_inverse_holdout_list = [], []
+    val_weighted_score_list = []
+
+    weight_sum = es_weight_fixed + es_weight_inverse
+    if weight_sum <= 0:
+        raise ValueError("es_weight_fixed + es_weight_inverse must be > 0")
+    es_weight_fixed = es_weight_fixed / weight_sum
+    es_weight_inverse = es_weight_inverse / weight_sum
 
     # validation context fractions; VAL_ES_FRAC drives early stopping
     val_fracs = [0.2, 0.4, 0.6, 0.8]
@@ -541,6 +583,10 @@ def train_ranp_topology_masked(
         model.eval()
         val_loss = 0.0
         val_mae_per_frac = {f: 0.0 for f in val_fracs}
+        val_mae_holdout = {
+            "fixed_holdout": 0.0,
+            "inverse_context_holdout": 0.0,
+        }
         val_nll, val_kl = 0.0, 0.0
         val_var_min, val_var_mean, val_var_max = 0.0, 0.0, 0.0
         val_nll_nonctx = 0.0
@@ -606,6 +652,34 @@ def train_ranp_topology_masked(
                     nll_pointwise = 0.5 * torch.log(2 * torch.pi * y_pred_var_norm) + 0.5 * ((target_y - y_pred_mean_norm) ** 2) / y_pred_var_norm
                     val_nll_nonctx += nll_pointwise.mean().item()
 
+                for protocol in ("fixed_holdout", "inverse_context_holdout"):
+                    ctx_idx, tar_idx = build_holdout_indices(
+                        total_points=total_points,
+                        holdout_frac=holdout_frac,
+                        context_frac=es_context_frac,
+                        protocol=protocol,
+                        device=device,
+                    )
+
+                    context_y = y_batch_norm[:, ctx_idx, :]
+                    target_y = y_batch_norm[:, tar_idx, :]
+
+                    y_pred_mean_norm, _, _, _, _ = model(
+                        x_seq=x_batch_aug,
+                        context_indices=ctx_idx,
+                        context_y=context_y,
+                        target_indices=tar_idx,
+                        target_y=target_y,
+                        beta=1.0,
+                    )
+                    y_pred_mean = y_pred_mean_norm * y_std + y_mean
+                    mae = F.l1_loss(
+                        y_pred_mean,
+                        y_batch_raw[:, tar_idx, :],
+                        reduction="mean",
+                    ).item()
+                    val_mae_holdout[protocol] += mae
+
                 val_loss += (batch_loss / len(val_fracs))
 
                 val_batches_seen += 1
@@ -615,12 +689,21 @@ def train_ranp_topology_masked(
         val_loss /= len(val_loader)
         val_mae_per_frac = {f: v / len(val_loader) for f, v in val_mae_per_frac.items()}
         val_mae = val_mae_per_frac[VAL_ES_FRAC]
+        val_mae_fixed_holdout = val_mae_holdout["fixed_holdout"] / len(val_loader)
+        val_mae_inverse_holdout = val_mae_holdout["inverse_context_holdout"] / len(val_loader)
+        val_weighted_score = (
+            es_weight_fixed * val_mae_fixed_holdout
+            + es_weight_inverse * val_mae_inverse_holdout
+        )
 
         val_loss_list.append(val_loss)
         val_mae_list.append(val_mae)
         val_mae_02_list.append(val_mae_per_frac[0.2])
         val_mae_04_list.append(val_mae_per_frac[0.4])
         val_mae_06_list.append(val_mae_per_frac[0.6])
+        val_mae_fixed_holdout_list.append(val_mae_fixed_holdout)
+        val_mae_inverse_holdout_list.append(val_mae_inverse_holdout)
+        val_weighted_score_list.append(val_weighted_score)
 
         den = len(val_loader) * len(val_fracs)
         val_nll /= den
@@ -639,6 +722,9 @@ def train_ranp_topology_masked(
 
         if dry_run:
             best_val_mae = val_mae
+            best_val_mae_fixed_holdout = val_mae_fixed_holdout
+            best_val_mae_inverse_holdout = val_mae_inverse_holdout
+            best_val_weighted_score = val_weighted_score
             break
 
         # Optuna pruning
@@ -647,21 +733,47 @@ def train_ranp_topology_masked(
 
         if trial is not None and (epoch % report_every == 0):
             import optuna
-            trial.report(val_mae, step=global_step)
+            trial.report(val_weighted_score, step=global_step)
             if trial.should_prune():
                 raise optuna.TrialPruned()
 
-        # early stopping
+        # checkpoint per metric
         if val_mae < best_val_mae:
             best_val_mae = val_mae
-            early_stop_counter = 0
             if save_checkpoints:
-                # Checkpoint simplificado: ya no hay rnn_encoder separado ANTES: ckpt['rnn_encoder'] = rnn_encoder.state_dict()
-                # AHORA: model.state_dict() ya incluye el temporal_encoder
                 torch.save(
                     {'model': model.state_dict(), 'optimizer': optimizer.state_dict()},
-                    os.path.join(save_dir, 'best_checkpoint.pth.tar'),
+                    os.path.join(save_dir, 'best_checkpoint_legacy_ctx040.pth.tar'),
                 )
+
+        if val_mae_fixed_holdout < best_val_mae_fixed_holdout:
+            best_val_mae_fixed_holdout = val_mae_fixed_holdout
+            if save_checkpoints:
+                torch.save(
+                    {'model': model.state_dict(), 'optimizer': optimizer.state_dict()},
+                    os.path.join(save_dir, 'best_checkpoint_fixed_holdout.pth.tar'),
+                )
+
+        if val_mae_inverse_holdout < best_val_mae_inverse_holdout:
+            best_val_mae_inverse_holdout = val_mae_inverse_holdout
+            if save_checkpoints:
+                torch.save(
+                    {'model': model.state_dict(), 'optimizer': optimizer.state_dict()},
+                    os.path.join(save_dir, 'best_checkpoint_inverse_holdout.pth.tar'),
+                )
+
+        # weighted early stopping metric
+        if val_weighted_score < best_val_weighted_score:
+            best_val_weighted_score = val_weighted_score
+            early_stop_counter = 0
+            if save_checkpoints:
+                # model.state_dict() already includes temporal encoder parameters.
+                ckpt = {'model': model.state_dict(), 'optimizer': optimizer.state_dict()}
+                torch.save(
+                    ckpt,
+                    os.path.join(save_dir, 'best_checkpoint_weighted_score.pth.tar'),
+                )
+                torch.save(ckpt, os.path.join(save_dir, 'best_checkpoint.pth.tar'))
         else:
             early_stop_counter += 1
 
@@ -677,8 +789,10 @@ def train_ranp_topology_masked(
             #'k_on': f"{train_k_active:.2f}/{num_sensors}",
             #'varμ': f"{train_var_mean:.2e}",
             'MAE': f"{train_mae:.2f}",
-            'Val MAE': f"{val_mae:.2f}",
-            'Best': f"{best_val_mae:.2f}",
+            'Val(w)': f"{val_weighted_score:.2f}",
+            'Inv': f"{val_mae_inverse_holdout:.2f}",
+            'Fix': f"{val_mae_fixed_holdout:.2f}",
+            'Best(w)': f"{best_val_weighted_score:.2f}",
             'ES': f"{early_stop_counter}"
         })
 
@@ -698,6 +812,9 @@ def train_ranp_topology_masked(
             val_var_min=val_var_min_list, val_var_mean=val_var_mean_list, val_var_max=val_var_max_list,
             train_nll_nonctx=train_nll_nonctx_list, val_nll_nonctx=val_nll_nonctx_list,
             val_mae_02=val_mae_02_list, val_mae_04=val_mae_04_list, val_mae_06=val_mae_06_list,
+            val_mae_fixed_holdout=val_mae_fixed_holdout_list,
+            val_mae_inverse_holdout=val_mae_inverse_holdout_list,
+            val_weighted_score=val_weighted_score_list,
         )
 
         plot_anp_diagnostics(
@@ -722,7 +839,8 @@ def train_ranp_topology_masked(
                 "epoch",
                 "train_loss","train_nll","train_nll_nonctx","train_kl","beta","train_var_min","train_var_mean","train_var_max","train_mae",
                 "val_loss","val_nll","val_nll_nonctx","val_kl","val_var_min","val_var_mean","val_var_max",
-                "val_mae_02","val_mae_04","val_mae_06","val_mae"
+                "val_mae_02","val_mae_04","val_mae_06","val_mae",
+                "val_mae_fixed_holdout","val_mae_inverse_holdout","val_weighted_score"
             ])
             for e in range(len(train_loss_list)):
                 w.writerow([
@@ -732,6 +850,7 @@ def train_ranp_topology_masked(
                     val_loss_list[e], val_nll_list[e], val_nll_nonctx_list[e], val_kl_list[e],
                     val_var_min_list[e], val_var_mean_list[e], val_var_max_list[e],
                     val_mae_02_list[e], val_mae_04_list[e], val_mae_06_list[e], val_mae_list[e],
+                    val_mae_fixed_holdout_list[e], val_mae_inverse_holdout_list[e], val_weighted_score_list[e],
                 ])
 
         # plot training curves
@@ -745,10 +864,18 @@ def train_ranp_topology_masked(
             f.write("="*60 + "\n")
             f.write(f"Training samples: {len(train_data)} trajectories\n")
             f.write(f"Validation samples: {len(val_data)} trajectories\n")
-            f.write(f"Best validation MAE: {best_val_mae:.6f}\n")
+            f.write(f"Best validation weighted score: {best_val_weighted_score:.6f}\n")
+            f.write(f"Best validation inverse holdout MAE: {best_val_mae_inverse_holdout:.6f}\n")
+            f.write(f"Best validation fixed holdout MAE: {best_val_mae_fixed_holdout:.6f}\n")
+            f.write(f"Best validation legacy MAE (ctx=40%): {best_val_mae:.6f}\n")
             f.write(f"Final epoch: {min(epoch+1, epochs)}\n")
             f.write(f"Early stopping counter: {early_stop_counter}/{patience}\n")
             f.write(f"Training time: {(time.time() - t_init)/60:.2f} minutes\n")
+            f.write("\nValidation score config:\n")
+            f.write(f"  holdout_frac: {holdout_frac}\n")
+            f.write(f"  es_context_frac: {es_context_frac}\n")
+            f.write(f"  es_weight_fixed: {es_weight_fixed:.4f}\n")
+            f.write(f"  es_weight_inverse: {es_weight_inverse:.4f}\n")
             f.write("\nMasking config:\n")
             f.write(f"  num_sensors: {num_sensors}\n")
             f.write(f"  num_time_points: {num_time_points}\n")
@@ -763,10 +890,17 @@ def train_ranp_topology_masked(
             f.write(f"  rnn_layers: {rnn_layers}\n")
             f.write(f"  rnn_dropout: {rnn_dropout}\n")
 
-        print(f"\n Best validation MAE: {best_val_mae:.6f}")
+        print(f"\n Best weighted score: {best_val_weighted_score:.6f}")
+        print(f" Best inverse holdout MAE: {best_val_mae_inverse_holdout:.6f}")
+        print(f" Best fixed holdout MAE: {best_val_mae_fixed_holdout:.6f}")
     else:
         print("\nDry run complete: one train batch and one val batch.")
-    return best_val_mae
+    return {
+        "weighted_score": float(best_val_weighted_score),
+        "inverse_holdout_mae": float(best_val_mae_inverse_holdout),
+        "fixed_holdout_mae": float(best_val_mae_fixed_holdout),
+        "legacy_mae_ctx040": float(best_val_mae),
+    }
 
 
 # ---------------------------
@@ -799,6 +933,10 @@ def main():
     parser.add_argument("--rnn-layers", type=int, default=1)
     parser.add_argument("--rnn-dropout", type=float, default=0.0)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--holdout-frac", type=float, default=0.2)
+    parser.add_argument("--es-context-frac", type=float, default=0.4)
+    parser.add_argument("--es-weight-fixed", type=float, default=0.3)
+    parser.add_argument("--es-weight-inverse", type=float, default=0.7)
 
     args = parser.parse_args()
 
@@ -832,7 +970,7 @@ def main():
             continue
 
         save_dir = os.path.join(base, f"topology_{topo}")
-        best_mae = train_ranp_topology_masked(
+        best_metrics = train_ranp_topology_masked(
             train_data=train_data,
             val_data=val_data,
             save_dir=save_dir,
@@ -854,19 +992,32 @@ def main():
             rnn_layers=args.rnn_layers,
             rnn_dropout=args.rnn_dropout,
             dry_run=args.dry_run,
+            holdout_frac=args.holdout_frac,
+            es_context_frac=args.es_context_frac,
+            es_weight_fixed=args.es_weight_fixed,
+            es_weight_inverse=args.es_weight_inverse,
         )
-        results[topo] = best_mae
+        results[topo] = best_metrics
 
     # write global summary
     with open(os.path.join(base, "summary_all_topologies.txt"), "w") as f:
-        f.write("Best validation MAE per topology (MASKED training)\n")
+        f.write("Best validation metrics per topology (weighted objective)\n")
         f.write("="*60 + "\n")
-        for topo, mae in results.items():
-            f.write(f"{topo:<12} : {mae:.6f}\n")
+        for topo, metrics in results.items():
+            f.write(
+                f"{topo:<12} : weighted={metrics['weighted_score']:.6f}, "
+                f"inverse={metrics['inverse_holdout_mae']:.6f}, "
+                f"fixed={metrics['fixed_holdout_mae']:.6f}, "
+                f"legacy040={metrics['legacy_mae_ctx040']:.6f}\n"
+            )
 
     print("\nDone. Results:")
-    for topo, mae in results.items():
-        print(f"  {topo:<12} : {mae:.6f}")
+    for topo, metrics in results.items():
+        print(
+            f"  {topo:<12} : weighted={metrics['weighted_score']:.6f}, "
+            f"inverse={metrics['inverse_holdout_mae']:.6f}, "
+            f"fixed={metrics['fixed_holdout_mae']:.6f}"
+        )
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 Optuna wrapper for ANP and RANP masked training scripts.
 
 - Selects model with --model anp|ranp.
-- Minimizes validation MAE.
+- Minimizes weighted validation score.
 - Uses SQLite storage for resume.
 - Supports pruning (requires trial.report + trial.should_prune hooks in the training function).
 
@@ -116,7 +116,7 @@ import importlib.util as _importlib_util
 
 
 def _make_best_model_callback(results_root: Path) -> Callable:
-    """Returns an Optuna callback that copies the best trial's checkpoints to best_model/."""
+    """Returns an Optuna callback that copies the best trial checkpoints to best_model/."""
 
     def callback(study: optuna.Study, trial: optuna.trial.FrozenTrial) -> None:
         if trial.state != optuna.trial.TrialState.COMPLETE:
@@ -139,15 +139,21 @@ def _make_best_model_callback(results_root: Path) -> Callable:
         if hparams_src.exists():
             shutil.copy2(str(hparams_src), str(best_dir / "hparams.json"))
 
-        # Copy best_checkpoint.pth.tar from each topology subdirectory
+        # Copy all best checkpoint variants from each topology subdirectory.
         for topo_dir in sorted(trial_dir.iterdir()):
             if not topo_dir.is_dir():
                 continue
-            ckpt_src = topo_dir / "best_checkpoint.pth.tar"
-            if ckpt_src.exists():
-                dest_dir = best_dir / topo_dir.name
+            dest_dir = best_dir / topo_dir.name
+            copied_any = False
+            for ckpt_src in topo_dir.glob("best_checkpoint*.pth.tar"):
                 dest_dir.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(str(ckpt_src), str(dest_dir / "best_checkpoint.pth.tar"))
+                shutil.copy2(str(ckpt_src), str(dest_dir / ckpt_src.name))
+                copied_any = True
+            if not copied_any:
+                legacy_ckpt = topo_dir / "best_checkpoint.pth.tar"
+                if legacy_ckpt.exists():
+                    dest_dir.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(str(legacy_ckpt), str(dest_dir / "best_checkpoint.pth.tar"))
 
         # Save trial metadata alongside the checkpoint
         info = {
@@ -194,7 +200,10 @@ def make_objective(args):
     def objective(trial: optuna.trial.Trial) -> float:
         t0 = time.perf_counter()
         minutes_per_topology = {}
-        maes = {}
+        weighted_scores = {}
+        inverse_holdout_maes = {}
+        fixed_holdout_maes = {}
+        legacy_maes = {}
         # ---------------------------
         # 1) Sample hyperparameters
         # ---------------------------
@@ -274,6 +283,10 @@ def make_objective(args):
                 trial=trial,
                 report_every=args.report_every,
                 save_checkpoints=True,
+                holdout_frac=args.holdout_frac,
+                es_context_frac=args.es_context_frac,
+                es_weight_fixed=args.es_weight_fixed,
+                es_weight_inverse=args.es_weight_inverse,
             )
             if args.model == "ranp":
                 train_kwargs.update(
@@ -282,16 +295,23 @@ def make_objective(args):
                     rnn_layers=hp["rnn_layers"],
                     rnn_dropout=hp["rnn_dropout"],
                 )
-            best_mae = _train_fn(**train_kwargs)
+            best_metrics = _train_fn(**train_kwargs)
             minutes_per_topology[topo] = (time.perf_counter() - topo_t0) / 60.0
-            maes[topo] = float(best_mae)
+            weighted_scores[topo] = float(best_metrics["weighted_score"])
+            inverse_holdout_maes[topo] = float(best_metrics["inverse_holdout_mae"])
+            fixed_holdout_maes[topo] = float(best_metrics["fixed_holdout_mae"])
+            legacy_maes[topo] = float(best_metrics["legacy_mae_ctx040"])
 
-        value = sum(maes.values()) / len(maes)
+        value = sum(weighted_scores.values()) / len(weighted_scores)
 
-        trial.set_user_attr("mae_per_topology", maes)
+        trial.set_user_attr("weighted_score_per_topology", weighted_scores)
+        trial.set_user_attr("inverse_holdout_mae_per_topology", inverse_holdout_maes)
+        trial.set_user_attr("fixed_holdout_mae_per_topology", fixed_holdout_maes)
+        trial.set_user_attr("legacy_mae_ctx040_per_topology", legacy_maes)
         trial.set_user_attr("minutes_per_topology", minutes_per_topology)
         trial.set_user_attr("objective_topologies", obj_topos)
         trial.set_user_attr("trial_dir", str(trial_dir))
+        trial.set_user_attr("objective_value_name", "weighted_validation_score")
         return value
 
     return objective
@@ -314,6 +334,10 @@ def main():
     p.add_argument("--num-sensors", type=int, default=10)
     p.add_argument("--num-time-points", type=int, default=201)
     p.add_argument("--mask-in-val", action="store_true", help="If set, apply masking also during validation (harder).")
+    p.add_argument("--holdout-frac", type=float, default=0.2, help="Validation holdout tail fraction for fixed/inverse metrics.")
+    p.add_argument("--es-context-frac", type=float, default=0.4, help="Context fraction of pre-holdout window for holdout validation metrics.")
+    p.add_argument("--es-weight-fixed", type=float, default=0.2, help="Weight for fixed-holdout MAE in weighted validation score.")
+    p.add_argument("--es-weight-inverse", type=float, default=0.8, help="Weight for inverse-holdout MAE in weighted validation score.")
 
     # optuna
     p.add_argument("--n-trials", type=int, default=200)
@@ -381,7 +405,7 @@ def main():
 
     print("\nBest trial:")
     bt = study.best_trial
-    print("  value (mean val MAE):", bt.value)
+    print("  value (mean weighted validation score):", bt.value)
     print("  params:", bt.params)
     print("  user attrs:", bt.user_attrs)
 
