@@ -209,19 +209,19 @@ def make_objective(args):
         # ---------------------------
         hp = {
             # model / optimizer
-            "num_hidden": trial.suggest_int("num_hidden", 128, 256, step=64), 
+            "num_hidden": trial.suggest_int("num_hidden", 128, 320, step=64), 
             "weight_decay": trial.suggest_categorical("weight_decay", [1e-4, 5e-5, 1e-5, 5e-6]),
             "lr": None,  # set later based on model type
 
             # training dynamics
-            "kl_warmup_epochs": trial.suggest_int("kl_warmup_epochs", 500, 3000, step=500),
+            "kl_warmup_epochs": trial.suggest_int("kl_warmup_epochs", 500, 2000, step=500),
 
             # context sampling
             "ctx_sample_mode": trial.suggest_categorical("ctx_sample_mode", ["first"]),#trial.suggest_categorical("ctx_sample_mode", ["first", "random"]),
 
             # masking
             "sensor_drop_mode": trial.suggest_categorical("sensor_drop_mode", ["bernoulli", "k_uniform"]),
-            "sensor_drop_p": trial.suggest_categorical("sensor_drop_p", [0.1, 0.15, 0.2]),
+            "sensor_drop_p": trial.suggest_categorical("sensor_drop_p", [0.3]),
             "mask_fill": trial.suggest_categorical("mask_fill", ["train_mean"]),#("mask_fill", ["train_mean", "zero"]),
         }
 
@@ -327,8 +327,8 @@ def main():
     p.add_argument("--aggregate-topologies", action="store_true", help="If set, objective = mean MAE over ALL topologies (slower but more robust).")
 
     # training settings (keep these fixed during HPO; tune them only if you really need)
-    p.add_argument("--epochs", type=int, default=3000)
-    p.add_argument("--patience", type=int, default=200)
+    p.add_argument("--epochs", type=int, default=5000)
+    p.add_argument("--patience", type=int, default=250)
     p.add_argument("--device", type=str, default="cuda")
 
     # data/model sizes needed by masking layout

@@ -4,64 +4,85 @@ Docstring for src.training.train_r-anp_topologies_masked
 This script trains RANP models with sensor masking for each topology and logs detailed diagnostics.
 
 Usage with RNN encoder and masking:
-python train_r-anp_topologies_masked.py \
-  --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-  --batch-size 8 \
-  --epochs 5000 \
-  --patience 300 \
-  --ctx-sample-mode first \
-  --num-sensors 10 \
-  --num-time-points 201 \
-  --sensor-drop-mode bernoulli \
-  --sensor-drop-p 0.2 \
-  --mask-fill train_mean \
-  --kl-warmup-epochs 1000 \
-  --rnn-type lstm \
-  --rnn-hidden-dim 128 \
-  --rnn-layers 1 \
-  --rnn-dropout 0.1 \
-  --device cuda \
-  --topologies ellipsoidal,random,aligned
+python train_r-anp_topologies_masked.py
+    --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance
+    --save-dir /home/fernando/tesis/underwater-localization-topologies/results/RANP_topologies_masked
+    --topologies aligned,ellipsoidal,random
+    --batch-size 8
+    --epochs 3000
+    --patience 300
+    --device cuda
+    --ctx-sample-mode first
+    --num-sensors 10
+    --num-time-points 201
+    --sensor-drop-mode bernoulli
+    --sensor-drop-p 0.3
+    --mask-fill train_mean
+    --mask-in-val
+    --kl-warmup-epochs 1000
+    --rnn-type lstm
+    --rnn-hidden-dim 128
+    --rnn-layers 1
+    --rnn-dropout 0.1
+    --holdout-frac 0.2
+    --es-context-frac 0.4
+    --robust-context-fracs 0.2,0.4,0.6,0.8
+    --robust-eval-every 5
+    --robust-alpha 0.8
 
 Using GRU instead of LSTM:  
-python train_r-anp_topologies_masked.py \
-  --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-  --batch-size 8 \
-  --epochs 5000 \
-  --patience 300 \
-  --ctx-sample-mode first \
-  --num-sensors 10 \
-  --num-time-points 201 \
-  --sensor-drop-mode bernoulli \
-  --sensor-drop-p 0.2 \
-  --mask-fill train_mean \
-  --kl-warmup-epochs 1000 \
-  --rnn-type gru \
-  --rnn-hidden-dim 128 \
-  --rnn-layers 1 \
-  --rnn-dropout 0.1 \
-  --device cuda \
-  --topologies ellipsoidal,random,aligned
+python train_r-anp_topologies_masked.py
+    --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance
+    --save-dir /home/fernando/tesis/underwater-localization-topologies/results/RANP_topologies_masked
+    --topologies aligned,ellipsoidal,random
+    --batch-size 8
+    --epochs 5000
+    --patience 250
+    --device cuda
+    --ctx-sample-mode first
+    --num-sensors 10
+    --num-time-points 201
+    --sensor-drop-mode bernoulli
+    --sensor-drop-p 0.3
+    --mask-fill train_mean
+    --mask-in-val
+    --kl-warmup-epochs 1000
+    --rnn-type gru
+    --rnn-hidden-dim 128
+    --rnn-layers 1
+    --rnn-dropout 0.1
+    --holdout-frac 0.2
+    --es-context-frac 0.4
+    --robust-context-fracs 0.2,0.4,0.6,0.8
+    --robust-eval-every 5
+    --robust-alpha 0.8
 
 Using high variance data
 python train_r-anp_topologies_masked.py \
-  --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance
-  --batch-size 8 \
-  --epochs 5000 \
-  --patience 300 \
-  --ctx-sample-mode first \
-  --num-sensors 10 \
-  --num-time-points 201 \
-  --sensor-drop-mode bernoulli \
-  --sensor-drop-p 0.2 \
-  --mask-fill train_mean \
-  --kl-warmup-epochs 1000 \
-  --rnn-type gru \
-  --rnn-hidden-dim 128 \
-  --rnn-layers 1 \
-  --rnn-dropout 0.1 \
-  --device cuda \
-  --topologies ellipsoidal,random,aligned
+    --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance
+    --save-dir /home/fernando/tesis/underwater-localization-topologies/results/RANP_topologies_masked
+    --topologies aligned,ellipsoidal,random
+    --batch-size 8
+    --epochs 5000
+    --patience 250
+    --device cuda
+    --ctx-sample-mode first
+    --num-sensors 10
+    --num-time-points 201
+    --sensor-drop-mode bernoulli
+    --sensor-drop-p 0.3
+    --mask-fill train_mean
+    --mask-in-val
+    --kl-warmup-epochs 1000
+    --rnn-type gru
+    --rnn-hidden-dim 128
+    --rnn-layers 1
+    --rnn-dropout 0.1
+    --holdout-frac 0.2
+    --es-context-frac 0.4
+    --robust-context-fracs 0.2,0.4,0.6,0.8
+    --robust-eval-every 5
+    --robust-alpha 0.8
 '''
 
 import csv
@@ -903,21 +924,22 @@ def train_ranp_topology_masked(
             print(f"\nEarly stopping triggered at epoch {epoch+1}")
             break
 
-        pbar.set_postfix({
-            'Loss': f"{train_loss:.2f}",
+        postfix = {
+            #'Loss': f"{train_loss:.2f}",
             'NLL': f"{train_nll:.2f}",
             'KL': f"{train_kl:.2f}",
             #'β': f"{beta:.2f}",
             #'k_on': f"{train_k_active:.2f}/{num_sensors}",
             #'varμ': f"{train_var_mean:.2e}",
-            'MAE': f"{train_mae:.2f}",
             'Val(w)': f"{val_weighted_score:.2f}",
-            'Inv': f"{val_mae_inverse_holdout:.2f}",
-            'Fix': f"{val_mae_fixed_holdout:.2f}" if include_fixed_holdout_in_es else "off",
             'Rmean': f"{val_robust_inverse_mean:.2f}" if np.isfinite(val_robust_inverse_mean) else "-",
             'Best(w)': f"{best_val_weighted_score:.2f}",
-            'ES': f"{early_stop_counter}"
-        })
+            'ES': f"{early_stop_counter}",
+        }
+        if include_fixed_holdout_in_es:
+            postfix['Inv'] = f"{val_mae_inverse_holdout:.2f}"
+            postfix['Fix'] = f"{val_mae_fixed_holdout:.2f}"
+        pbar.set_postfix(postfix)
 
     if not dry_run:
         if save_checkpoints:

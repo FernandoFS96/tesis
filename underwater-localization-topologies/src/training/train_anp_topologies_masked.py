@@ -10,24 +10,25 @@ Using bernoulli dropout with 20% drop probability and filling masked sensors wit
     python train_anp_topologies_masked.py \
         --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
         --save-dir /home/fernando/tesis/underwater-localization-topologies/results/ANP_topologies_masked \
-        --topologies aligned,ellipsoidal,random \
+        --topologies random,ellipsoidal,aligned \
         --batch-size 8 \
-        --epochs 3000 \
-        --patience 300 \
+        --epochs 5000 \
+        --patience 250 \
         --device cuda \
         --ctx-sample-mode first \
         --num-sensors 10 \
         --num-time-points 201 \
         --sensor-drop-mode bernoulli \
-        --sensor-drop-p 0.2 \
+        --sensor-drop-p 0.3 \
         --mask-fill train_mean \
+        --mask-in-val \
         --kl-warmup-epochs 10000 \
         --holdout-frac 0.2 \
         --es-context-frac 0.4 \
-        --es-weight-fixed 0.2 \
-        --es-weight-inverse 0.8 \
-        --mask-in-val
-
+        --robust-context-fracs 0.2,0.4,0.6,0.8 \
+        --robust-eval-every 5 \
+        --robust-alpha 0.8
+    
 Using bernoulli dropout with 20% drop probability and filling masked sensors with training mean but for high variance data:
     cd underwater-localization-topologies/src/training
     python train_anp_topologies_masked.py \
@@ -35,21 +36,22 @@ Using bernoulli dropout with 20% drop probability and filling masked sensors wit
       --save-dir /home/fernando/tesis/underwater-localization-topologies/results/ANP_topologies_masked \
       --topologies aligned,ellipsoidal,random \
       --batch-size 8 \
-      --epochs 3000 \
-      --patience 300 \
+      --epochs 5000 \
+      --patience 250 \
       --device cuda \
       --ctx-sample-mode first \
       --num-sensors 10 \
       --num-time-points 201 \
       --sensor-drop-mode bernoulli \
-      --sensor-drop-p 0.2 \
+      --sensor-drop-p 0.3 \
       --mask-fill train_mean \
+      --mask-in-val \
       --kl-warmup-epochs 10000 \
       --holdout-frac 0.2 \
       --es-context-frac 0.4 \
-      --es-weight-fixed 0.2 \
-      --es-weight-inverse 0.8 \
-      --mask-in-val
+      --robust-context-fracs 0.2,0.4,0.6,0.8 \
+      --robust-eval-every 5 \
+      --robust-alpha 0.8
 '''
 
 import csv
@@ -389,7 +391,7 @@ def train_anp_topology_masked(
     mask_in_val=False,
     kl_warmup_epochs=500,
     num_hidden=128,
-    lr=7e-4,
+    lr=5e-4,
     weight_decay=1e-4,
     trial=None,
     report_every=25,
@@ -837,21 +839,22 @@ def train_anp_topology_masked(
             print(f"\nEarly stopping triggered at epoch {epoch+1}")
             break
 
-        pbar.set_postfix({
-            'Loss': f"{train_loss:.2f}",
+        postfix = {
+            #'Loss': f"{train_loss:.2f}",
             'NLL': f"{train_nll:.2f}",
             'KL': f"{train_kl:.2f}",
             #'β': f"{beta:.2f}",
             #'k_on': f"{train_k_active:.2f}/{num_sensors}",
             #'varμ': f"{train_var_mean:.2e}",
-            'MAE': f"{train_mae:.2f}",
             'Val(w)': f"{val_weighted_score:.2f}",
-            'Inv': f"{val_mae_inverse_holdout:.2f}",
-            'Fix': f"{val_mae_fixed_holdout:.2f}" if include_fixed_holdout_in_es else "off",
             'Rmean': f"{val_robust_inverse_mean:.2f}" if np.isfinite(val_robust_inverse_mean) else "-",
             'Best(w)': f"{best_val_weighted_score:.2f}",
-            'ES': f"{early_stop_counter}"
-        })
+            'ES': f"{early_stop_counter}",
+        }
+        if include_fixed_holdout_in_es:
+            postfix['Inv'] = f"{val_mae_inverse_holdout:.2f}"
+            postfix['Fix'] = f"{val_mae_fixed_holdout:.2f}"
+        pbar.set_postfix(postfix)
 
     # save final
     if save_checkpoints:
