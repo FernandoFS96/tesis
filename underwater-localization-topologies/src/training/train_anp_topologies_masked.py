@@ -234,7 +234,11 @@ def save_all_metrics(train_loss, val_loss, train_mae, val_mae,
                      val_mae_02=None, val_mae_04=None, val_mae_06=None,
                      val_mae_fixed_holdout=None,
                      val_mae_inverse_holdout=None,
-                     val_weighted_score=None):
+                     val_weighted_score=None,
+                     val_robust_inverse_mean=None,
+                     val_robust_inverse_worst=None,
+                     val_robust_inverse_gap=None,
+                     val_robust_score=None):
     metrics = {
         'train_loss': train_loss,
         'val_loss': val_loss,
@@ -259,6 +263,10 @@ def save_all_metrics(train_loss, val_loss, train_mae, val_mae,
         'val_mae_fixed_holdout': val_mae_fixed_holdout,
         'val_mae_inverse_holdout': val_mae_inverse_holdout,
         'val_weighted_score': val_weighted_score,
+        'val_robust_inverse_mean': val_robust_inverse_mean,
+        'val_robust_inverse_worst': val_robust_inverse_worst,
+        'val_robust_inverse_gap': val_robust_inverse_gap,
+        'val_robust_score': val_robust_score,
     }
     with open(os.path.join(experiment_dir, "metrics.pkl"), "wb") as f:
         pickle.dump(metrics, f)
@@ -329,6 +337,42 @@ def plot_val_mae_per_frac(save_dir, train_mae, val_mae_02, val_mae_04, val_mae_0
     plt.close()
 
 
+def plot_robust_validation_metrics(
+    save_dir,
+    val_mae_inverse,
+    robust_mean,
+    robust_worst,
+    robust_gap,
+    robust_score,
+):
+    epochs = np.arange(1, len(val_mae_inverse) + 1)
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(epochs, val_mae_inverse, label="val inverse holdout (primary)", color="midnightblue", linewidth=2)
+    plt.plot(epochs, robust_mean, label="robust mean (inverse, multi-ctx)", color="darkorange")
+    plt.plot(epochs, robust_worst, label="robust worst-case (inverse)", color="firebrick")
+    plt.plot(epochs, robust_score, label="robust score", color="seagreen", linestyle="--")
+    plt.xlabel("Epoch")
+    plt.ylabel("MAE (m)")
+    plt.title("Robust validation metrics (inverse holdout)")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, "training_robust_inverse_metrics.png"), dpi=150)
+    plt.close()
+
+    plt.figure(figsize=(10, 4.5))
+    plt.plot(epochs, robust_gap, label="robust gap = worst - mean", color="purple")
+    plt.xlabel("Epoch")
+    plt.ylabel("MAE gap (m)")
+    plt.title("Robustness gap across inverse-holdout contexts")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, "training_robust_inverse_gap.png"), dpi=150)
+    plt.close()
+
+
 # ---------------------------
 # Training core
 # ---------------------------
@@ -355,6 +399,9 @@ def train_anp_topology_masked(
     holdout_frac: float = 0.2,
     es_context_frac: float = 0.4,
     include_fixed_holdout_in_es: bool = False,
+    robust_context_fracs=None,
+    robust_eval_every: int = 5,
+    robust_alpha: float = 0.8,
 ):
     os.makedirs(save_dir, exist_ok=True)
 
@@ -409,6 +456,18 @@ def train_anp_topology_masked(
     val_mae_02_list, val_mae_04_list, val_mae_06_list = [], [], []
     val_mae_fixed_holdout_list, val_mae_inverse_holdout_list = [], []
     val_weighted_score_list = []
+    val_robust_inverse_mean_list, val_robust_inverse_worst_list = [], []
+    val_robust_inverse_gap_list, val_robust_score_list = [], []
+
+    if robust_context_fracs is None:
+        robust_context_fracs = [0.2, 0.4, 0.6, 0.8]
+    robust_context_fracs = [
+        float(f) for f in robust_context_fracs
+        if 0.0 < float(f) < 1.0
+    ]
+    robust_context_fracs = sorted(set(robust_context_fracs))
+    robust_eval_every = max(1, int(robust_eval_every))
+    robust_alpha = float(min(1.0, max(0.0, robust_alpha)))
 
     if include_fixed_holdout_in_es:
         weight_sum = es_weight_fixed + es_weight_inverse
@@ -553,6 +612,8 @@ def train_anp_topology_masked(
         val_nll, val_kl = 0.0, 0.0
         val_var_min, val_var_mean, val_var_max = 0.0, 0.0, 0.0
         val_nll_nonctx = 0.0
+        do_robust_eval = len(robust_context_fracs) > 0 and (epoch % robust_eval_every == 0)
+        robust_mae_sums = {f: 0.0 for f in robust_context_fracs} if do_robust_eval else None
 
         with torch.no_grad():
             for x_batch, y_batch in val_loader:
@@ -640,6 +701,30 @@ def train_anp_topology_masked(
                     ).item()
                     val_mae_holdout[protocol] += mae
 
+                if do_robust_eval:
+                    for rfrac in robust_context_fracs:
+                        r_ctx_idx, r_tar_idx = build_holdout_indices(
+                            total_points=total_points,
+                            holdout_frac=holdout_frac,
+                            context_frac=rfrac,
+                            protocol="inverse_context_holdout",
+                            device=device,
+                        )
+                        r_context_x = x_batch_aug[:, r_ctx_idx, :]
+                        r_context_y = y_batch_norm[:, r_ctx_idx, :]
+                        r_target_x = x_batch_aug[:, r_tar_idx, :]
+                        r_target_y = y_batch_norm[:, r_tar_idx, :]
+                        r_pred_mean_norm, _, _, _, _ = model(
+                            r_context_x, r_context_y, r_target_x, r_target_y, beta=1.0
+                        )
+                        r_pred_mean = r_pred_mean_norm * y_std + y_mean
+                        r_mae = F.l1_loss(
+                            r_pred_mean,
+                            y_batch_raw[:, r_tar_idx, :],
+                            reduction="mean",
+                        ).item()
+                        robust_mae_sums[rfrac] += r_mae
+
                 val_loss += (batch_loss / len(val_fracs))
 
         val_loss /= len(val_loader)
@@ -658,6 +743,21 @@ def train_anp_topology_masked(
         else:
             val_weighted_score = val_mae_inverse_holdout
 
+        if do_robust_eval:
+            robust_vals = [robust_mae_sums[f] / len(val_loader) for f in robust_context_fracs]
+            val_robust_inverse_mean = float(np.mean(robust_vals))
+            val_robust_inverse_worst = float(np.max(robust_vals))
+            val_robust_inverse_gap = float(val_robust_inverse_worst - val_robust_inverse_mean)
+            val_robust_score = (
+                robust_alpha * val_weighted_score
+                + (1.0 - robust_alpha) * val_robust_inverse_mean
+            )
+        else:
+            val_robust_inverse_mean = float("nan")
+            val_robust_inverse_worst = float("nan")
+            val_robust_inverse_gap = float("nan")
+            val_robust_score = float("nan")
+
         val_loss_list.append(val_loss)
         val_mae_list.append(val_mae)
         val_mae_02_list.append(val_mae_per_frac[0.2])
@@ -666,6 +766,10 @@ def train_anp_topology_masked(
         val_mae_fixed_holdout_list.append(val_mae_fixed_holdout)
         val_mae_inverse_holdout_list.append(val_mae_inverse_holdout)
         val_weighted_score_list.append(val_weighted_score)
+        val_robust_inverse_mean_list.append(val_robust_inverse_mean)
+        val_robust_inverse_worst_list.append(val_robust_inverse_worst)
+        val_robust_inverse_gap_list.append(val_robust_inverse_gap)
+        val_robust_score_list.append(val_robust_score)
 
         den = len(val_loader) * len(val_fracs)
         val_nll /= den
@@ -744,6 +848,7 @@ def train_anp_topology_masked(
             'Val(w)': f"{val_weighted_score:.2f}",
             'Inv': f"{val_mae_inverse_holdout:.2f}",
             'Fix': f"{val_mae_fixed_holdout:.2f}" if include_fixed_holdout_in_es else "off",
+            'Rmean': f"{val_robust_inverse_mean:.2f}" if np.isfinite(val_robust_inverse_mean) else "-",
             'Best(w)': f"{best_val_weighted_score:.2f}",
             'ES': f"{early_stop_counter}"
         })
@@ -764,6 +869,10 @@ def train_anp_topology_masked(
         val_mae_fixed_holdout=val_mae_fixed_holdout_list,
         val_mae_inverse_holdout=val_mae_inverse_holdout_list,
         val_weighted_score=val_weighted_score_list,
+        val_robust_inverse_mean=val_robust_inverse_mean_list,
+        val_robust_inverse_worst=val_robust_inverse_worst_list,
+        val_robust_inverse_gap=val_robust_inverse_gap_list,
+        val_robust_score=val_robust_score_list,
     )
 
     plot_anp_diagnostics(
@@ -779,6 +888,14 @@ def train_anp_topology_masked(
     plot_val_mae_per_frac(
         save_dir, train_mae_list, val_mae_02_list, val_mae_04_list, val_mae_06_list
     )
+    plot_robust_validation_metrics(
+        save_dir,
+        val_mae_inverse_holdout_list,
+        val_robust_inverse_mean_list,
+        val_robust_inverse_worst_list,
+        val_robust_inverse_gap_list,
+        val_robust_score_list,
+    )
 
     # CSV log
     csv_path = os.path.join(save_dir, "training_log.csv")
@@ -789,7 +906,8 @@ def train_anp_topology_masked(
             "train_loss","train_nll","train_nll_nonctx","train_kl","beta","train_var_min","train_var_mean","train_var_max","train_mae",
             "val_loss","val_nll","val_nll_nonctx","val_kl","val_var_min","val_var_mean","val_var_max",
             "val_mae_02","val_mae_04","val_mae_06","val_mae",
-            "val_mae_fixed_holdout","val_mae_inverse_holdout","val_weighted_score"
+            "val_mae_fixed_holdout","val_mae_inverse_holdout","val_weighted_score",
+            "val_robust_inverse_mean","val_robust_inverse_worst","val_robust_inverse_gap","val_robust_score"
         ])
         for e in range(len(train_loss_list)):
             w.writerow([
@@ -800,6 +918,7 @@ def train_anp_topology_masked(
                 val_var_min_list[e], val_var_mean_list[e], val_var_max_list[e],
                 val_mae_02_list[e], val_mae_04_list[e], val_mae_06_list[e], val_mae_list[e],
                 val_mae_fixed_holdout_list[e], val_mae_inverse_holdout_list[e], val_weighted_score_list[e],
+                val_robust_inverse_mean_list[e], val_robust_inverse_worst_list[e], val_robust_inverse_gap_list[e], val_robust_score_list[e],
             ])
 
     # plot training curves
@@ -829,6 +948,14 @@ def train_anp_topology_masked(
         f.write(f"Best validation inverse holdout MAE: {best_val_mae_inverse_holdout:.6f}\n")
         f.write(f"Best validation fixed holdout MAE: {best_val_mae_fixed_holdout:.6f}\n")
         f.write(f"Best validation legacy MAE (ctx=40%): {best_val_mae:.6f}\n")
+        finite_robust_mean = [v for v in val_robust_inverse_mean_list if np.isfinite(v)]
+        finite_robust_worst = [v for v in val_robust_inverse_worst_list if np.isfinite(v)]
+        finite_robust_gap = [v for v in val_robust_inverse_gap_list if np.isfinite(v)]
+        finite_robust_score = [v for v in val_robust_score_list if np.isfinite(v)]
+        f.write(f"Best robust inverse mean MAE: {min(finite_robust_mean) if finite_robust_mean else float('nan'):.6f}\n")
+        f.write(f"Best robust inverse worst-case MAE: {min(finite_robust_worst) if finite_robust_worst else float('nan'):.6f}\n")
+        f.write(f"Best robust score: {min(finite_robust_score) if finite_robust_score else float('nan'):.6f}\n")
+        f.write(f"Worst observed robust gap: {max(finite_robust_gap) if finite_robust_gap else float('nan'):.6f}\n")
         f.write(f"Final epoch: {min(epoch+1, epochs)}\n")
         f.write(f"Early stopping counter: {early_stop_counter}/{patience}\n")
         f.write(f"Training time: {(time.time() - t_init)/60:.2f} minutes\n")
@@ -838,6 +965,9 @@ def train_anp_topology_masked(
         f.write(f"  include_fixed_holdout_in_es: {include_fixed_holdout_in_es}\n")
         f.write(f"  es_weight_fixed: {es_weight_fixed:.4f}\n")
         f.write(f"  es_weight_inverse: {es_weight_inverse:.4f}\n")
+        f.write(f"  robust_context_fracs: {robust_context_fracs}\n")
+        f.write(f"  robust_eval_every: {robust_eval_every}\n")
+        f.write(f"  robust_alpha: {robust_alpha:.4f}\n")
         f.write("\nMasking config:\n")
         f.write(f"  num_sensors: {num_sensors}\n")
         f.write(f"  num_time_points: {num_time_points}\n")
@@ -860,6 +990,9 @@ def train_anp_topology_masked(
         "inverse_holdout_mae": float(best_val_mae_inverse_holdout),
         "fixed_holdout_mae": float(best_val_mae_fixed_holdout),
         "legacy_mae_ctx040": float(best_val_mae),
+        "robust_inverse_mean_best": float(np.nanmin(val_robust_inverse_mean_list)) if np.any(np.isfinite(val_robust_inverse_mean_list)) else float("nan"),
+        "robust_inverse_worst_best": float(np.nanmin(val_robust_inverse_worst_list)) if np.any(np.isfinite(val_robust_inverse_worst_list)) else float("nan"),
+        "robust_score_best": float(np.nanmin(val_robust_score_list)) if np.any(np.isfinite(val_robust_score_list)) else float("nan"),
     }
 
 
@@ -870,27 +1003,30 @@ def train_anp_topology_masked(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", type=str, required=True)
-    parser.add_argument("--save-dir", type=str, default=None, help="Base output directory. If None, uses <cwd>/results/ANP_topologies_masked/<run_name>")
+    parser.add_argument("--save-dir", type=str, default=None, help="Base output directory. If None, uses <cwd>/results/RANP_topologies_masked/<run_name>")
     parser.add_argument("--topologies", type=str, default="aligned,ellipsoidal,random")
-    parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--epochs", type=int, default=5000)
-    parser.add_argument("--patience", type=int, default=500)
-    parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--ctx-sample-mode", type=str, default="first", choices=["first", "random"])
+    parser.add_argument("--batch-size", type=int, default=8, help="Batch size for training and validation")
+    parser.add_argument("--epochs", type=int, default=5000, help="Maximum number of epochs to train")
+    parser.add_argument("--patience", type=int, default=250, help="Number of epochs to wait for improvement before stopping")
+    parser.add_argument("--device", type=str, default="cuda", help="Device to use for training (e.g., 'cuda' or 'cpu')")
+    parser.add_argument("--ctx-sample-mode", type=str, default="first", choices=["first", "random"], help="How to sample context points during training and validation: 'first' takes the first N points, 'random' samples N random points")
     # masking params
-    parser.add_argument("--num-sensors", type=int, default=10)
-    parser.add_argument("--num-time-points", type=int, default=201)
-    parser.add_argument("--sensor-drop-mode", type=str, default="bernoulli", choices=["bernoulli", "k_uniform"])
-    parser.add_argument("--sensor-drop-p", type=float, default=0.2)
-    parser.add_argument("--mask-fill", type=str, default="train_mean", choices=["train_mean", "zero"])
-    parser.add_argument("--mask-in-val", action="store_true")
-    parser.add_argument("--kl-warmup-epochs", type=int, default=500, help="Number of epochs to warm up KL weight from 0 to 1")
-    # validation score config
-    parser.add_argument("--holdout-frac", type=float, default=0.2, help="Fraction of points to hold out in holdout-based val protocols")
-    parser.add_argument("--es-context-frac", type=float, default=0.4, help="Fraction of context points to use in early stopping")
-    parser.add_argument("--es-weight-fixed", type=float, default=0.2, help="Weight for fixed holdout in early stopping (used only with --include-fixed-holdout-in-es)")
-    parser.add_argument("--es-weight-inverse", type=float, default=0.8, help="Weight for inverse holdout in early stopping (used only with --include-fixed-holdout-in-es)")
-    parser.add_argument("--include-fixed-holdout-in-es", action="store_true", help="Include fixed holdout metric in early-stopping score; default uses only inverse holdout")
+    parser.add_argument("--num-sensors", type=int, default=10, help="Number of sensors")
+    parser.add_argument("--num-time-points", type=int, default=201, help="Number of time points")
+    parser.add_argument("--sensor-drop-mode", type=str, default="bernoulli", choices=["bernoulli", "k_uniform"], help="Mode for dropping sensors")
+    parser.add_argument("--sensor-drop-p", type=float, default=0.3, help="Probability of dropping a sensor")
+    parser.add_argument("--mask-fill", type=str, default="train_mean", choices=["train_mean", "zero"], help="How to fill masked values")
+    parser.add_argument("--mask-in-val", action="store_true", help="Apply masking in validation")
+    parser.add_argument("--kl-warmup-epochs", type=int, default=1000, help="Number of epochs to warm up the KL divergence term")
+    # validation and early stopping params
+    parser.add_argument("--holdout-frac", type=float, default=0.2, help="Fraction of data to use for holdout validation")
+    parser.add_argument("--es-context-frac", type=float, default=0.4, help="Fraction of context points to use for early stopping")
+    parser.add_argument("--es-weight-fixed", type=float, default=0.2, help="Used only with --include-fixed-holdout-in-es")
+    parser.add_argument("--es-weight-inverse", type=float, default=0.8, help="Used only with --include-fixed-holdout-in-es")
+    parser.add_argument("--include-fixed-holdout-in-es", action="store_true", help="Include fixed holdout in early stopping; default uses only inverse holdout")
+    parser.add_argument("--robust-context-fracs", type=str, default="0.2,0.4,0.6,0.8", help="Comma-separated context fractions for robust inverse-holdout monitoring")
+    parser.add_argument("--robust-eval-every", type=int, default=5, help="Run robust multi-context validation every N epochs")
+    parser.add_argument("--robust-alpha", type=float, default=0.8, help="Blend factor for robust score: alpha*primary + (1-alpha)*robust_mean")
 
     args = parser.parse_args()
 
@@ -913,6 +1049,9 @@ def main():
     os.makedirs(base, exist_ok=True)
 
     results = {}
+    robust_context_fracs = [
+        float(v.strip()) for v in args.robust_context_fracs.split(",") if v.strip()
+    ]
 
     for topo in topologies:
         train_data, val_data, _ = load_topology_data(args.data_dir, topo)
@@ -942,6 +1081,9 @@ def main():
             es_weight_fixed=args.es_weight_fixed,
             es_weight_inverse=args.es_weight_inverse,
             include_fixed_holdout_in_es=args.include_fixed_holdout_in_es,
+            robust_context_fracs=robust_context_fracs,
+            robust_eval_every=args.robust_eval_every,
+            robust_alpha=args.robust_alpha,
         )
         results[topo] = best_metrics
 
