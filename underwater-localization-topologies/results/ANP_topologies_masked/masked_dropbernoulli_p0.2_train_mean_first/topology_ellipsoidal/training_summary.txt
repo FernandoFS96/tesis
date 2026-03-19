@@ -1,0 +1,25 @@
+ANP MASKED Training Summary - Topology: ellipsoidal
+============================================================
+Training samples: 420 trajectories
+Validation samples: 120 trajectories
+Best validation weighted score: 10.154347
+Best validation inverse holdout MAE: 9.941790
+Best validation fixed holdout MAE: 10.642449
+Best validation legacy MAE (ctx=40%): 9.329278
+Final epoch: 1026
+Early stopping counter: 300/300
+Training time: 81.46 minutes
+
+Validation score config:
+  holdout_frac: 0.2
+  es_context_frac: 0.4
+  es_weight_fixed: 0.2000
+  es_weight_inverse: 0.8000
+
+Masking config:
+  num_sensors: 10
+  num_time_points: 201
+  sensor_drop_mode: bernoulli
+  sensor_drop_p: 0.2
+  mask_fill: train_mean
+  mask_in_val: True

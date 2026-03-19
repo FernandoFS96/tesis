@@ -1,0 +1,25 @@
+ANP MASKED Training Summary - Topology: aligned
+============================================================
+Training samples: 420 trajectories
+Validation samples: 120 trajectories
+Best validation weighted score: 8.052088
+Best validation inverse holdout MAE: 7.719574
+Best validation fixed holdout MAE: 8.250260
+Best validation legacy MAE (ctx=40%): 7.673490
+Final epoch: 1135
+Early stopping counter: 300/300
+Training time: 92.41 minutes
+
+Validation score config:
+  holdout_frac: 0.2
+  es_context_frac: 0.4
+  es_weight_fixed: 0.2000
+  es_weight_inverse: 0.8000
+
+Masking config:
+  num_sensors: 10
+  num_time_points: 201
+  sensor_drop_mode: bernoulli
+  sensor_drop_p: 0.2
+  mask_fill: train_mean
+  mask_in_val: False
