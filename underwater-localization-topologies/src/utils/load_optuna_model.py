@@ -5,7 +5,7 @@ Utility to load an ANP or RANP model that was saved by the Optuna HPO search (op
 
 Directory layout produced by the search script
 -----------------------------------------------
-<results_dir>/<study_name>/best_model/
+<results_dir>/<model>/<version>/<study_name>/best_model/
     hparams.json                          ← hyperparameters sampled by Optuna
     trial_info.json                       ← trial number, objective value, user attrs
     topology_<name>/best_checkpoint.pth.tar           ← model + optimizer state dicts
@@ -19,7 +19,7 @@ Typical usage
 
     from src.utils.load_optuna_model import load_optuna_best_model
 
-    model, hparams, meta = load_optuna_best_model(best_model_dir="src/training/results/optuna/anp_masked_lowvar_ellipsoidal_v1/best_model",
+    model, hparams, meta = load_optuna_best_model(best_model_dir="src/training/results/optuna/anp/v1/anp_masked_lowvar_ellipsoidal_v1/best_model",
         topology="ellipsoidal",
         model_type="anp",          # "anp" | "ranp" | "auto"
         device="cuda",
@@ -32,7 +32,7 @@ Typical usage
 
 **Load a RANP model:**
 
-    model, hparams, meta = load_optuna_best_model(best_model_dir="src/training/results/optuna/ranp_masked_lowvar_ellipsoidal_v1/best_model",
+    model, hparams, meta = load_optuna_best_model(best_model_dir="src/training/results/optuna/ranp/v1/ranp_masked_lowvar_ellipsoidal_v1/best_model",
         topology="ellipsoidal",
         model_type="ranp",
         device="cuda",
@@ -66,6 +66,18 @@ Typical usage
         device="cpu",
     )
 
+**Resolve and load from study metadata (no manual path building):**
+
+    from src.utils.load_optuna_model import load_optuna_best_model_from_study
+
+    model, hparams, meta = load_optuna_best_model_from_study(
+        results_dir="src/training/results/optuna",
+        study_name="anp_masked_lowvar_ellipsoidal_v2",
+        topology="ellipsoidal",
+        model_type="anp",
+        device="cuda",
+    )
+
 Notes
 -----
 - ``num_sensors`` and ``num_time_points`` are needed to reconstruct ``input_dim = num_time_points * num_sensors + num_sensors`` (the masked feature dimension that both training scripts produce).
@@ -76,6 +88,7 @@ Notes
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -102,6 +115,28 @@ def _load_trial_info(trial_info_path: Path) -> Optional[Dict[str, Any]]:
 def _detect_model_type(hparams: Dict[str, Any]) -> str:
     """Return 'ranp' if RNN-specific keys are present, else 'anp'."""
     return "ranp" if "rnn_type" in hparams else "anp"
+
+
+def _infer_study_version(study_name: str) -> str:
+    m = re.search(r"(v\d+)$", study_name.strip().lower())
+    return m.group(1) if m else "vunknown"
+
+
+def resolve_optuna_best_model_dir(
+    results_dir: str | Path,
+    study_name: str,
+    model_type: str,
+    version: Optional[str] = None,
+) -> Path:
+    """Resolve best_model dir from the current Optuna output layout.
+
+    Layout: <results_dir>/<model>/<version>/<study_name>/best_model
+    """
+    model = model_type.lower().strip()
+    if model not in {"anp", "ranp"}:
+        raise ValueError(f"model_type must be 'anp' or 'ranp', got: {model_type}")
+    version_tag = version or _infer_study_version(study_name)
+    return Path(results_dir) / model / version_tag / study_name / "best_model"
 
 
 def _build_anp_model(hparams: Dict[str, Any], input_dim: int, output_dim: int) -> nn.Module:
@@ -253,3 +288,34 @@ def load_model_from_checkpoint(checkpoint_path: str | Path,
         meta["optimizer_state_dict"] = ckpt["optimizer"]
 
     return model, hparams, meta
+
+
+def load_optuna_best_model_from_study(
+    results_dir: str | Path,
+    study_name: str,
+    topology: str,
+    model_type: str,
+    version: Optional[str] = None,
+    num_sensors: int = 10,
+    num_time_points: int = 201,
+    output_dim: int = 3,
+    device: str | torch.device = "cpu",
+    load_optimizer: bool = False,
+) -> Tuple[nn.Module, Dict[str, Any], Optional[Dict[str, Any]]]:
+    """Convenience wrapper to load best model using results root + study name."""
+    best_model_dir = resolve_optuna_best_model_dir(
+        results_dir=results_dir,
+        study_name=study_name,
+        model_type=model_type,
+        version=version,
+    )
+    return load_optuna_best_model(
+        best_model_dir=best_model_dir,
+        topology=topology,
+        model_type=model_type,
+        num_sensors=num_sensors,
+        num_time_points=num_time_points,
+        output_dim=output_dim,
+        device=device,
+        load_optimizer=load_optimizer,
+    )
