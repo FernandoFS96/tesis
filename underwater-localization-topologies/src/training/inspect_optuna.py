@@ -15,7 +15,7 @@ Adds to your current inspect script:
 Usage:
   python inspect_optuna.py \
     --storage "sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db" \
-    --study-name anp_masked_lowvar_ellipsoidal_v1 \
+    --study-name anp_masked_lowvar_ellipsoidal_v2 \
     --output-dir results/optuna \
     --group-param batch_size \
     --top-n 5 \
@@ -26,7 +26,7 @@ Usage:
  For the RANP model (RANP-specific params are auto-detected; pass --model ranp to force):
     python inspect_optuna.py \
         --storage "sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_ranp.db" \
-        --study-name ranp_masked_lowvar_ellipsoidal_v1 \
+        --study-name ranp_masked_lowvar_ellipsoidal_v2 \
         --model ranp \
         --output-dir results/optuna \
         --group-param batch_size \
@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
@@ -62,6 +63,11 @@ def _study_direction_str(study: optuna.Study) -> str:
 
 def _safe_mkdir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
+
+
+def _infer_study_version(study_name: str) -> str:
+    m = re.search(r"(v\d+)$", study_name.strip().lower())
+    return m.group(1) if m else "vunknown"
 
 
 def _list_studies(storage: str) -> None:
@@ -305,12 +311,11 @@ def main() -> None:
     ap.add_argument("--min-trials-importance", type=int, default=7, help="Minimum COMPLETE trials required to compute per-group importances.")
     ap.add_argument("--make-plots", action="store_true", help="If set, save Optuna interactive plots as HTML (requires plotly).")
     ap.add_argument("--model", type=str, default="auto", choices=["auto", "anp", "ranp"], help="Model type for parameter display. 'auto' detects from trial params.")
+    ap.add_argument("--flat-output", action="store_true", help="Store outputs as <output-dir>/<study-name> instead of <output-dir>/<model>/<version>/<study-name>.")
 
     args = ap.parse_args()
 
     storage = args.storage
-    outdir = Path(args.output_dir) / args.study_name
-    _safe_mkdir(outdir)
 
     print("=== Studies in storage ===")
     _list_studies(storage)
@@ -330,7 +335,17 @@ def main() -> None:
         )
     else:
         is_ranp = args.model == "ranp"
+    model_name = "ranp" if is_ranp else "anp"
+    version = _infer_study_version(args.study_name)
+
+    if args.flat_output:
+        outdir = Path(args.output_dir) / args.study_name
+    else:
+        outdir = Path(args.output_dir) / model_name / version / args.study_name
+    _safe_mkdir(outdir)
+
     print(f"Model type: {'RANP' if is_ranp else 'ANP'} ({'auto-detected' if args.model == 'auto' else 'forced'})")
+    print(f"Output dir: {outdir}")
 
     # Export all trials (including PRUNED/FAIL) to CSV
     df_all = study.trials_dataframe(attrs=("number", "value", "state", "params", "user_attrs"))

@@ -15,9 +15,9 @@ Run ANP (single process):
     --topologies ellipsoidal \
     --objective-topology ellipsoidal \
     --mask-in-val \
-    --n-trials 25 \
+    --n-trials 50 \
     --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
-    --study-name anp_masked_lowvar_ellipsoidal_v1 \
+    --study-name anp_masked_lowvar_ellipsoidal_v2 \
     --constant-liar \
     --cleanup-trial-checkpoints \
     --disable-pruning
@@ -29,9 +29,9 @@ Run ANP (single process):
     --topologies ellipsoidal \
     --objective-topology ellipsoidal \
     --mask-in-val \
-    --n-trials 25 \
+    --n-trials 50 \
     --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
-    --study-name anp_masked_highvar_ellipsoidal_v1 \
+    --study-name anp_masked_highvar_ellipsoidal_v2 \
     --constant-liar \
     --cleanup-trial-checkpoints \
     --disable-pruning
@@ -45,11 +45,11 @@ Run ANP (single process):
         --mask-in-val \
         --n-trials 200 \
         --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_anp.db \
-        --study-name anp_masked_highvar_aligned_v1 \
+        --study-name anp_masked_highvar_aligned_v2 \
         --constant-liar \
         --cleanup-trial-checkpoints \
         --disable-pruning \
-        > optuna_anp_masked_highvar_aligned_v1_$(date +%F_%H%M%S)_$$.log 2>&1 & 
+        > optuna_anp_masked_highvar_aligned_v2_$(date +%F_%H%M%S)_$$.log 2>&1 & 
 
 Run RANP (single process):
     cd underwater-localization-topologies/src/training
@@ -59,9 +59,9 @@ Run RANP (single process):
     --topologies ellipsoidal \
     --objective-topology ellipsoidal \
     --mask-in-val \
-    --n-trials 25 \
+    --n-trials 50 \
     --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_ranp.db \
-    --study-name ranp_masked_lowvar_ellipsoidal_v1 \
+    --study-name ranp_masked_lowvar_ellipsoidal_v2 \
     --constant-liar \
     --cleanup-trial-checkpoints \
     --disable-pruning
@@ -70,12 +70,12 @@ Run RANP (single process):
     python optuna_anp_search.py \
     --model ranp \
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
-    --topologies random \
-    --objective-topology random \
+    --topologies ellipsoidal \
+    --objective-topology ellipsoidal \
     --mask-in-val \
     --n-trials 20 \
     --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_ranp.db \
-    --study-name ranp_masked_highvar_random_v1 \
+    --study-name ranp_masked_highvar_ellipsoidal_v2 \
     --constant-liar \
     --cleanup-trial-checkpoints \
     --disable-pruning
@@ -89,14 +89,14 @@ Run RANP (single process):
         --mask-in-val \
         --n-trials 200 \
         --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_ranp.db \
-        --study-name ranp_masked_lowvar_random_v1 \
+        --study-name ranp_masked_lowvar_random_v2 \
         --constant-liar \
         --cleanup-trial-checkpoints \
         --disable-pruning \
-        > optuna_ranp_masked_lowvar_random_v1_$(date +%F_%H%M%S)_$$.log 2>&1 &
+        > optuna_ranp_masked_lowvar_random_v2_$(date +%F_%H%M%S)_$$.log 2>&1 &
 
     monitor with:
-    tail -f optuna_ranp_masked_lowvar_random_v1_$(date +%F_%H%M%S)_$$.log 2>&1 &
+    tail -f optuna_ranp_masked_lowvar_random_v2_$(date +%F_%H%M%S)_$$.log 2>&1 &
 
 Parallel: start multiple processes pointing to the same storage+study:
   # terminal 1
@@ -108,6 +108,7 @@ Parallel: start multiple processes pointing to the same storage+study:
 import argparse
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 import time
@@ -179,14 +180,25 @@ def _make_best_model_callback(results_root: Path) -> Callable:
     return callback
 
 
-def make_objective(args):
+def _infer_study_version(study_name: str) -> str:
+    """Infer version tag (vN) from study name; fallback to 'vunknown'."""
+    m = re.search(r"(v\d+)$", study_name.strip().lower())
+    return m.group(1) if m else "vunknown"
+
+
+def _resolve_results_root(results_dir: str, model: str, study_name: str) -> Path:
+    """Build results path as <results_dir>/<model>/<version>/<study_name>."""
+    version = _infer_study_version(study_name)
+    return Path(results_dir) / model / version / study_name
+
+
+def make_objective(args, results_root: Path):
     topologies = [t.strip() for t in args.topologies.split(",") if t.strip()]
     if args.aggregate_topologies:
         obj_topos = topologies
     else:
         obj_topos = [args.objective_topology]
 
-    results_root = Path(args.results_dir) / args.study_name
     results_root.mkdir(parents=True, exist_ok=True)
 
     # Load the appropriate training module once per study (importlib needed for hyphenated filename)
@@ -384,10 +396,10 @@ def main():
         load_if_exists=True,
     )
 
-    results_root = Path(args.results_dir) / args.study_name
+    results_root = _resolve_results_root(args.results_dir, args.model, args.study_name)
     results_root.mkdir(parents=True, exist_ok=True)
 
-    objective = make_objective(args)
+    objective = make_objective(args, results_root)
 
     callbacks = [_make_best_model_callback(results_root)]
 
