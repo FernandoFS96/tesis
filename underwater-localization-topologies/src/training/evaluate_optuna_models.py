@@ -11,6 +11,7 @@ Run from the project root (underwater-localization-topologies/):
 
 python -m src.training.evaluate_optuna_models \
   --run-all \
+  --study-version v1 \
   --device cuda \
   --optuna-results-root src/training/results/optuna \
   --data-root data/data \
@@ -29,6 +30,7 @@ from __future__ import annotations
 import argparse
 import os
 import pickle
+import re
 from collections import defaultdict
 
 import numpy as np
@@ -1071,12 +1073,25 @@ def _plot_rollout_delta_heatmap(
 
 
 def _default_study_name(model_type: str, variance: str, topology: str) -> str:
-    return f"{model_type}_masked_{variance}_{topology}_v1"
+    return f"{model_type}_masked_{variance}_{topology}_v2"
 
 
-def _resolve_best_model_dir(optuna_root: str, model_type: str, variance: str, topology: str) -> str:
-    study = _default_study_name(model_type, variance, topology)
-    return os.path.join(optuna_root, study, "best_model")
+def _infer_study_version(study_name: str) -> str:
+    m = re.search(r"(v\d+)$", study_name.strip().lower())
+    return m.group(1) if m else "vunknown"
+
+
+def _infer_version_from_model_dir(model_dir: str) -> str:
+    parts = os.path.normpath(model_dir).split(os.sep)
+    for token in parts:
+        if re.fullmatch(r"v\d+", token.lower()):
+            return token.lower()
+    return "vunknown"
+
+
+def _resolve_best_model_dir(optuna_root: str, model_type: str, variance: str, topology: str, study_version: str) -> str:
+    study = f"{model_type}_masked_{variance}_{topology}_{study_version}"
+    return os.path.join(optuna_root, model_type, study_version, study, "best_model")
 
 
 def _resolve_output_path(output_dir: str, path_or_name: str | None, default_filename: str) -> str:
@@ -1244,6 +1259,7 @@ def main():
     parser.add_argument("--ranp-dir", default=None, help="Path to RANP best_model/ dir (omit to skip RANP eval)")
     parser.add_argument("--run-all", action="store_true", help="Evaluate all combinations: model in {anp,ranp}, variance in {lowvar,highvar}, topology in {aligned,ellipsoidal,random}.")
     parser.add_argument("--optuna-results-root", default="src/training/results/optuna", help="Root containing Optuna study folders when --run-all is used.")
+    parser.add_argument("--study-version", default="v2", help="Study version tag used with --run-all (e.g., v1 or v2).")
     parser.add_argument("--data-root", default="data/data", help="Root containing data_processed_topologies_low_variance and data_processed_topologies_high_variance when --run-all is used.")
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="Directory where CSV and plots are saved.")
     parser.add_argument("--save-csv", default=None, help="Optional CSV filename override (stored inside --output-dir).")
@@ -1276,6 +1292,10 @@ def main():
     parser.add_argument("--num-time-points", type=int, default=201, help="Number of time points.")
     args = parser.parse_args()
 
+    study_version = args.study_version.lower().strip()
+    if not re.fullmatch(r"v\d+", study_version):
+        raise ValueError(f"Invalid --study-version '{args.study_version}'. Expected format like v1 or v2.")
+
     if args.context_fracs is not None:
         context_fracs = [float(x.strip()) for x in args.context_fracs.split(",") if x.strip()]
     else:
@@ -1288,63 +1308,78 @@ def main():
 
     ctx_pct = int(round(args.context_frac * 100))
 
-    os.makedirs(args.output_dir, exist_ok=True)
+    output_version = study_version
+    if not args.run_all:
+        manual_versions = set()
+        if args.anp_dir:
+            manual_versions.add(_infer_version_from_model_dir(args.anp_dir))
+        if args.ranp_dir:
+            manual_versions.add(_infer_version_from_model_dir(args.ranp_dir))
+        if len(manual_versions) == 1:
+            output_version = next(iter(manual_versions))
+        elif len(manual_versions) > 1:
+            output_version = "mixed"
+
+    output_dir = os.path.join(args.output_dir, output_version)
+    os.makedirs(output_dir, exist_ok=True)
 
     csv_path = _resolve_output_path(
-        args.output_dir,
+        output_dir,
         args.save_csv,
         "all_eval_summary.csv",
     )
     boxplot_path = _resolve_output_path(
-        args.output_dir,
+        output_dir,
         args.save_boxplot,
         f"boxplot_ctx{ctx_pct}_{args.boxplot_split}.png",
     )
     heatmap_path = _resolve_output_path(
-        args.output_dir,
+        output_dir,
         args.save_heatmap,
         f"mae_heatmap_ctx{ctx_pct}_{args.boxplot_split}.png",
     )
     delta_heatmap_path = _resolve_output_path(
-        args.output_dir,
+        output_dir,
         args.save_delta_heatmap,
         f"delta_heatmap_ranp_minus_anp_ctx{ctx_pct}_{args.boxplot_split}.png",
     )
     cdf_path = _resolve_output_path(
-        args.output_dir,
+        output_dir,
         args.save_cdf,
         f"cdf_mae_by_scenario_ctx{ctx_pct}_{args.boxplot_split}.png",
     )
     ci_barplot_path = _resolve_output_path(
-        args.output_dir,
+        output_dir,
         args.save_ci_barplot,
         f"barplot_ci_mean_mae_ctx{ctx_pct}_{args.boxplot_split}.png",
     )
     scatter_path = _resolve_output_path(
-        args.output_dir,
+        output_dir,
         args.save_scatter,
         f"scatter_optuna_vs_test_ctx{ctx_pct}.png",
     )
     context_curves_path = _resolve_output_path(
-        args.output_dir,
+        output_dir,
         args.save_context_curves,
         "context_curves_topology_model_variance.png",
     )
     rollout_curves_path = _resolve_output_path(
-        args.output_dir,
+        output_dir,
         args.save_rollout_curves,
         f"rollout5_curves_ctx{ctx_pct}.png",
     )
     rollout_heatmap_path = _resolve_output_path(
-        args.output_dir,
+        output_dir,
         args.save_rollout_heatmap,
         "rollout5_heatmap_by_scenario.png",
     )
     rollout_delta_heatmap_path = _resolve_output_path(
-        args.output_dir,
+        output_dir,
         args.save_rollout_delta_heatmap,
         "rollout5_delta_heatmap_ranp_minus_anp.png",
     )
+
+    print(f"Saving evaluation outputs under: {output_dir}")
 
     all_rows = []
     boxplot_store = defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))
@@ -1375,6 +1410,7 @@ def main():
                             model_type=model_type,
                             variance=variance,
                             topology=topology,
+                            study_version=study_version,
                         )
                         try:
                             rows, box_values, used_split = _evaluate_one_configuration(
