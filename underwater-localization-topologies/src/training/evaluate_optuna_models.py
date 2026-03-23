@@ -11,10 +11,10 @@ Run from the project root (underwater-localization-topologies/):
 
 python -m src.training.evaluate_optuna_models \
   --run-all \
-  --study-version v1 \
+  --study-version v2 \
   --device cuda \
-  --optuna-results-root src/training/results/optuna \
-  --data-root data/data \
+  --optuna-results-root /home/fernando/tesis/underwater-localization-topologies/src/training/results/optuna \
+  --data-root /home/fernando/tesis/underwater-localization-topologies/data/data \
   --output-dir src/training/results/optuna/models_evaluation \
   --boxplot-split test \
   --context-fracs 0.1,0.15,0.2,0.25,0.3,0.4,0.5,0.6,0.7,0.8 \
@@ -40,7 +40,19 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from torch.utils.data import DataLoader, TensorDataset
 
-DEFAULT_OUTPUT_DIR = "src/training/results/optuna/models_evaluation"
+# Compute the absolute path to the project root and default output directory
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))  # src/training/
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(_SCRIPT_DIR))  # project root
+DEFAULT_OUTPUT_DIR = os.path.join(_PROJECT_ROOT, "src", "training", "results", "optuna", "models_evaluation")
+
+# Helper function to resolve relative paths to absolute paths
+def _resolve_path(path: str) -> str:
+    """If path is relative, resolve it relative to project root; otherwise return as-is."""
+    if path is None:
+        return None
+    if os.path.isabs(path):
+        return path
+    return os.path.join(_PROJECT_ROOT, path)
 
 # -------------------------------------
 # Helpers shared with training scripts
@@ -1291,6 +1303,16 @@ def main():
     parser.add_argument("--num-sensors", type=int, default=10, help="Number of sensors.")
     parser.add_argument("--num-time-points", type=int, default=201, help="Number of time points.")
     args = parser.parse_args()
+
+    # Resolve all relative paths to absolute paths
+    args.data_dir = _resolve_path(args.data_dir)
+    args.output_dir = _resolve_path(args.output_dir)
+    args.optuna_results_root = _resolve_path(args.optuna_results_root)
+    args.data_root = _resolve_path(args.data_root)
+    if args.anp_dir:
+        args.anp_dir = _resolve_path(args.anp_dir)
+    if args.ranp_dir:
+        args.ranp_dir = _resolve_path(args.ranp_dir)
 
     study_version = args.study_version.lower().strip()
     if not re.fullmatch(r"v\d+", study_version):
