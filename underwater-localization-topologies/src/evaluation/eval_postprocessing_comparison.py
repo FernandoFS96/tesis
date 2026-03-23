@@ -85,6 +85,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 import src.models.anp as anp_module
 import src.models.r_anp as ranp_module
+from src.utils.load_optuna_model import load_optuna_best_model
 from src.utils.nav_dataset import NavigationTrajectoryDataset
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -106,7 +107,8 @@ XZ_DIMS        = slice(0, 2)                         # dimensions we filter in x
 class ModelConfig:
     """Container for a model variant to evaluate."""
     name: str
-    ckpt_path: str # path to best_checkpoint.pth.tar
+    ckpt_path: str = "" # path to best_checkpoint.pth.tar
+    optuna_best_model_dir: str = "" # path to .../best_model
     model_type: str = "anp" # "anp" | "ranp"
     num_hidden: int = 128
     # RANP-specific
@@ -124,8 +126,23 @@ def _infer_num_hidden(hparams_path: str, fallback: int = 128) -> int:
     return fallback
 
 
-def load_model(cfg: ModelConfig, device: torch.device) -> torch.nn.Module:
-    """Load ANP or RANP from checkpoint, return in eval mode."""
+def load_model(cfg: ModelConfig, device: torch.device, topology: str) -> torch.nn.Module:
+    """Load ANP or RANP from Optuna best_model dir or direct checkpoint."""
+    if cfg.optuna_best_model_dir:
+        model, hparams, _ = load_optuna_best_model(
+            best_model_dir=cfg.optuna_best_model_dir,
+            topology=topology,
+            model_type=cfg.model_type,
+            num_sensors=NUM_SENSORS,
+            num_time_points=NUM_TIME_PTS,
+            output_dim=OUTPUT_DIM,
+            device=device,
+        )
+        cfg.num_hidden = int(hparams.get("num_hidden", cfg.num_hidden))
+        ckpt_path = Path(cfg.optuna_best_model_dir) / f"topology_{topology}" / "best_checkpoint.pth.tar"
+        print(f"[  OK  ] {cfg.model_type.upper()} '{cfg.name}' loaded from {ckpt_path} (Optuna)")
+        return model
+
     ckpt_path = Path(cfg.ckpt_path)
     if not ckpt_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
@@ -216,12 +233,42 @@ class PredBundle:
     var_real:     np.ndarray   # (T, 3) de-normalised variance (sigma^2)
     gt_real:      np.ndarray   # (T, 3) ground truth
     ctx_mask:     np.ndarray   # (T,)   bool - True for context points
+    target_mask:  np.ndarray   # (T,)   bool - True for evaluation target points
     theta:        float = 0.0
     infer_time_s: float = 0.0  # model forward-pass wall time for this trajectory (s)
 
 
+def _build_eval_indices(
+    total_points: int,
+    context_frac: float,
+    eval_protocol: str,
+    holdout_frac: float,
+    device: torch.device,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Create context and target indices for holdout / inverse_holdout protocols."""
+    n_holdout = max(1, int(round(holdout_frac * total_points)))
+    holdout_start = total_points - n_holdout
+
+    if eval_protocol == "holdout":
+        max_ctx = max(1, holdout_start - 1)
+        ctx_size = max(1, min(max_ctx, int(round(context_frac * total_points))))
+        ctx_idx = torch.arange(ctx_size, device=device)
+        tar_idx = torch.arange(holdout_start, total_points, device=device)
+        return ctx_idx, tar_idx
+
+    if eval_protocol == "inverse_holdout":
+        max_ctx = max(1, holdout_start)
+        ctx_size = max(1, min(max_ctx, int(round(context_frac * total_points))))
+        ctx_start = holdout_start - ctx_size
+        ctx_idx = torch.arange(ctx_start, holdout_start, device=device)
+        tar_idx = torch.arange(holdout_start, total_points, device=device)
+        return ctx_idx, tar_idx
+
+    raise ValueError(f"Unknown eval_protocol: {eval_protocol!r}")
+
+
 @torch.no_grad()
-def run_inference(model: torch.nn.Module, model_type: str, data: list, thetas: list, y_mean: torch.Tensor, y_std:  torch.Tensor, ctx_frac: float, device: torch.device,
+def run_inference(model: torch.nn.Module, model_type: str, data: list, thetas: list, y_mean: torch.Tensor, y_std:  torch.Tensor, ctx_frac: float, eval_protocol: str, holdout_frac: float, device: torch.device,
 ) -> List[PredBundle]:
     """Run model inference on all trajectories, return PredBundle list."""
     bundles: List[PredBundle] = []
@@ -239,27 +286,34 @@ def run_inference(model: torch.nn.Module, model_type: str, data: list, thetas: l
         # Build augmented input (append all-ones mask)
         x_aug = augment_x_with_full_mask(x_raw)   # (1, T, INPUT_DIM)
 
-        # Context / target split (first ctx_frac points)
-        n_ctx = max(1, int(ctx_frac * T))
-        n_ctx = min(n_ctx, T - 1)
-        ctx_idx = torch.arange(n_ctx, device=device)
-        tar_idx = torch.arange(T,     device=device)
+        # Context / evaluation-target split according to selected protocol.
+        # Important: model prediction is run over the full trajectory (all T points)
+        # so postprocessors operate on a full sequence. The evaluation target
+        # is represented separately via target_mask.
+        ctx_idx, eval_tar_idx = _build_eval_indices(
+            total_points=T,
+            context_frac=ctx_frac,
+            eval_protocol=eval_protocol,
+            holdout_frac=holdout_frac,
+            device=device,
+        )
+        pred_idx = torch.arange(T, device=device)
 
         y_norm = normalize_y(y_gt, y_mean, y_std)
 
         ctx_y  = y_norm[:, ctx_idx, :]   # (1, Nc, 3)
-        tar_y  = y_norm[:, tar_idx, :]   # (1, T,  3)
+        tar_y  = y_norm[:, pred_idx, :]   # kept for shape symmetry
 
         _t_infer_start = time.perf_counter()
         if model_type == "anp":
             ctx_x = x_aug[:, ctx_idx, :]
-            tar_x = x_aug[:, tar_idx, :]
+            tar_x = x_aug[:, pred_idx, :]
             mean_norm, var_norm, *_ = model(ctx_x, ctx_y, tar_x)
         elif model_type == "ranp":
             mean_norm, var_norm, *_ = model(x_seq=x_aug,
                 context_indices=ctx_idx,
                 context_y=ctx_y,
-                target_indices=tar_idx,
+                target_indices=pred_idx,
                 target_y=None,
             )
         else:
@@ -273,12 +327,15 @@ def run_inference(model: torch.nn.Module, model_type: str, data: list, thetas: l
         gt_np     = y_gt[0].cpu().numpy() # (T, 3)
 
         ctx_mask_np = np.zeros(T, dtype=bool)
-        ctx_mask_np[:n_ctx] = True
+        target_mask_np = np.zeros(T, dtype=bool)
+        ctx_mask_np[ctx_idx.cpu().numpy()] = True
+        target_mask_np[eval_tar_idx.cpu().numpy()] = True
 
         bundles.append(PredBundle(mean_real=mean_real,
             var_real=var_real,
             gt_real=gt_np,
             ctx_mask=ctx_mask_np,
+            target_mask=target_mask_np,
             theta=float(theta) if not isinstance(theta, float) else theta,
             infer_time_s=_infer_time,
         ))
@@ -1005,14 +1062,14 @@ class ARpPostProcessor(PostProcessor):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _mae_xz(filtered_xy: np.ndarray, bundle: PredBundle) -> float:
-    """MAE over non-context, x-z-plane only."""
-    tgt_mask = ~bundle.ctx_mask
+    """MAE over evaluation target points, x-z-plane only."""
+    tgt_mask = bundle.target_mask
     return float(np.mean(np.abs(filtered_xy[tgt_mask] - bundle.gt_real[tgt_mask, :2])))
 
 
 def _mae_full(filtered_xy: np.ndarray, bundle: PredBundle) -> float:
-    """MAE over non-context, all 3 output dims (x-z filtered, 3rd dim raw)."""
-    tgt_mask = ~bundle.ctx_mask
+    """MAE over evaluation target points, all 3 output dims (x-z filtered, 3rd dim raw)."""
+    tgt_mask = bundle.target_mask
     y_filt   = bundle.mean_real[tgt_mask].copy()
     y_filt[:, :2] = filtered_xy[tgt_mask]
     return float(np.mean(np.abs(y_filt - bundle.gt_real[tgt_mask])))
@@ -1190,6 +1247,8 @@ def save_txt_report(
     output_path: str,
     model_cfg: ModelConfig,
     topology: str,
+    eval_protocol: str,
+    holdout_frac: float,
     ctx_frac: float,
     n_test: int,
     n_val:  int,
@@ -1200,15 +1259,18 @@ def save_txt_report(
     lines.append("POSTPROCESSING COMPARISON — TRAJECTORY LOCALIZATION")
     lines.append(SEP)
     lines.append(f"  Model       : {model_cfg.name}  ({model_cfg.model_type.upper()})")
-    lines.append(f"  Checkpoint  : {model_cfg.ckpt_path}")
+    ckpt_info = model_cfg.ckpt_path if model_cfg.ckpt_path else f"Optuna dir: {model_cfg.optuna_best_model_dir}"
+    lines.append(f"  Checkpoint  : {ckpt_info}")
     lines.append(f"  Topology    : {topology}")
+    lines.append(f"  Protocol    : {eval_protocol}")
+    lines.append(f"  Holdout     : {holdout_frac * 100:.0f}%  (final trajectory tail)")
     lines.append(f"  Context     : {ctx_frac * 100:.0f}%  (first points)")
     lines.append(f"  Val / Test  : {n_val} / {n_test} trajectories")
     lines.append(f"  Date        : {time.strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append("")
 
     # ── MAE table ────────────────────────────────────────────────────────────
-    lines.append("MAE (non-context points)")
+    lines.append("MAE (evaluation target points)")
     lines.append("-" * 80)
     hdr = f"{'Method':<18} {'Mean':>10} {'Std':>10} {'Median':>10} {'Val MAE':>10}"
     lines.append(hdr)
@@ -1365,15 +1427,23 @@ def save_qualitative_plots(
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Online postprocessing comparison for ANP/RANP trajectory predictions.")
     # ── model ──
-    p.add_argument("--ckpt", required=True, help="Path to best_checkpoint.pth.tar")
+    p.add_argument("--ckpt", default=None, help="Path to best_checkpoint.pth.tar")
+    p.add_argument("--optuna-best-model-dir", default=None,
+                   help="Path to Optuna best_model directory. If provided, model is loaded via src.utils.load_optuna_model.")
     p.add_argument("--model-type", default="anp", choices=["anp", "ranp"], help="Model architecture")
     p.add_argument("--model-name", default=None, help="Human-readable model name (default: inferred from --ckpt)")
     p.add_argument("--rnn-type", default="lstm", choices=["lstm", "gru"], help="(RANP only) RNN cell type")
     p.add_argument("--rnn-layers", type=int, default=1, help="(RANP only) number of RNN layers")
     # ── data ──
     p.add_argument("--data-dir", required=True, help="Path to data_processed_topologies_* directory")
-    p.add_argument("--topology", default="ellipsoidal", choices=["ellipsoidal", "random", "aligned"], help="Sensor topology to evaluate on")
+    p.add_argument("--topology", default="ellipsoidal", choices=["ellipsoidal", "random", "aligned"], help="Topology used only when --single-topology is set")
+    p.add_argument("--single-topology", action="store_true", help="Evaluate only --topology (default evaluates aligned, ellipsoidal, random)")
     p.add_argument("--ctx-frac", type=float, default=0.3, help="Fraction of trajectory used as context (first points)")
+    p.add_argument("--holdout-frac", type=float, default=0.2,
+                   help="Fraction reserved as target holdout tail (default 0.2 => 10/50 points)")
+    p.add_argument("--eval-protocol", default="both_holdouts",
+                   choices=["holdout", "inverse_holdout", "both_holdouts"],
+                   help="Evaluation protocol. 'both_holdouts' runs and stores both separately.")
     p.add_argument("--dt", type=float, default=1.0, help="Timestep in seconds (used by KF / EKF / UKF)")
     # ── output ──
     p.add_argument("--output-dir", default="results/postprocessing", help="Directory where reports and plots are saved")
@@ -1395,18 +1465,28 @@ def main() -> None:
     random.seed(args.seed)
     torch.manual_seed(args.seed)
 
+    if not args.ckpt and not args.optuna_best_model_dir:
+        raise ValueError("Provide either --ckpt or --optuna-best-model-dir")
+
     # ── infer model name ────────────────────────────────────────────────────
     if args.model_name is None:
-        args.model_name = Path(args.ckpt).parents[2].name  # study dir name
+        if args.ckpt:
+            args.model_name = Path(args.ckpt).parents[2].name  # study dir name
+        else:
+            args.model_name = Path(args.optuna_best_model_dir).parent.name
 
     # ── infer num_hidden from hparams.json if present ───────────────────────
-    hparams_candidate = Path(args.ckpt).parent.parent / "hparams.json"
-    num_hidden = _infer_num_hidden(str(hparams_candidate))
+    if args.ckpt:
+        hparams_candidate = Path(args.ckpt).parent.parent / "hparams.json"
+        num_hidden = _infer_num_hidden(str(hparams_candidate))
+    else:
+        num_hidden = 128
 
     # ── primary model config ─────────────────────────────────────────────────
     model_cfg = ModelConfig(
         name=args.model_name,
-        ckpt_path=args.ckpt,
+        ckpt_path=args.ckpt or "",
+        optuna_best_model_dir=args.optuna_best_model_dir or "",
         model_type=args.model_type,
         num_hidden=num_hidden,
         rnn_type=args.rnn_type,
@@ -1421,101 +1501,121 @@ def main() -> None:
 
     all_cfgs = [model_cfg] + extra_cfgs
 
-    # ── load data ────────────────────────────────────────────────────────────
-    print(f"\n[data ] loading topology={args.topology} from {args.data_dir}")
-    train_data, _   = load_split(args.data_dir, args.topology, "train")
-    val_data, meta  = load_split(args.data_dir, args.topology, "val")
-    test_data, meta = load_split(args.data_dir, args.topology, "test")
+    topologies = [args.topology] if args.single_topology else ["aligned", "ellipsoidal", "random"]
+    eval_protocols = (
+        ["holdout", "inverse_holdout"]
+        if args.eval_protocol == "both_holdouts"
+        else [args.eval_protocol]
+    )
 
-    y_mean, y_std = compute_y_stats(train_data, device)
-
-    val_thetas  = meta.get("val_thetas",  [0.0] * len(val_data))
-    test_thetas = meta.get("test_thetas", [0.0] * len(test_data))
-
-    print(f"[data ] val={len(val_data)}  test={len(test_data)}")
-
-    # ── evaluate each model config ────────────────────────────────────────────
+    # ── evaluate each model config ───────────────────────────────────────────
     for cfg in all_cfgs:
-        print(f"\n{'─'*70}")
-        print(f"  Evaluating model: {cfg.name}")
-        print(f"{'─'*70}")
+        for topology in topologies:
+            # ── load data per topology ───────────────────────────────────────
+            print(f"\n[data ] loading topology={topology} from {args.data_dir}")
+            train_data, _   = load_split(args.data_dir, topology, "train")
+            val_data, meta  = load_split(args.data_dir, topology, "val")
+            test_data, meta = load_split(args.data_dir, topology, "test")
+            y_mean, y_std   = compute_y_stats(train_data, device)
+            val_thetas      = meta.get("val_thetas",  [0.0] * len(val_data))
+            test_thetas     = meta.get("test_thetas", [0.0] * len(test_data))
+            print(f"[data ] val={len(val_data)}  test={len(test_data)}")
 
-        model_out_dir = os.path.join(args.output_dir, cfg.name)
-        Path(model_out_dir).mkdir(parents=True, exist_ok=True)
+            for eval_protocol in eval_protocols:
+                print(f"\n{'─'*86}")
+                print(f"  Model={cfg.name} | topology={topology} | protocol={eval_protocol}")
+                print(f"{'─'*86}")
 
-        # ── inference on val + test (with disk cache) ────────────────────────
-        cache_tag  = f"ctx{int(args.ctx_frac*100):03d}"
-        val_cache  = Path(model_out_dir) / f"_cache_val_{cache_tag}.pkl"
-        test_cache = Path(model_out_dir) / f"_cache_test_{cache_tag}.pkl"
+                model_out_dir = os.path.join(
+                    args.output_dir,
+                    cfg.name,
+                    f"topology_{topology}",
+                    f"protocol_{eval_protocol}",
+                )
+                Path(model_out_dir).mkdir(parents=True, exist_ok=True)
 
-        if val_cache.exists() and test_cache.exists() and not args.no_cache:
-            print(f"[infer] loading cached bundles from {model_out_dir} ...")
-            with open(val_cache,  "rb") as f: val_bundles  = pickle.load(f)
-            with open(test_cache, "rb") as f: test_bundles = pickle.load(f)
-            print(f"[infer] val={len(val_bundles)}  test={len(test_bundles)}  (from cache)")
-        else:
-            model = load_model(cfg, device)
-            print("[infer] running inference on val set ...")
-            val_bundles  = run_inference(
-                model, cfg.model_type, val_data,  val_thetas,
-                y_mean, y_std, args.ctx_frac, device,
-            )
-            print("[infer] running inference on test set ...")
-            test_bundles = run_inference(
-                model, cfg.model_type, test_data, test_thetas,
-                y_mean, y_std, args.ctx_frac, device,
-            )
-            with open(val_cache,  "wb") as f: pickle.dump(val_bundles,  f)
-            with open(test_cache, "wb") as f: pickle.dump(test_bundles, f)
-            print(f"[infer] bundles cached → {model_out_dir}")
+                # keep cache keys protocol/topology-specific to avoid accidental mixing
+                cache_tag = (
+                    f"ctx{int(args.ctx_frac*100):03d}_"
+                    f"hold{int(args.holdout_frac*100):03d}_"
+                    f"{eval_protocol}"
+                )
+                val_cache  = Path(model_out_dir) / f"_cache_val_{cache_tag}.pkl"
+                test_cache = Path(model_out_dir) / f"_cache_test_{cache_tag}.pkl"
 
-        # ── hparam search + build best postprocessors ───────────────────────
-        param_grids = _build_param_grids(args.dt)
-        best_pps:      List[PostProcessor] = [RawPostProcessor()]
-        best_val_maes: List[float]         = [float("nan")]
+                if val_cache.exists() and test_cache.exists() and not args.no_cache:
+                    print(f"[infer] loading cached bundles from {model_out_dir} ...")
+                    with open(val_cache, "rb") as f:
+                        val_bundles = pickle.load(f)
+                    with open(test_cache, "rb") as f:
+                        test_bundles = pickle.load(f)
+                    print(f"[infer] val={len(val_bundles)}  test={len(test_bundles)}  (from cache)")
+                else:
+                    model = load_model(cfg, device, topology=topology)
+                    print("[infer] running inference on val set ...")
+                    val_bundles = run_inference(
+                        model, cfg.model_type, val_data, val_thetas,
+                        y_mean, y_std, args.ctx_frac, eval_protocol, args.holdout_frac, device,
+                    )
+                    print("[infer] running inference on test set ...")
+                    test_bundles = run_inference(
+                        model, cfg.model_type, test_data, test_thetas,
+                        y_mean, y_std, args.ctx_frac, eval_protocol, args.holdout_frac, device,
+                    )
+                    with open(val_cache, "wb") as f:
+                        pickle.dump(val_bundles, f)
+                    with open(test_cache, "wb") as f:
+                        pickle.dump(test_bundles, f)
+                    print(f"[infer] bundles cached → {model_out_dir}")
 
-        for pp_key, pp_class in _PP_CLASSES.items():
-            grid = param_grids[pp_key]
-            print(f"[hpopt] {pp_key}  ({args.n_hparam_trials} trials) ...")
-            best_params, best_val_mae = random_search_hparams(
-                pp_class, grid, val_bundles,
-                n_trials=args.n_hparam_trials,
-                rng=rng,
-            )
-            best_pps.append(pp_class(**best_params))
-            best_val_maes.append(best_val_mae)
-            print(f"       → best params: {best_params}  val MAE={best_val_mae:.4f}")
+                # ── hparam search + build best postprocessors ───────────────
+                param_grids = _build_param_grids(args.dt)
+                best_pps:      List[PostProcessor] = [RawPostProcessor()]
+                best_val_maes: List[float]         = [float("nan")]
 
-        # ── final evaluation on test set ──────────────────────────────────────
-        print("[eval ] running final evaluation on test set ...")
-        eval_results: List[EvalResult] = []
-        for pp, val_mae in zip(best_pps, best_val_maes):
-            res         = evaluate_postprocessor(pp, test_bundles, val_mae_xz=val_mae)
-            m           = np.mean(res.maes_xz)
-            lat_infer   = np.mean(res.latencies_infer_s) * 1e3
-            lat_post    = np.mean(res.latencies_post_s)  * 1e3
-            lat_total   = lat_infer + lat_post
-            print(f"        {res.name:<16} MAE={m:.4f}  infer={lat_infer:.2f} ms  pp={lat_post:.3f} ms  total={lat_total:.2f} ms")
-            eval_results.append(res)
+                for pp_key, pp_class in _PP_CLASSES.items():
+                    grid = param_grids[pp_key]
+                    print(f"[hpopt] {pp_key}  ({args.n_hparam_trials} trials) ...")
+                    best_params, best_val_mae = random_search_hparams(
+                        pp_class, grid, val_bundles,
+                        n_trials=args.n_hparam_trials,
+                        rng=rng,
+                    )
+                    best_pps.append(pp_class(**best_params))
+                    best_val_maes.append(best_val_mae)
+                    print(f"       → best params: {best_params}  val MAE={best_val_mae:.4f}")
 
-        # ── reports ──────────────────────────────────────────────────────────
-        txt_path    = os.path.join(model_out_dir, "comparison_report.txt")
-        box_path    = os.path.join(model_out_dir, "mae_boxplot.png")
-        pareto_path = os.path.join(model_out_dir, "pareto_mae_latency.png")
-        qual_dir    = os.path.join(model_out_dir, "traj_plots")
+                # ── final evaluation on test set ────────────────────────────
+                print("[eval ] running final evaluation on test set ...")
+                eval_results: List[EvalResult] = []
+                for pp, val_mae in zip(best_pps, best_val_maes):
+                    res       = evaluate_postprocessor(pp, test_bundles, val_mae_xz=val_mae)
+                    m         = np.mean(res.maes_xz)
+                    lat_infer = np.mean(res.latencies_infer_s) * 1e3
+                    lat_post  = np.mean(res.latencies_post_s)  * 1e3
+                    lat_total = lat_infer + lat_post
+                    print(f"        {res.name:<16} MAE={m:.4f}  infer={lat_infer:.2f} ms  pp={lat_post:.3f} ms  total={lat_total:.2f} ms")
+                    eval_results.append(res)
 
-        save_txt_report(
-            eval_results, txt_path, cfg, args.topology,
-            args.ctx_frac, len(test_data), len(val_data),
-        )
-        save_mae_boxplot(eval_results, box_path)
-        save_pareto_plot(eval_results, pareto_path)
-        save_qualitative_plots(
-            eval_results, test_bundles, best_pps, qual_dir,
-            n_samples=args.n_qual_plots, rng=rng,
-        )
+                # ── reports (suffix includes topology + protocol) ───────────
+                suffix      = f"{topology}_{eval_protocol}"
+                txt_path    = os.path.join(model_out_dir, f"comparison_report_{suffix}.txt")
+                box_path    = os.path.join(model_out_dir, f"mae_boxplot_{suffix}.png")
+                pareto_path = os.path.join(model_out_dir, f"pareto_mae_latency_{suffix}.png")
+                qual_dir    = os.path.join(model_out_dir, f"traj_plots_{suffix}")
 
-        print(f"\n[done ] outputs saved to {model_out_dir}")
+                save_txt_report(
+                    eval_results, txt_path, cfg, topology, eval_protocol, args.holdout_frac,
+                    args.ctx_frac, len(test_data), len(val_data),
+                )
+                save_mae_boxplot(eval_results, box_path)
+                save_pareto_plot(eval_results, pareto_path)
+                save_qualitative_plots(
+                    eval_results, test_bundles, best_pps, qual_dir,
+                    n_samples=args.n_qual_plots, rng=rng,
+                )
+
+                print(f"\n[done ] outputs saved to {model_out_dir}")
 
     print("\n[done ] all models evaluated.")
 
