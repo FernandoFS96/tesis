@@ -1,60 +1,108 @@
 #!/usr/bin/env python3
 """
 eval_postprocessing_comparison.py
-==================================
-Modular benchmark of online trajectory postprocessors applied to theraw predictions of an ANP (or RANP) model.
+================================
+Benchmark of causal trajectory postprocessors applied to ANP/RANP predictions.
 
-Postprocessors implemented
---------------------------
+What this script does
+---------------------
+1) Loads one or more models (ANP or RANP) from either:
+     - a direct checkpoint (--ckpt), or
+     - an Optuna best_model directory (--optuna-best-model-dir), selecting the
+          topology-specific checkpoint automatically, or
+      - an Optuna root directory (--optuna-root-dir), auto-discovering all
+          studies/best_model folders recursively.
+
+2) Evaluates across topologies:
+    - default: aligned, ellipsoidal, random
+    - optional: only one topology with --single-topology --topology <name>
+    - in auto mode, if topology is inferred from study name, it evaluates that
+        topology for that model by default.
+
+3) Runs protocol-aware evaluation with strict separation between protocols:
+     - holdout: context from the first points; target is the final holdout tail
+     - inverse_holdout: context from the block immediately before holdout tail;
+         target remains the same final holdout tail
+     - both_holdouts: runs both protocols independently
+
+4) Performs inference over the full trajectory length so postprocessors operate
+     on complete temporal sequences, while MAE is computed only on protocol target
+     points via an explicit target mask.
+
+5) Tunes postprocessor hyperparameters with random search on validation data,
+     then evaluates the selected configuration on the test split.
+
+6) In auto mode, infers metadata from study names/paths when possible:
+    - model type (anp/ranp)
+    - version (v1, v2, ...)
+    - data variant (lowvar/highvar)
+    - topology (aligned/random/ellipsoidal)
+   and selects the data directory via --data-dir-lowvar / --data-dir-highvar.
+
+Postprocessors compared
+-----------------------
 1. Raw          - no postprocessing (baseline)
-2. EMA          - exponential moving average            [ alpha ]
-3. EMA-Var      - variance-weighted adaptive EMA        [ alpha_base, sigma_ref ]
-4. EKF          - Kalman filter, constant-velocity model [ sigma_a, R_scale ]
-5. UKF          - Unscented Kalman filter (CV)           [ sigma_a, R_scale, ukf_alpha ]
-6. Mahalanobis  - Gated KF: outlier rejection via Mahalanobis distance [ mahal_thresh, sigma_a, R_scale ]
-7. BiasAR       - Decaying bias correction from context residuals         [ rho ]
-8. AR-p         - AR(p) residual correction fitted on context window      [ p, ridge ]
+2. EMA          - exponential moving average                      [alpha]
+3. EMA-Var      - variance-weighted adaptive EMA                 [sigma_ref, alpha_min, alpha_max]
+4. EKF          - Kalman filter, constant-velocity model         [sigma_a, R_scale, dt, init_P]
+5. UKF          - Unscented Kalman filter (CV)                   [sigma_a, R_scale, dt, init_P, ukf_alpha]
+6. Mahalanobis  - gated KF with outlier rejection                [mahal_thresh, sigma_a, R_scale, dt, init_P]
+7. BiasAR       - decaying bias correction from context residuals [rho]
+8. AR-p         - AR(p) residual correction on context residuals [p, ridge]
 
-All postprocessors are strictly causal (use only t <= current timestep).
-EKF/UKF use the model's predicted variance (sigma^2) as the measurement noise matrix R, making them naturally exploit the probabilistic ANP output.
+All methods are strictly causal (use only information up to current timestep).
+EKF/UKF/Mahalanobis consume model-predicted variance as measurement noise.
 
-For each method with tunable hyperparameters a random search over a parameter grid is performed on the validation set.
-Final evaluation is on the held-out test set.
+Outputs
+-------
+Results are saved under:
+    --output-dir/<model_name>/topology_<topology>/protocol_<protocol>/
 
-Outputs (saved to --output-dir)
---------------------------------
-  comparison_report.txt   - summary table: MAE mean/std/median, latency
-  mae_boxplot.png         - per-method MAE box-plot
-  pareto_mae_latency.png  - MAE vs overhead latency scatter
-  traj_plots/             - qualitative overlay plots for a random subset
+Per protocol and topology, artifacts include:
+    - comparison_report_<topology>_<protocol>.txt
+    - mae_boxplot_<topology>_<protocol>.png
+    - pareto_mae_latency_<topology>_<protocol>.png
+    - traj_plots_<topology>_<protocol>/
+    - protocol-specific inference caches (_cache_val_*.pkl, _cache_test_*.pkl)
 
-Usage
------
-For example, to evaluate a single ANP model with ellipsoidal topology and low variance:
-cd /home/fernando/tesis/underwater-localization-topologies/src/evaluation
-python eval_postprocessing_comparison.py \
-    --ckpt /home/fernando/tesis/underwater-localization-topologies/src/training/results/optuna/anp_masked_lowvar_ellipsoidal_v1/best_model/topology_ellipsoidal/best_checkpoint.pth.tar \
-    --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-    --topology ellipsoidal \
-    --output-dir /home/fernando/tesis/underwater-localization-topologies/src/evaluation/results/postprocessing/anp_lowvar_ellipsoidal \
-    --ctx-frac 0.2 \
-    --n-hparam-trials 100 \
-    --seed 18
+This guarantees holdout and inverse_holdout outputs are never mixed, enabling
+direct side-by-side Pareto and report comparisons.
 
-to evaluate a single RANP model with ellipsoidal topology and low variance:
-cd /home/fernando/tesis/underwater-localization-topologies/src/evaluation
-python eval_postprocessing_comparison.py \
-    --ckpt /home/fernando/tesis/underwater-localization-topologies/src/training/results/optuna/ranp_masked_lowvar_ellipsoidal_v1/best_model/topology_ellipsoidal/best_checkpoint.pth.tar \
-    --model-type ranp \
-    --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-    --topology ellipsoidal \
-    --output-dir /home/fernando/tesis/underwater-localization-topologies/src/evaluation/results/postprocessing/ranp_lowvar_ellipsoidal \
-    --ctx-frac 0.2 \
-    --n-hparam-trials 100 \
-    --seed 18
+Usage examples
+--------------
+Run full evaluation (all topologies, both protocols) from Optuna best_model:
+    cd /home/fernando/tesis/underwater-localization-topologies/src/evaluation
 
-Additional models can be added via --extra-configs (JSON list of dicts):
-    --extra-configs '[{"name":"ranp_ellipsoidal","model_type":"ranp","ckpt":"<path>","rnn_type":"lstm","rnn_layers":1}]'
+    python eval_postprocessing_comparison.py \
+      --optuna-best-model-dir /home/fernando/tesis/underwater-localization-topologies/src/training/results/optuna/anp/v1/anp_masked_lowvar_ellipsoidal_v1/best_model \
+      --model-type anp \
+      --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+      --output-dir /home/fernando/tesis/underwater-localization-topologies/src/evaluation/results/postprocessing/full_run_anp_lowvar \
+      --ctx-frac 0.3 \
+      --holdout-frac 0.2 \
+      --n-hparam-trials 50 \
+      --seed 18
+
+Run one topology only:
+    python eval_postprocessing_comparison.py \
+            --optuna-best-model-dir <.../best_model> \
+            --model-type ranp \
+            --data-dir <.../data_processed_topologies_*> \
+            --single-topology --topology ellipsoidal
+
+Additional models can be evaluated with --extra-configs as a JSON list of
+ModelConfig-compatible dictionaries.
+
+Run automatic discovery from Optuna root (all discovered models):
+        python eval_postprocessing_comparison.py \
+            --optuna-root-dir /home/fernando/tesis/underwater-localization-topologies/src/training/results/optuna \
+            --data-dir-lowvar /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+            --data-dir-highvar /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
+            --output-dir /home/fernando/tesis/underwater-localization-topologies/src/evaluation/results/postprocessing/full_auto_optuna \
+            --ctx-frac 0.3 \
+            --holdout-frac 0.2 \
+            --n-hparam-trials 50 \
+            --seed 18
 """
 from __future__ import annotations
 
@@ -69,6 +117,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+import re
 
 import matplotlib
 matplotlib.use("Agg")
@@ -115,6 +164,10 @@ class ModelConfig:
     rnn_type: str = "lstm"
     rnn_layers: int = 1
     rnn_dropout: float = 0.0
+    # Optional metadata used by auto-discovery mode
+    version: str = ""
+    data_variant: str = ""      # "lowvar" | "highvar"
+    preferred_topology: str = "" # "aligned" | "ellipsoidal" | "random"
 
 
 def _infer_num_hidden(hparams_path: str, fallback: int = 128) -> int:
@@ -124,6 +177,152 @@ def _infer_num_hidden(hparams_path: str, fallback: int = 128) -> int:
             hp = json.load(f)
         return int(hp.get("num_hidden", fallback))
     return fallback
+
+
+def _resolve_optuna_study_dir(optuna_dir_hint: str) -> Tuple[str, str]:
+    """Resolve Optuna study directory and infer study name.
+    
+    optuna_dir_hint can point to:
+      - .../best_model (most specific)
+      - .../study_name
+      - .../study_name/best_model (also works)
+      - .../version/study_name
+      - etc.
+    
+    Returns (best_model_dir, study_name).
+    """
+    hint_path = Path(optuna_dir_hint).resolve()
+    
+    # If it ends with /best_model, use it directly
+    if hint_path.name == "best_model" and hint_path.exists():
+        study_name = hint_path.parent.name
+        return str(hint_path), study_name
+    
+    # If best_model exists as a subdirectory, use it
+    best_model_candidate = hint_path / "best_model"
+    if best_model_candidate.exists():
+        study_name = hint_path.name
+        return str(best_model_candidate), study_name
+    
+    # Otherwise assume hint_path is the study directory
+    study_name = hint_path.name
+    best_model_dir = hint_path / "best_model"
+    if best_model_dir.exists():
+        return str(best_model_dir), study_name
+    
+    # Fallback: assume hint_path is already best_model
+    return str(hint_path), study_name
+
+
+def _infer_model_metadata_from_study_name(
+    study_name: str,
+    fallback_model_type: str = "anp",
+) -> Tuple[str, str, str, str]:
+    """Infer (model_type, version, data_variant, topology) from study name/path.
+
+    Typical names: anp_masked_lowvar_ellipsoidal_v1, ranp_*_highvar_random_v2
+    """
+    s = study_name.lower()
+
+    model_type = "ranp" if "ranp" in s else ("anp" if "anp" in s else fallback_model_type)
+
+    m_ver = re.search(r"\b(v\d+)\b", s)
+    version = m_ver.group(1) if m_ver else ""
+
+    data_variant = ""
+    if "lowvar" in s or "low_variance" in s:
+        data_variant = "lowvar"
+    elif "highvar" in s or "high_variance" in s:
+        data_variant = "highvar"
+
+    topology = ""
+    for topo in ("aligned", "ellipsoidal", "random"):
+        if topo in s:
+            topology = topo
+            break
+
+    return model_type, version, data_variant, topology
+
+
+def _discover_optuna_model_configs(optuna_root_dir: str) -> List[ModelConfig]:
+    """Discover all Optuna studies under root and return ModelConfig entries.
+
+    Expected layout (flexible):
+      <root>/<model_type>/<version>/<study_name>/best_model
+    but any nested location containing a best_model dir is accepted.
+    """
+    root = Path(optuna_root_dir).resolve()
+    if not root.exists():
+        raise FileNotFoundError(f"Optuna root does not exist: {root}")
+
+    best_model_dirs = sorted(p for p in root.rglob("best_model") if p.is_dir())
+    cfgs: List[ModelConfig] = []
+    seen_names = set()
+
+    for best_dir in best_model_dirs:
+        study_dir = best_dir.parent
+        study_name = study_dir.name
+
+        # Infer model type from path first, then study name
+        path_parts = [part.lower() for part in best_dir.parts]
+        path_model_type = ""
+        if "ranp" in path_parts:
+            path_model_type = "ranp"
+        elif "anp" in path_parts:
+            path_model_type = "anp"
+
+        model_type, version, data_variant, topology = _infer_model_metadata_from_study_name(
+            study_name,
+            fallback_model_type=path_model_type or "anp",
+        )
+
+        # Build a stable readable name and avoid duplicates
+        base_name_parts = [model_type]
+        if version:
+            base_name_parts.append(version)
+        base_name_parts.append(study_name)
+        cfg_name = "_".join(base_name_parts)
+
+        if cfg_name in seen_names:
+            k = 2
+            while f"{cfg_name}_{k}" in seen_names:
+                k += 1
+            cfg_name = f"{cfg_name}_{k}"
+        seen_names.add(cfg_name)
+
+        cfgs.append(
+            ModelConfig(
+                name=cfg_name,
+                optuna_best_model_dir=str(best_dir),
+                model_type=model_type,
+                version=version,
+                data_variant=data_variant,
+                preferred_topology=topology,
+            )
+        )
+
+    if not cfgs:
+        raise FileNotFoundError(f"No 'best_model' directories found under: {root}")
+
+    print(f"[auto ] discovered {len(cfgs)} Optuna model(s) under {root}")
+    return cfgs
+
+
+def _resolve_data_dir_for_model(args: argparse.Namespace, cfg: ModelConfig) -> str:
+    """Select data directory for a model according to inferred data variant."""
+    if cfg.data_variant == "lowvar" and args.data_dir_lowvar:
+        return args.data_dir_lowvar
+    if cfg.data_variant == "highvar" and args.data_dir_highvar:
+        return args.data_dir_highvar
+    if args.data_dir:
+        return args.data_dir
+
+    wanted = cfg.data_variant or "(unknown variant)"
+    raise ValueError(
+        "No data directory available for model "
+        f"'{cfg.name}' (variant={wanted}). Provide --data-dir or "
+        "variant-specific --data-dir-lowvar / --data-dir-highvar."
+    )
 
 
 def load_model(cfg: ModelConfig, device: torch.device, topology: str) -> torch.nn.Module:
@@ -1428,22 +1627,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Online postprocessing comparison for ANP/RANP trajectory predictions.")
     # ── model ──
     p.add_argument("--ckpt", default=None, help="Path to best_checkpoint.pth.tar")
-    p.add_argument("--optuna-best-model-dir", default=None,
-                   help="Path to Optuna best_model directory. If provided, model is loaded via src.utils.load_optuna_model.")
+    p.add_argument("--optuna-best-model-dir", default=None, help="Path to Optuna study directory or best_model subdirectory (auto-detected). Can point to .../study_name, .../study_name/best_model, or nested structures like .../model_type/version/study_name.")
+    p.add_argument("--optuna-root-dir", default=None,
+                   help="Root directory containing many Optuna studies. The script auto-discovers all best_model folders and evaluates all discovered models.")
     p.add_argument("--model-type", default="anp", choices=["anp", "ranp"], help="Model architecture")
     p.add_argument("--model-name", default=None, help="Human-readable model name (default: inferred from --ckpt)")
     p.add_argument("--rnn-type", default="lstm", choices=["lstm", "gru"], help="(RANP only) RNN cell type")
     p.add_argument("--rnn-layers", type=int, default=1, help="(RANP only) number of RNN layers")
     # ── data ──
-    p.add_argument("--data-dir", required=True, help="Path to data_processed_topologies_* directory")
+    p.add_argument("--data-dir", default=None,
+                   help="Default data directory (used for all models unless variant-specific dirs are provided).")
+    p.add_argument("--data-dir-lowvar", default=None,
+                   help="Data directory for low-variance models (auto mode).")
+    p.add_argument("--data-dir-highvar", default=None,
+                   help="Data directory for high-variance models (auto mode).")
     p.add_argument("--topology", default="ellipsoidal", choices=["ellipsoidal", "random", "aligned"], help="Topology used only when --single-topology is set")
     p.add_argument("--single-topology", action="store_true", help="Evaluate only --topology (default evaluates aligned, ellipsoidal, random)")
     p.add_argument("--ctx-frac", type=float, default=0.3, help="Fraction of trajectory used as context (first points)")
-    p.add_argument("--holdout-frac", type=float, default=0.2,
-                   help="Fraction reserved as target holdout tail (default 0.2 => 10/50 points)")
-    p.add_argument("--eval-protocol", default="both_holdouts",
-                   choices=["holdout", "inverse_holdout", "both_holdouts"],
-                   help="Evaluation protocol. 'both_holdouts' runs and stores both separately.")
+    p.add_argument("--holdout-frac", type=float, default=0.2, help="Fraction reserved as target holdout tail (default 0.2 => 10/50 points)")
+    p.add_argument("--eval-protocol", default="both_holdouts", choices=["holdout", "inverse_holdout", "both_holdouts"], help="Evaluation protocol. 'both_holdouts' runs and stores both separately.")
     p.add_argument("--dt", type=float, default=1.0, help="Timestep in seconds (used by KF / EKF / UKF)")
     # ── output ──
     p.add_argument("--output-dir", default="results/postprocessing", help="Directory where reports and plots are saved")
@@ -1465,22 +1667,34 @@ def main() -> None:
     random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    if not args.ckpt and not args.optuna_best_model_dir:
-        raise ValueError("Provide either --ckpt or --optuna-best-model-dir")
+    if not args.ckpt and not args.optuna_best_model_dir and not args.optuna_root_dir:
+        raise ValueError("Provide one of: --ckpt, --optuna-best-model-dir, --optuna-root-dir")
 
-    # ── infer model name ────────────────────────────────────────────────────
+    # ── resolve Optuna paths and infer model name ────────────────────────────
+    if args.optuna_best_model_dir:
+        optuna_best_model_dir, study_name = _resolve_optuna_study_dir(args.optuna_best_model_dir)
+        args.optuna_best_model_dir = optuna_best_model_dir
+        if args.model_name is None:
+            args.model_name = study_name
+
     if args.model_name is None:
         if args.ckpt:
             args.model_name = Path(args.ckpt).parents[2].name  # study dir name
+        elif args.optuna_best_model_dir:
+            args.model_name = "anp_model"  # fallback
         else:
-            args.model_name = Path(args.optuna_best_model_dir).parent.name
+            args.model_name = "auto_discovered_models"
 
     # ── infer num_hidden from hparams.json if present ───────────────────────
+    num_hidden = 128
     if args.ckpt:
         hparams_candidate = Path(args.ckpt).parent.parent / "hparams.json"
         num_hidden = _infer_num_hidden(str(hparams_candidate))
-    else:
-        num_hidden = 128
+    elif args.optuna_best_model_dir:
+        # For Optuna, search for hparams.json in the study directory (parent of best_model)
+        study_dir = Path(args.optuna_best_model_dir).parent
+        hparams_candidate = study_dir / "hparams.json"
+        num_hidden = _infer_num_hidden(str(hparams_candidate))
 
     # ── primary model config ─────────────────────────────────────────────────
     model_cfg = ModelConfig(
@@ -1499,9 +1713,14 @@ def main() -> None:
         for d in json.loads(args.extra_configs):
             extra_cfgs.append(ModelConfig(**d))
 
-    all_cfgs = [model_cfg] + extra_cfgs
+    if args.optuna_root_dir:
+        all_cfgs = _discover_optuna_model_configs(args.optuna_root_dir)
+        # merge optional extra configs on top of discovered ones
+        all_cfgs.extend(extra_cfgs)
+    else:
+        all_cfgs = [model_cfg] + extra_cfgs
 
-    topologies = [args.topology] if args.single_topology else ["aligned", "ellipsoidal", "random"]
+    default_topologies = ["aligned", "ellipsoidal", "random"]
     eval_protocols = (
         ["holdout", "inverse_holdout"]
         if args.eval_protocol == "both_holdouts"
@@ -1510,12 +1729,29 @@ def main() -> None:
 
     # ── evaluate each model config ───────────────────────────────────────────
     for cfg in all_cfgs:
-        for topology in topologies:
+        model_data_dir = _resolve_data_dir_for_model(args, cfg)
+
+        if args.single_topology:
+            model_topologies = [args.topology]
+        elif cfg.preferred_topology:
+            model_topologies = [cfg.preferred_topology]
+        else:
+            model_topologies = default_topologies
+
+        model_tag = (
+            f"type={cfg.model_type}"
+            + (f" version={cfg.version}" if cfg.version else "")
+            + (f" data={cfg.data_variant}" if cfg.data_variant else "")
+            + (f" topo={cfg.preferred_topology}" if cfg.preferred_topology else "")
+        )
+        print(f"\n[model] {cfg.name} ({model_tag})")
+
+        for topology in model_topologies:
             # ── load data per topology ───────────────────────────────────────
-            print(f"\n[data ] loading topology={topology} from {args.data_dir}")
-            train_data, _   = load_split(args.data_dir, topology, "train")
-            val_data, meta  = load_split(args.data_dir, topology, "val")
-            test_data, meta = load_split(args.data_dir, topology, "test")
+            print(f"\n[data ] loading topology={topology} from {model_data_dir}")
+            train_data, _   = load_split(model_data_dir, topology, "train")
+            val_data, meta  = load_split(model_data_dir, topology, "val")
+            test_data, meta = load_split(model_data_dir, topology, "test")
             y_mean, y_std   = compute_y_stats(train_data, device)
             val_thetas      = meta.get("val_thetas",  [0.0] * len(val_data))
             test_thetas     = meta.get("test_thetas", [0.0] * len(test_data))
