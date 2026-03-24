@@ -1,9 +1,24 @@
 """
 eval_ood_sensor_restriction.py
 
-Evaluates masked ANP models under two stress axes:
-  1. Out-of-Distribution (OoD) acoustic channel variability
-  2. Sensor restriction at deployment time
+Evaluates ANP/RANP models under two stress axes:
+    1. Out-of-Distribution (OoD) acoustic channel variability
+    2. Sensor restriction at deployment time
+
+The script supports two loading modes:
+    A) Legacy direct checkpoints (--lowvar-ckpt / --highvar-ckpt)
+    B) Optuna auto-discovery (--optuna-root-dir), where studies are scanned and
+         grouped by (model_type, version, domain, topology).
+
+Topologies:
+    - Use --topology for a single one.
+    - Use --all-topologies to run aligned, ellipsoidal and random.
+
+Output structure (auto mode):
+    <output-dir>/topology_<topology>/model_<anp|ranp>/version_<vX>/...
+
+This enables side-by-side comparison between ANP and RANP under the same
+deployment scenarios and data domains (lowvar/highvar).
 
 Experiments
 -----------
@@ -32,14 +47,25 @@ Experiments
 
 Usage
 -----
+Optuna auto mode (recommended):
 python eval_ood_sensor_restriction.py \
-  --lowvar-ckpt /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies_masked/lowvar/masked_dropbernoulli_p0.2_train_mean_first/topology_ellipsoidal/best_checkpoint.pth.tar \
-  --highvar-ckpt /home/fernando/tesis/underwater-localization-topologies/src/training/results/ANP_topologies_masked/highvar/masked_dropbernoulli_p0.2_train_mean_first/topology_ellipsoidal/best_checkpoint.pth.tar \
-  --lowvar-data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-  --highvar-data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
-  --topology ellipsoidal \
-  --output-dir results/eval_ood_sensor_restriction \
-  --experiments 1.1,1.2,1.3,1.4,2.1
+    --optuna-root-dir /home/fernando/tesis/underwater-localization-topologies/src/training/results/optuna \
+    --lowvar-data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+    --highvar-data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
+    --all-topologies \
+    --versions v1,v2 \
+    --output-dir results/eval_ood_sensor_restriction \
+    --experiments 1.1,1.2,1.3,1.4,2.1
+
+Legacy direct-checkpoint mode (ANP):
+python eval_ood_sensor_restriction.py \
+    --lowvar-ckpt <path/to/lowvar/best_checkpoint.pth.tar> \
+    --highvar-ckpt <path/to/highvar/best_checkpoint.pth.tar> \
+    --lowvar-data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+    --highvar-data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
+    --topology ellipsoidal \
+    --output-dir results/eval_ood_sensor_restriction \
+    --experiments 1.1,1.2,1.3,1.4,2.1
 """
 
 import os
@@ -47,6 +73,7 @@ import sys
 import csv
 import pickle
 import argparse
+import re
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -54,12 +81,15 @@ import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use("Agg")
 from pathlib import Path
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from src.models.anp import LatentModel
+from src.utils.load_optuna_model import load_optuna_best_model
 from src.utils.nav_dataset import NavigationTrajectoryDataset
 
 # =============================================================================
@@ -100,6 +130,94 @@ def save_csv(path: Path, rows: list, header: list):
 # Model loading
 # =============================================================================
 
+@dataclass
+class LoadedEvalModel:
+    """Container for one loaded model plus metadata required by evaluation."""
+    domain: str              # lowvar | highvar
+    model_type: str          # anp | ranp
+    version: str             # v1 | v2 | ...
+    topology: str            # aligned | ellipsoidal | random
+    study_name: str
+    best_model_dir: Path
+    model: torch.nn.Module
+
+
+def _infer_study_metadata(study_name: str) -> Tuple[str, str, str, str]:
+    """Infer (model_type, version, domain, topology) from a study name."""
+    s = study_name.lower()
+
+    model_type = "ranp" if "ranp" in s else "anp"
+
+    m_ver = re.search(r"\b(v\d+)\b", s)
+    version = m_ver.group(1) if m_ver else "vunknown"
+
+    if "lowvar" in s or "low_variance" in s:
+        domain = "lowvar"
+    elif "highvar" in s or "high_variance" in s:
+        domain = "highvar"
+    else:
+        domain = "unknown"
+
+    topology = ""
+    for topo in ("aligned", "ellipsoidal", "random"):
+        if topo in s:
+            topology = topo
+            break
+
+    return model_type, version, domain, topology
+
+
+def discover_optuna_best_models(optuna_root_dir: Path) -> List[dict]:
+    """Discover all best_model folders and infer metadata from study names."""
+    if not optuna_root_dir.exists():
+        raise FileNotFoundError(f"Optuna root not found: {optuna_root_dir}")
+
+    discovered: List[dict] = []
+    for best_model_dir in sorted(p for p in optuna_root_dir.rglob("best_model") if p.is_dir()):
+        study_name = best_model_dir.parent.name
+        model_type, version, domain, topology = _infer_study_metadata(study_name)
+        discovered.append({
+            "study_name": study_name,
+            "best_model_dir": best_model_dir,
+            "model_type": model_type,
+            "version": version,
+            "domain": domain,
+            "topology": topology,
+        })
+
+    if not discovered:
+        raise FileNotFoundError(f"No 'best_model' directories found under: {optuna_root_dir}")
+
+    print(f"[auto ] discovered {len(discovered)} best_model folders")
+    return discovered
+
+
+def build_optuna_groups(
+    discovered: List[dict],
+    topology: str,
+    versions_filter: Optional[set],
+) -> Dict[Tuple[str, str], Dict[str, dict]]:
+    """Group discovered studies by (model_type, version), then by domain."""
+    groups: Dict[Tuple[str, str], Dict[str, dict]] = {}
+
+    for rec in discovered:
+        rec_topo = rec.get("topology", "")
+        if rec_topo and rec_topo != topology:
+            continue
+        if rec.get("domain") not in {"lowvar", "highvar"}:
+            continue
+        if versions_filter and rec.get("version") not in versions_filter:
+            continue
+
+        key = (rec["model_type"], rec["version"])
+        groups.setdefault(key, {})
+
+        dom = rec["domain"]
+        # If duplicates exist, keep first deterministic entry.
+        groups[key].setdefault(dom, rec)
+
+    return groups
+
 def load_masked_anp(ckpt_path: Path, device: torch.device) -> LatentModel:
     """Load a masked-trained ANP (input_dim = INPUT_DIM_AUG)."""
     if not ckpt_path.exists():
@@ -113,6 +231,27 @@ def load_masked_anp(ckpt_path: Path, device: torch.device) -> LatentModel:
     model.load_state_dict(ckpt["model"])
     model.eval()
     print(f"  Loaded model from {ckpt_path}")
+    return model
+
+
+def load_optuna_eval_model(
+    best_model_dir: Path,
+    topology: str,
+    model_type: str,
+    device: torch.device,
+) -> torch.nn.Module:
+    """Load ANP or RANP from an Optuna best_model directory."""
+    model, _, _ = load_optuna_best_model(
+        best_model_dir=best_model_dir,
+        topology=topology,
+        model_type=model_type,
+        num_sensors=NUM_SENSORS,
+        num_time_points=NUM_TIME_POINTS,
+        output_dim=OUTPUT_DIM,
+        device=device,
+    )
+    model.eval()
+    print(f"  Loaded {model_type.upper()} from {best_model_dir}")
     return model
 
 # =============================================================================
@@ -251,6 +390,7 @@ def augment_with_mask(
 
 def evaluate_model(
     model: LatentModel,
+    model_type: str,
     test_data: list,
     y_mean: torch.Tensor,
     y_std: torch.Tensor,
@@ -306,7 +446,18 @@ def evaluate_model(
             tar_x = x_aug[:, tar_idx, :]
             tar_y = y_norm[:, tar_idx, :]
 
-            y_pred_norm, _, _, _, _ = model(ctx_x, ctx_y, tar_x)
+            if model_type == "anp":
+                y_pred_norm, _, _, _, _ = model(ctx_x, ctx_y, tar_x)
+            elif model_type == "ranp":
+                y_pred_norm, _, _, _, _ = model(
+                    x_seq=x_aug,
+                    context_indices=ctx_idx,
+                    context_y=ctx_y,
+                    target_indices=tar_idx,
+                    target_y=None,
+                )
+            else:
+                raise ValueError(f"Unknown model_type: {model_type!r}")
 
             y_pred = y_pred_norm * y_std + y_mean
 
@@ -331,6 +482,7 @@ def evaluate_model(
 
 def evaluate_by_theta(
     model: LatentModel,
+    model_type: str,
     theta_groups: dict,
     y_mean: torch.Tensor,
     y_std: torch.Tensor,
@@ -345,7 +497,7 @@ def evaluate_by_theta(
     results = {}
     for theta, data in sorted(theta_groups.items()):
         mae = evaluate_model(
-            model, data, y_mean, y_std, x_means_SP, device,
+            model, model_type, data, y_mean, y_std, x_means_SP, device,
             context_frac=context_frac,
             sensor_mask_fn=sensor_mask_fn,
             batch_size=batch_size,
@@ -360,6 +512,7 @@ def evaluate_by_theta(
 
 def run_exp_11(
     models: dict,        # {"lowvar": model, "highvar": model} or subset
+    model_types: dict,   # {"lowvar": "anp|ranp", "highvar": ...}
     stats: dict,         # {"lowvar": (y_mean, y_std, x_means_SP), ...}
     test_data: dict,     # {"lowvar": test_list, "highvar": test_list}
     output_dir: Path,
@@ -381,7 +534,7 @@ def run_exp_11(
         for d_domain in test_domains:
             print(f"  model={m_domain}  data={d_domain} ...", end=" ", flush=True)
             mae = evaluate_model(
-                model, test_data[d_domain],
+                model, model_types[m_domain], test_data[d_domain],
                 y_mean, y_std, xm,
                 device, context_frac=context_frac,
             )
@@ -422,6 +575,7 @@ def run_exp_11(
 
 def run_exp_12(
     models: dict,
+    model_types: dict,
     stats: dict,
     theta_groups: dict,   # {"lowvar": {theta: data}, "highvar": {theta: data}}
     output_dir: Path,
@@ -448,7 +602,7 @@ def run_exp_12(
         for d_domain, tg in theta_groups.items():
             key    = (m_domain, d_domain)
             result = evaluate_by_theta(
-                model, tg, y_mean, y_std, xm,
+                model, model_types[m_domain], tg, y_mean, y_std, xm,
                 device, context_frac=context_frac,
             )
             curves[key] = result
@@ -497,6 +651,7 @@ def run_exp_12(
 
 def run_exp_13(
     models: dict,
+    model_types: dict,
     stats: dict,
     test_data: dict,
     output_dir: Path,
@@ -523,7 +678,7 @@ def run_exp_13(
                              desc=f"  ctx sweep model={m_domain} data={d_domain}",
                              leave=False):
                 mae = evaluate_model(
-                    model, test_data[d_domain],
+                    model, model_types[m_domain], test_data[d_domain],
                     y_mean, y_std, xm,
                     device, context_frac=frac,
                     eval_on_all_points=True, # fixed denominator for fair comparison
@@ -572,6 +727,7 @@ def run_exp_13(
 
 def run_exp_21(
     models: dict,
+    model_types: dict,
     stats: dict,
     test_data: dict,
     output_dir: Path,
@@ -612,7 +768,7 @@ def run_exp_21(
             fn = (lambda B, dev, rng, _p=p_drop:
                   make_bernoulli_mask(B, _p, dev, rng))
             mae = evaluate_model(
-                model, td, y_mean, y_std, xm,
+                model, model_types[m_domain], td, y_mean, y_std, xm,
                 device, context_frac=context_frac,
                 sensor_mask_fn=fn,
             )
@@ -626,7 +782,7 @@ def run_exp_21(
             fn = (lambda B, dev, rng, _k=k_act:
                   make_k_uniform_mask(B, _k, dev, rng))
             mae = evaluate_model(
-                model, td, y_mean, y_std, xm,
+                model, model_types[m_domain], td, y_mean, y_std, xm,
                 device, context_frac=context_frac,
                 sensor_mask_fn=fn,
             )
@@ -640,7 +796,7 @@ def run_exp_21(
             fn = (lambda B, dev, rng, _cs=cs:
                   make_cluster_mask(B, _cs, dev, rng))
             mae = evaluate_model(
-                model, td, y_mean, y_std, xm,
+                model, model_types[m_domain], td, y_mean, y_std, xm,
                 device, context_frac=context_frac,
                 sensor_mask_fn=fn,
             )
@@ -745,6 +901,7 @@ def _plot_combined_restriction(curves, domains, p_drops, k_actives, cluster_size
 
 def _predict_trajectory(
     model: LatentModel,
+    model_type: str,
     x: np.ndarray,           # (T, Dx)
     y: np.ndarray,           # (T, 3)
     y_mean: torch.Tensor,
@@ -770,7 +927,18 @@ def _predict_trajectory(
     tar_x = x_aug[:, tar_idx, :]
 
     with torch.no_grad():
-        y_pred_norm, _, _, _, _ = model(ctx_x, ctx_y, tar_x)
+        if model_type == "anp":
+            y_pred_norm, _, _, _, _ = model(ctx_x, ctx_y, tar_x)
+        elif model_type == "ranp":
+            y_pred_norm, _, _, _, _ = model(
+                x_seq=x_aug,
+                context_indices=ctx_idx,
+                context_y=ctx_y,
+                target_indices=tar_idx,
+                target_y=None,
+            )
+        else:
+            raise ValueError(f"Unknown model_type: {model_type!r}")
 
     y_pred = (y_pred_norm * y_std + y_mean).squeeze(0).cpu().numpy()  # (T, 3)
     return y_pred, n_ctx
@@ -778,6 +946,7 @@ def _predict_trajectory(
 
 def run_exp_15(
     models: dict,         # {"lowvar": model, "highvar": model}
+    model_types: dict,    # {"lowvar": "anp|ranp", "highvar": ...}
     stats: dict,          # {"lowvar": (y_mean, y_std, x_means_SP), ...}
     theta_groups: dict,   # {"lowvar": {theta: [samples]}, "highvar": {theta: [samples]}}
     output_dir: Path,
@@ -848,7 +1017,7 @@ def run_exp_15(
             for m_domain in domain_names:
                 y_mean, y_std, xm = stats[m_domain]
                 y_pred, _         = _predict_trajectory(
-                    models[m_domain], x_np, y_np,
+                    models[m_domain], model_types[m_domain], x_np, y_np,
                     y_mean, y_std, xm,
                     device, context_frac,
                 )
@@ -891,11 +1060,20 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
+    # Legacy direct-checkpoint mode
     p.add_argument("--lowvar-ckpt", type=Path, default=None, help="Path to best_checkpoint.pth.tar of the low-variance masked ANP.")
     p.add_argument("--highvar-ckpt", type=Path, default=None, help="Path to best_checkpoint.pth.tar of the high-variance masked ANP.")
+    # New Optuna auto mode
+    p.add_argument("--optuna-root-dir", type=Path, default=None,
+                   help="Root Optuna directory. If provided, auto-discovers ANP/RANP studies and runs grouped evaluations by model_type+version.")
+    p.add_argument("--versions", type=str, default="all",
+                   help="Comma-separated version filter for auto mode, e.g. 'v1,v2' (default: all).")
+
     p.add_argument("--lowvar-data-dir", type=Path, default=None, help="Root data dir for low-variance (contains topology_<X>/ subdirs).")
     p.add_argument("--highvar-data-dir", type=Path, default=None, help="Root data dir for high-variance.")
     p.add_argument("--topology", type=str,  default="ellipsoidal", choices=["ellipsoidal", "aligned", "random"])
+    p.add_argument("--all-topologies", action="store_true",
+                   help="Run all topologies (aligned, ellipsoidal, random). If false, only --topology is used.")
     p.add_argument("--output-dir", type=Path, default=Path("results/eval_ood_sensor_restriction"))
     p.add_argument("--context-frac", type=float, default=CONTEXT_FRAC_DEFAULT)
     p.add_argument("--batch-size", type=int, default=16)
@@ -914,81 +1092,151 @@ def main():
     experiments = set(args.experiments.replace(" ", "").split(","))
     print(f"Running experiments: {sorted(experiments)}")
 
-    topo = args.topology
-    print(f"Topology: {topo}")
+    topologies = ["aligned", "ellipsoidal", "random"] if args.all_topologies else [args.topology]
+    print(f"Topologies: {topologies}")
 
-    # ------------------------------------------------------------------
-    # Load models
-    # ------------------------------------------------------------------
-    models = {}
-    stats  = {}
-
-    for domain, ckpt_path, data_dir in [
-        ("lowvar",  args.lowvar_ckpt,  args.lowvar_data_dir),
-        ("highvar", args.highvar_ckpt, args.highvar_data_dir),
-    ]:
-        if ckpt_path is None:
-            print(f"  Skipping model '{domain}': no checkpoint provided.")
-            continue
-        if data_dir is None:
-            print(f"  Skipping model '{domain}': no data dir provided (needed for stats).")
-            continue
-
-        print(f"\nLoading {domain} model…")
-        model = load_masked_anp(ckpt_path, device)
-        models[domain] = model
-
-        print(f"  Computing training stats for {domain}…")
-        train_data, _, _, _ = load_topology_split(data_dir, topo)
-        y_mean, y_std, xm   = compute_train_stats(train_data, device)
-        stats[domain]        = (y_mean, y_std, xm)
-        print(f"  y_mean={y_mean.cpu().numpy()}, y_std={y_std.cpu().numpy()}")
-
-    if not models:
-        print("No models loaded. Provide at least one of --lowvar-ckpt / --highvar-ckpt.")
-        return
-
-    # ------------------------------------------------------------------
-    # Load test data (from each domain, using the provided data dirs)
-    # ------------------------------------------------------------------
-    test_data    = {}
-    theta_groups = {}
-
-    for domain, data_dir in [
-        ("lowvar",  args.lowvar_data_dir),
-        ("highvar", args.highvar_data_dir),
-    ]:
-        if data_dir is None:
-            continue
-        _, _, td, meta = load_topology_split(data_dir, topo)
-        test_data[domain]    = td
-        theta_groups[domain] = group_test_data_by_theta(td, meta)
-        print(f"  Test data {domain}: {len(td)} trajectories | "
-              f"thetas = {sorted(theta_groups[domain].keys())}")
+    if args.lowvar_data_dir is None or args.highvar_data_dir is None:
+        raise ValueError("Provide both --lowvar-data-dir and --highvar-data-dir")
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
+    def _run_one_group(
+        models: Dict[str, torch.nn.Module],
+        model_types: Dict[str, str],
+        stats: Dict[str, tuple],
+        test_data: Dict[str, list],
+        theta_groups: Dict[str, dict],
+        out_dir: Path,
+    ):
+        ctx = args.context_frac
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        if "1.1" in experiments:
+            run_exp_11(models, model_types, stats, test_data, out_dir, device, context_frac=ctx)
+
+        if "1.2" in experiments:
+            run_exp_12(models, model_types, stats, theta_groups, out_dir, device, context_frac=ctx)
+
+        if "1.3" in experiments:
+            run_exp_13(models, model_types, stats, test_data, out_dir, device)
+
+        if "2.1" in experiments:
+            run_exp_21(models, model_types, stats, test_data, out_dir, device, context_frac=ctx)
+
+        if "1.4" in experiments:
+            run_exp_15(models, model_types, stats, theta_groups, out_dir, device, context_frac=ctx)
+
     # ------------------------------------------------------------------
-    # Run experiments
+    # Auto Optuna mode
     # ------------------------------------------------------------------
-    ctx = args.context_frac
+    if args.optuna_root_dir is not None:
+        discovered = discover_optuna_best_models(args.optuna_root_dir)
+        versions_filter = None
+        if args.versions.strip().lower() != "all":
+            versions_filter = {v.strip().lower() for v in args.versions.split(",") if v.strip()}
 
-    if "1.1" in experiments:
-        run_exp_11(models, stats, test_data, args.output_dir, device, context_frac=ctx)
+        for topo in topologies:
+            print(f"\n{'='*88}\n[auto ] topology={topo}\n{'='*88}")
 
-    if "1.2" in experiments:
-        run_exp_12(models, stats, theta_groups, args.output_dir, device, context_frac=ctx)
+            groups = build_optuna_groups(discovered, topology=topo, versions_filter=versions_filter)
+            if not groups:
+                print(f"  No auto-discovered groups for topology={topo}")
+                continue
 
-    if "1.3" in experiments:
-        run_exp_13(models, stats, test_data, args.output_dir, device)
+            # Load test data once per topology/domain
+            test_data = {}
+            theta_groups = {}
+            for domain, data_dir in [("lowvar", args.lowvar_data_dir), ("highvar", args.highvar_data_dir)]:
+                _, _, td, meta = load_topology_split(data_dir, topo)
+                test_data[domain] = td
+                theta_groups[domain] = group_test_data_by_theta(td, meta)
+                print(f"  Test data {domain}: {len(td)} trajectories | thetas={sorted(theta_groups[domain].keys())}")
 
-    if "2.1" in experiments:
-        run_exp_21(models, stats, test_data, args.output_dir, device, context_frac=ctx)
+            for (model_type, version), by_domain in sorted(groups.items()):
+                print(f"\n[group] model_type={model_type} version={version} domains={sorted(by_domain.keys())}")
 
-    if "1.4" in experiments:
-        run_exp_15(models, stats, theta_groups, args.output_dir, device, context_frac=ctx)
+                models = {}
+                model_types = {}
+                stats = {}
 
-    print(f"\nAll results saved to: {args.output_dir}")
+                for domain in ["lowvar", "highvar"]:
+                    rec = by_domain.get(domain)
+                    if rec is None:
+                        continue
+
+                    best_model_dir = rec["best_model_dir"]
+                    model = load_optuna_eval_model(best_model_dir, topology=topo, model_type=model_type, device=device)
+                    models[domain] = model
+                    model_types[domain] = model_type
+
+                    data_dir = args.lowvar_data_dir if domain == "lowvar" else args.highvar_data_dir
+                    train_data, _, _, _ = load_topology_split(data_dir, topo)
+                    y_mean, y_std, xm = compute_train_stats(train_data, device)
+                    stats[domain] = (y_mean, y_std, xm)
+
+                if not models:
+                    print("  Skipping empty group (no valid domain model).")
+                    continue
+
+                out_dir = (
+                    args.output_dir
+                    / f"topology_{topo}"
+                    / f"model_{model_type}"
+                    / f"version_{version}"
+                )
+                _run_one_group(models, model_types, stats, test_data, theta_groups, out_dir)
+
+        print(f"\nAll auto-mode results saved under: {args.output_dir}")
+        return
+
+    # ------------------------------------------------------------------
+    # Legacy direct-checkpoint mode (ANP)
+    # ------------------------------------------------------------------
+    for topo in topologies:
+        print(f"\n{'='*88}\n[legacy] topology={topo}\n{'='*88}")
+
+        models = {}
+        model_types = {}
+        stats = {}
+
+        for domain, ckpt_path, data_dir in [
+            ("lowvar", args.lowvar_ckpt, args.lowvar_data_dir),
+            ("highvar", args.highvar_ckpt, args.highvar_data_dir),
+        ]:
+            if ckpt_path is None:
+                print(f"  Skipping model '{domain}': no checkpoint provided.")
+                continue
+            if data_dir is None:
+                print(f"  Skipping model '{domain}': no data dir provided (needed for stats).")
+                continue
+
+            print(f"\nLoading {domain} model…")
+            model = load_masked_anp(ckpt_path, device)
+            models[domain] = model
+            model_types[domain] = "anp"
+
+            print(f"  Computing training stats for {domain}…")
+            train_data, _, _, _ = load_topology_split(data_dir, topo)
+            y_mean, y_std, xm = compute_train_stats(train_data, device)
+            stats[domain] = (y_mean, y_std, xm)
+
+        if not models:
+            print("No models loaded. Provide --optuna-root-dir or at least one direct checkpoint.")
+            continue
+
+        test_data = {}
+        theta_groups = {}
+        for domain, data_dir in [("lowvar", args.lowvar_data_dir), ("highvar", args.highvar_data_dir)]:
+            if data_dir is None:
+                continue
+            _, _, td, meta = load_topology_split(data_dir, topo)
+            test_data[domain] = td
+            theta_groups[domain] = group_test_data_by_theta(td, meta)
+
+        out_dir = args.output_dir / f"topology_{topo}" / "model_anp" / "version_legacy"
+        _run_one_group(models, model_types, stats, test_data, theta_groups, out_dir)
+
+    print(f"\nAll results saved under: {args.output_dir}")
 
 if __name__ == "__main__":
     main()
