@@ -15,7 +15,12 @@ Topologies:
     - Use --all-topologies to run aligned, ellipsoidal and random.
 
 Output structure (auto mode):
-    <output-dir>/topology_<topology>/model_<anp|ranp>/version_<vX>/...
+    <output-dir>/topology_<topology>/model_<anp|ranp>/version_<vX>/protocol_<holdout|inverse_holdout>/...
+
+MAE protocols:
+    - holdout: context from the beginning, evaluate on final holdout tail
+    - inverse_holdout: context immediately before the same holdout tail
+    - both_holdouts: runs both protocols and saves each in its own folder
 
 This enables side-by-side comparison between ANP and RANP under the same
 deployment scenarios and data domains (lowvar/highvar).
@@ -54,6 +59,8 @@ python eval_ood_sensor_restriction.py \
     --highvar-data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
     --all-topologies \
     --versions v1,v2 \
+    --eval-protocol both_holdouts \
+    --holdout-frac 0.2 \
     --output-dir results/eval_ood_sensor_restriction \
     --experiments 1.1,1.2,1.3,1.4,2.1
 
@@ -64,6 +71,8 @@ python eval_ood_sensor_restriction.py \
     --lowvar-data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
     --highvar-data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
     --topology ellipsoidal \
+    --eval-protocol both_holdouts \
+    --holdout-frac 0.2 \
     --output-dir results/eval_ood_sensor_restriction \
     --experiments 1.1,1.2,1.3,1.4,2.1
 """
@@ -104,6 +113,7 @@ INPUT_DIM_AUG = INPUT_DIM_BASE + NUM_SENSORS # 2020  (base + mask features)
 MASK_FILL = "train_mean"
 EVAL_SEED = 18
 CONTEXT_FRAC_DEFAULT = 0.3
+HOLDOUT_FRAC_DEFAULT = 0.2
 # Sweeps
 CONTEXT_FRACS = [0.05, 0.10, 0.20, 0.30, 0.50, 0.70, 0.90]
 BERNOULLI_P_DROPS = [0.0, 0.1, 0.2, 0.4, 0.6, 0.8] # 0.0 = all sensors
@@ -386,6 +396,35 @@ def augment_with_mask(
     mask_feat = sensor_mask.view(B, 1, S).expand(B, T, S)
     return torch.cat([x_masked, mask_feat], dim=-1)  # (B, T, Dx+S)
 
+
+def _build_eval_indices(
+    total_points: int,
+    context_frac: float,
+    eval_protocol: str,
+    holdout_frac: float,
+    device: torch.device,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Create context and evaluation-target indices for holdout protocols."""
+    n_holdout = max(1, int(round(holdout_frac * total_points)))
+    holdout_start = total_points - n_holdout
+
+    if eval_protocol == "holdout":
+        max_ctx = max(1, holdout_start - 1)
+        ctx_size = max(1, min(max_ctx, int(round(context_frac * total_points))))
+        ctx_idx = torch.arange(ctx_size, device=device)
+        tar_idx = torch.arange(holdout_start, total_points, device=device)
+        return ctx_idx, tar_idx
+
+    if eval_protocol == "inverse_holdout":
+        max_ctx = max(1, holdout_start)
+        ctx_size = max(1, min(max_ctx, int(round(context_frac * total_points))))
+        ctx_start = holdout_start - ctx_size
+        ctx_idx = torch.arange(ctx_start, holdout_start, device=device)
+        tar_idx = torch.arange(holdout_start, total_points, device=device)
+        return ctx_idx, tar_idx
+
+    raise ValueError(f"Unknown eval_protocol: {eval_protocol!r}")
+
 # =============================================================================
 # Core evaluation routine
 # =============================================================================
@@ -399,20 +438,20 @@ def evaluate_model(
     x_means_SP: torch.Tensor,
     device: torch.device,
     context_frac: float = CONTEXT_FRAC_DEFAULT,
+    eval_protocol: str = "holdout",
+    holdout_frac: float = HOLDOUT_FRAC_DEFAULT,
     sensor_mask_fn=None,          # callable(B, device, rng) -> (B,S) mask
     batch_size: int = 16,
     seed: int = EVAL_SEED,
-    eval_on_all_points: bool = False,
 ) -> float:
     """
     Returns mean MAE (denormalised, metres) over the test set.
 
     sensor_mask_fn: if None, all sensors are available.
 
-    eval_on_all_points: if True, compute MAE over ALL T target points (including context points). 
-        This is the correct mode for a context fraction sweep: the denominator stays fixed across fractions, 
-        so differences in MAE reflect purely the benefit of more context, not a shift in which (potentially harder) points are being evaluated.
-        If False (default), MAE is computed only on non-context points, which is appropriate when context_frac is fixed across conditions.
+        MAE is computed on protocol target points only:
+            - holdout: final trajectory tail
+            - inverse_holdout: same final tail, with context immediately before it
     """
     rng = torch.Generator(device=device)
     rng.manual_seed(seed)
@@ -436,9 +475,14 @@ def evaluate_model(
 
             x_aug = augment_with_mask(x_batch, sensor_mask, x_means_SP)  # (B,T,Dx+S)
 
-            # context / target split
-            n_ctx = max(1, min(T - 1, int(round(context_frac * T))))
-            ctx_idx = torch.arange(n_ctx, device=device)          # "first" mode
+            # Context / target split according to evaluation protocol.
+            ctx_idx, eval_tar_idx = _build_eval_indices(
+                total_points=T,
+                context_frac=context_frac,
+                eval_protocol=eval_protocol,
+                holdout_frac=holdout_frac,
+                device=device,
+            )
             tar_idx = torch.arange(T, device=device)
 
             y_norm = (y_batch - y_mean) / y_std
@@ -463,19 +507,11 @@ def evaluate_model(
 
             y_pred = y_pred_norm * y_std + y_mean
 
-            if eval_on_all_points:
-                # MAE over the entire trajectory — denominator is fixed regardless
-                # of context_frac, isolating the pure effect of context size.
-                mae = F.l1_loss(y_pred, y_batch, reduction="mean").item()
-            else:
-                # MAE only on non-context points (default for fixed-context exps).
-                non_ctx = torch.ones(T, dtype=torch.bool, device=device)
-                non_ctx[ctx_idx] = False
-                mae = F.l1_loss(
-                    y_pred[:, non_ctx, :],
-                    y_batch[:, non_ctx, :],
-                    reduction="mean",
-                ).item()
+            mae = F.l1_loss(
+                y_pred[:, eval_tar_idx, :],
+                y_batch[:, eval_tar_idx, :],
+                reduction="mean",
+            ).item()
 
             total_mae += mae
             n_batches += 1
@@ -491,6 +527,8 @@ def evaluate_by_theta(
     x_means_SP: torch.Tensor,
     device: torch.device,
     context_frac: float = CONTEXT_FRAC_DEFAULT,
+    eval_protocol: str = "holdout",
+    holdout_frac: float = HOLDOUT_FRAC_DEFAULT,
     sensor_mask_fn=None,
     batch_size: int = 16,
     seed: int = EVAL_SEED,
@@ -501,6 +539,8 @@ def evaluate_by_theta(
         mae = evaluate_model(
             model, model_type, data, y_mean, y_std, x_means_SP, device,
             context_frac=context_frac,
+            eval_protocol=eval_protocol,
+            holdout_frac=holdout_frac,
             sensor_mask_fn=sensor_mask_fn,
             batch_size=batch_size,
             seed=seed,
@@ -520,6 +560,8 @@ def run_exp_11(
     output_dir: Path,
     device: torch.device,
     context_frac: float = CONTEXT_FRAC_DEFAULT,
+    eval_protocol: str = "holdout",
+    holdout_frac: float = HOLDOUT_FRAC_DEFAULT,
 ):
     print("\n[Exp 1.1] Bidirectional OoD matrix")
     exp_dir = output_dir / "exp_1.1_ood_matrix"
@@ -539,6 +581,8 @@ def run_exp_11(
                 model, model_types[m_domain], test_data[d_domain],
                 y_mean, y_std, xm,
                 device, context_frac=context_frac,
+                eval_protocol=eval_protocol,
+                holdout_frac=holdout_frac,
             )
             results[m_domain][d_domain] = mae
             print(f"MAE = {mae:.4f} m")
@@ -583,6 +627,8 @@ def run_exp_12(
     output_dir: Path,
     device: torch.device,
     context_frac: float = CONTEXT_FRAC_DEFAULT,
+    eval_protocol: str = "holdout",
+    holdout_frac: float = HOLDOUT_FRAC_DEFAULT,
 ):
     print("\n[Exp 1.2] Per-theta degradation curve")
     exp_dir = output_dir / "exp_1.2_theta_curve"
@@ -606,6 +652,8 @@ def run_exp_12(
             result = evaluate_by_theta(
                 model, model_types[m_domain], tg, y_mean, y_std, xm,
                 device, context_frac=context_frac,
+                eval_protocol=eval_protocol,
+                holdout_frac=holdout_frac,
             )
             curves[key] = result
             for theta, mae in result.items():
@@ -659,6 +707,8 @@ def run_exp_13(
     output_dir: Path,
     device: torch.device,
     context_fracs: list = CONTEXT_FRACS,
+    eval_protocol: str = "holdout",
+    holdout_frac: float = HOLDOUT_FRAC_DEFAULT,
 ):
     print("\n[Exp 1.3] Context-fraction sweep (OoD mitigator)")
     exp_dir = output_dir / "exp_1.3_context_sweep"
@@ -683,7 +733,8 @@ def run_exp_13(
                     model, model_types[m_domain], test_data[d_domain],
                     y_mean, y_std, xm,
                     device, context_frac=frac,
-                    eval_on_all_points=True, # fixed denominator for fair comparison
+                    eval_protocol=eval_protocol,
+                    holdout_frac=holdout_frac,
                 )
                 maes.append(mae)
                 rows.append([m_domain, d_domain, frac, mae])
@@ -714,8 +765,8 @@ def run_exp_13(
             )
 
     ax.set_xlabel("Context fraction (%)")
-    ax.set_ylabel("MAE (m) — all T points")
-    ax.set_title("MAE vs context size — OoD mitigator analysis\n(MAE computed over all trajectory points, denominator fixed)")
+    ax.set_ylabel(f"MAE (m) — {eval_protocol}")
+    ax.set_title(f"MAE vs context size — OoD mitigator analysis ({eval_protocol})")
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=9)
     plt.tight_layout()
@@ -735,6 +786,8 @@ def run_exp_21(
     output_dir: Path,
     device: torch.device,
     context_frac: float = CONTEXT_FRAC_DEFAULT,
+    eval_protocol: str = "holdout",
+    holdout_frac: float = HOLDOUT_FRAC_DEFAULT,
     bernoulli_p_drops: list  = BERNOULLI_P_DROPS,
     k_active_values: list    = K_ACTIVE_VALUES,
     cluster_sizes: list      = CLUSTER_SIZES,
@@ -772,6 +825,8 @@ def run_exp_21(
             mae = evaluate_model(
                 model, model_types[m_domain], td, y_mean, y_std, xm,
                 device, context_frac=context_frac,
+                eval_protocol=eval_protocol,
+                holdout_frac=holdout_frac,
                 sensor_mask_fn=fn,
             )
             label = f"p={p_drop:.1f}"
@@ -786,6 +841,8 @@ def run_exp_21(
             mae = evaluate_model(
                 model, model_types[m_domain], td, y_mean, y_std, xm,
                 device, context_frac=context_frac,
+                eval_protocol=eval_protocol,
+                holdout_frac=holdout_frac,
                 sensor_mask_fn=fn,
             )
             label = f"k={k_act}"
@@ -800,6 +857,8 @@ def run_exp_21(
             mae = evaluate_model(
                 model, model_types[m_domain], td, y_mean, y_std, xm,
                 device, context_frac=context_frac,
+                eval_protocol=eval_protocol,
+                holdout_frac=holdout_frac,
                 sensor_mask_fn=fn,
             )
             label = f"cluster={cs}"
@@ -911,7 +970,9 @@ def _predict_trajectory(
     x_means_SP: torch.Tensor,
     device: torch.device,
     context_frac: float,
-) -> tuple:                  # returns (y_pred: ndarray (T,3), n_ctx: int)
+    eval_protocol: str,
+    holdout_frac: float,
+) -> tuple:                  # returns (y_pred: ndarray (T,3), ctx_idx: ndarray, eval_idx: ndarray)
     """Run a single trajectory through the model and return denormalised predictions."""
     x_t = torch.tensor(x, dtype=torch.float32, device=device).unsqueeze(0)  # (1,T,Dx)
     y_t = torch.tensor(y, dtype=torch.float32, device=device).unsqueeze(0)  # (1,T,3)
@@ -920,8 +981,13 @@ def _predict_trajectory(
     sensor_mask = make_all_sensors_mask(1, device)                 # all sensors on
     x_aug = augment_with_mask(x_t, sensor_mask, x_means_SP)       # (1,T,Dx+S)
 
-    n_ctx   = max(1, min(T - 1, int(round(context_frac * T))))
-    ctx_idx = torch.arange(n_ctx, device=device)
+    ctx_idx, eval_tar_idx = _build_eval_indices(
+        total_points=T,
+        context_frac=context_frac,
+        eval_protocol=eval_protocol,
+        holdout_frac=holdout_frac,
+        device=device,
+    )
     tar_idx = torch.arange(T,     device=device)
 
     ctx_x = x_aug[:, ctx_idx, :]
@@ -943,7 +1009,7 @@ def _predict_trajectory(
             raise ValueError(f"Unknown model_type: {model_type!r}")
 
     y_pred = (y_pred_norm * y_std + y_mean).squeeze(0).cpu().numpy()  # (T, 3)
-    return y_pred, n_ctx
+    return y_pred, ctx_idx.cpu().numpy(), eval_tar_idx.cpu().numpy()
 
 
 def run_exp_15(
@@ -954,6 +1020,8 @@ def run_exp_15(
     output_dir: Path,
     device: torch.device,
     context_frac: float = CONTEXT_FRAC_DEFAULT,
+    eval_protocol: str = "holdout",
+    holdout_frac: float = HOLDOUT_FRAC_DEFAULT,
     n_traj: int = 4,
     seed: int = EVAL_SEED,
 ):
@@ -991,7 +1059,7 @@ def run_exp_15(
                                  figsize=(7 * ncols, 6 * nrows),
                                  squeeze=False)
         fig.suptitle(
-            f"Trajectory predictions — θ={theta:.1f}  (context={context_frac*100:.0f}%)",
+            f"Trajectory predictions — θ={theta:.1f}  (context={context_frac*100:.0f}%, protocol={eval_protocol})",
             fontsize=14, y=1.01,
         )
 
@@ -1000,36 +1068,55 @@ def run_exp_15(
             row = k // ncols
             col = k % ncols
 
-            # Compute n_ctx for reference lines
-            T     = y_np.shape[0]
-            n_ctx = max(1, min(T - 1, int(round(context_frac * T))))
+            # Compute protocol context/target indices for reference and MAE.
+            T = y_np.shape[0]
+            ctx_idx_np, _ = _build_eval_indices(
+                total_points=T,
+                context_frac=context_frac,
+                eval_protocol=eval_protocol,
+                holdout_frac=holdout_frac,
+                device=device,
+            )
+            ctx_idx_np = ctx_idx_np.cpu().numpy()
 
             # Ground truth
-            ax.plot(y_np[:, 0], y_np[:, 1],
-                    color="black", linewidth=1.8, zorder=3, label="Ground truth")
+            ax.plot(
+                y_np[:, 0],
+                y_np[:, 1],
+                color="black",
+                linewidth=1.8,
+                zorder=3,
+                label="Ground truth",
+            )
             # Context region
-            ax.plot(y_np[:n_ctx, 0], y_np[:n_ctx, 1],
-                    color="black", linewidth=4.0, alpha=0.35, zorder=2,
-                    label=f"Context ({context_frac*100:.0f}%)")
+            ax.plot(
+                y_np[ctx_idx_np, 0],
+                y_np[ctx_idx_np, 1],
+                color="black",
+                linewidth=4.0,
+                alpha=0.35,
+                zorder=2,
+                label=f"Context ({context_frac*100:.0f}%)",
+            )
             # Start / end markers
-            ax.plot(y_np[0,  0], y_np[0,  1], "go", markersize=8,  zorder=5, label="Start")
-            ax.plot(y_np[-1, 0], y_np[-1, 1], "ks", markersize=8,  zorder=5, label="End")
+            ax.plot(y_np[0, 0], y_np[0, 1], "go", markersize=8, zorder=5, label="Start")
+            ax.plot(y_np[-1, 0], y_np[-1, 1], "ks", markersize=8, zorder=5, label="End")
 
             # Model predictions
             for m_domain in domain_names:
                 y_mean, y_std, xm = stats[m_domain]
-                y_pred, _         = _predict_trajectory(
+                y_pred, _, eval_pred_idx = _predict_trajectory(
                     models[m_domain], model_types[m_domain], x_np, y_np,
                     y_mean, y_std, xm,
-                    device, context_frac,
+                    device, context_frac, eval_protocol, holdout_frac,
                 )
                 # MAE for this trajectory
-                mae_traj = float(np.mean(np.abs(y_pred - y_np)))
+                mae_traj = float(np.mean(np.abs(y_pred[eval_pred_idx] - y_np[eval_pred_idx])))
                 ax.plot(
                     y_pred[:, 0], y_pred[:, 1],
                     color=model_colors.get(m_domain, "gray"),
                     linewidth=1.5, linestyle="--", zorder=4,
-                    label=f"{model_labels.get(m_domain, m_domain)}  (MAE={mae_traj:.2f} m)",
+                    label=f"{model_labels.get(m_domain, m_domain)}  ({eval_protocol} MAE={mae_traj:.2f} m)",
                 )
 
             ax.set_xlabel("x (m)", fontsize=9)
@@ -1076,6 +1163,11 @@ def parse_args():
     p.add_argument("--topology", type=str,  default="ellipsoidal", choices=["ellipsoidal", "aligned", "random"])
     p.add_argument("--all-topologies", action="store_true",
                    help="Run all topologies (aligned, ellipsoidal, random). If false, only --topology is used.")
+    p.add_argument("--eval-protocol", type=str, default="both_holdouts",
+                   choices=["holdout", "inverse_holdout", "both_holdouts"],
+                   help="MAE protocol: holdout, inverse_holdout, or both_holdouts.")
+    p.add_argument("--holdout-frac", type=float, default=HOLDOUT_FRAC_DEFAULT,
+                   help=f"Final trajectory fraction used as holdout target (default: {HOLDOUT_FRAC_DEFAULT}).")
     p.add_argument("--output-dir", type=Path, default=Path("results/eval_ood_sensor_restriction"))
     p.add_argument("--context-frac", type=float, default=CONTEXT_FRAC_DEFAULT)
     p.add_argument("--batch-size", type=int, default=16)
@@ -1097,6 +1189,12 @@ def main():
     topologies = ["aligned", "ellipsoidal", "random"] if args.all_topologies else [args.topology]
     print(f"Topologies: {topologies}")
 
+    if args.eval_protocol == "both_holdouts":
+        protocols_to_run = ["holdout", "inverse_holdout"]
+    else:
+        protocols_to_run = [args.eval_protocol]
+    print(f"Eval protocols: {protocols_to_run} | holdout_frac={args.holdout_frac}")
+
     if args.lowvar_data_dir is None or args.highvar_data_dir is None:
         raise ValueError("Provide both --lowvar-data-dir and --highvar-data-dir")
 
@@ -1109,24 +1207,49 @@ def main():
         test_data: Dict[str, list],
         theta_groups: Dict[str, dict],
         out_dir: Path,
+        eval_protocol: str,
     ):
         ctx = args.context_frac
         out_dir.mkdir(parents=True, exist_ok=True)
 
         if "1.1" in experiments:
-            run_exp_11(models, model_types, stats, test_data, out_dir, device, context_frac=ctx)
+            run_exp_11(
+                models, model_types, stats, test_data, out_dir, device,
+                context_frac=ctx,
+                eval_protocol=eval_protocol,
+                holdout_frac=args.holdout_frac,
+            )
 
         if "1.2" in experiments:
-            run_exp_12(models, model_types, stats, theta_groups, out_dir, device, context_frac=ctx)
+            run_exp_12(
+                models, model_types, stats, theta_groups, out_dir, device,
+                context_frac=ctx,
+                eval_protocol=eval_protocol,
+                holdout_frac=args.holdout_frac,
+            )
 
         if "1.3" in experiments:
-            run_exp_13(models, model_types, stats, test_data, out_dir, device)
+            run_exp_13(
+                models, model_types, stats, test_data, out_dir, device,
+                eval_protocol=eval_protocol,
+                holdout_frac=args.holdout_frac,
+            )
 
         if "2.1" in experiments:
-            run_exp_21(models, model_types, stats, test_data, out_dir, device, context_frac=ctx)
+            run_exp_21(
+                models, model_types, stats, test_data, out_dir, device,
+                context_frac=ctx,
+                eval_protocol=eval_protocol,
+                holdout_frac=args.holdout_frac,
+            )
 
         if "1.4" in experiments:
-            run_exp_15(models, model_types, stats, theta_groups, out_dir, device, context_frac=ctx)
+            run_exp_15(
+                models, model_types, stats, theta_groups, out_dir, device,
+                context_frac=ctx,
+                eval_protocol=eval_protocol,
+                holdout_frac=args.holdout_frac,
+            )
 
     # ------------------------------------------------------------------
     # Auto Optuna mode
@@ -1180,13 +1303,18 @@ def main():
                     print("  Skipping empty group (no valid domain model).")
                     continue
 
-                out_dir = (
+                base_out_dir = (
                     args.output_dir
                     / f"topology_{topo}"
                     / f"model_{model_type}"
                     / f"version_{version}"
                 )
-                _run_one_group(models, model_types, stats, test_data, theta_groups, out_dir)
+                for protocol in protocols_to_run:
+                    out_dir = base_out_dir / f"protocol_{protocol}"
+                    _run_one_group(
+                        models, model_types, stats, test_data, theta_groups, out_dir,
+                        eval_protocol=protocol,
+                    )
 
         print(f"\nAll auto-mode results saved under: {args.output_dir}")
         return
@@ -1235,8 +1363,13 @@ def main():
             test_data[domain] = td
             theta_groups[domain] = group_test_data_by_theta(td, meta)
 
-        out_dir = args.output_dir / f"topology_{topo}" / "model_anp" / "version_legacy"
-        _run_one_group(models, model_types, stats, test_data, theta_groups, out_dir)
+        base_out_dir = args.output_dir / f"topology_{topo}" / "model_anp" / "version_legacy"
+        for protocol in protocols_to_run:
+            out_dir = base_out_dir / f"protocol_{protocol}"
+            _run_one_group(
+                models, model_types, stats, test_data, theta_groups, out_dir,
+                eval_protocol=protocol,
+            )
 
     print(f"\nAll results saved under: {args.output_dir}")
 

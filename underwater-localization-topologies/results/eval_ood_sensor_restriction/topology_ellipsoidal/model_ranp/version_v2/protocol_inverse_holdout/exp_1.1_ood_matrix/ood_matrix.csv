@@ -1,0 +1,5 @@
+model_domain,data_domain,mae
+lowvar,lowvar,6.430174231529236
+lowvar,highvar,8.044052124023438
+highvar,lowvar,14.788152694702148
+highvar,highvar,14.233200550079346
