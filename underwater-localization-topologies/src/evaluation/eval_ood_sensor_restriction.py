@@ -148,7 +148,9 @@ def _infer_study_metadata(study_name: str) -> Tuple[str, str, str, str]:
 
     model_type = "ranp" if "ranp" in s else "anp"
 
-    m_ver = re.search(r"\b(v\d+)\b", s)
+    # Note: word-boundary regex fails on names like "..._v1" because '_' is a
+    # word char. Match a version token after start or '_' and before end or '_'.
+    m_ver = re.search(r"(?:^|_)(v\d+)(?:$|_)", s)
     version = m_ver.group(1) if m_ver else "vunknown"
 
     if "lowvar" in s or "low_variance" in s:
