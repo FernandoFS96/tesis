@@ -56,7 +56,7 @@ EKF/UKF/Mahalanobis consume model-predicted variance as measurement noise.
 Outputs
 -------
 Results are saved under:
-    --output-dir/<model_name>/topology_<topology>/protocol_<protocol>/
+    --output-dir/version_<vX>/topology_<topology>/<lowvar|highvar>/<model_name>/protocol_<protocol>/
 
 Per protocol and topology, artifacts include:
     - comparison_report_<topology>_<protocol>.txt
@@ -96,6 +96,7 @@ ModelConfig-compatible dictionaries.
 Run automatic discovery from Optuna root (all discovered models):
         python eval_postprocessing_comparison.py \
             --optuna-root-dir /home/fernando/tesis/underwater-localization-topologies/src/training/results/optuna \
+            --versions v2 \
             --data-dir-lowvar /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
             --data-dir-highvar /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
             --output-dir /home/fernando/tesis/underwater-localization-topologies/src/evaluation/results/postprocessing/full_auto_optuna \
@@ -114,7 +115,7 @@ import random
 import sys
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import re
@@ -226,7 +227,8 @@ def _infer_model_metadata_from_study_name(
 
     model_type = "ranp" if "ranp" in s else ("anp" if "anp" in s else fallback_model_type)
 
-    m_ver = re.search(r"\b(v\d+)\b", s)
+    # Underscore-aware token match: captures v1 in names like ..._v1 and ..._v1_...
+    m_ver = re.search(r"(?:^|_)(v\d+)(?:$|_)", s)
     version = m_ver.group(1) if m_ver else ""
 
     data_variant = ""
@@ -323,6 +325,16 @@ def _resolve_data_dir_for_model(args: argparse.Namespace, cfg: ModelConfig) -> s
         f"'{cfg.name}' (variant={wanted}). Provide --data-dir or "
         "variant-specific --data-dir-lowvar / --data-dir-highvar."
     )
+
+
+def _infer_data_variant_from_data_dir(data_dir: str) -> str:
+    """Infer lowvar/highvar from data dir name as fallback for output grouping."""
+    s = str(data_dir).lower()
+    if "lowvar" in s or "low_variance" in s:
+        return "lowvar"
+    if "highvar" in s or "high_variance" in s:
+        return "highvar"
+    return "unknown"
 
 
 def load_model(cfg: ModelConfig, device: torch.device, topology: str) -> torch.nn.Module:
@@ -486,9 +498,8 @@ def run_inference(model: torch.nn.Module, model_type: str, data: list, thetas: l
         x_aug = augment_x_with_full_mask(x_raw)   # (1, T, INPUT_DIM)
 
         # Context / evaluation-target split according to selected protocol.
-        # Important: model prediction is run over the full trajectory (all T points)
-        # so postprocessors operate on a full sequence. The evaluation target
-        # is represented separately via target_mask.
+        # Important: model prediction is run over the full trajectory (all T points) so postprocessors operate on a full sequence. 
+        # The evaluation target is represented separately via target_mask.
         ctx_idx, eval_tar_idx = _build_eval_indices(
             total_points=T,
             context_frac=ctx_frac,
@@ -919,8 +930,7 @@ class UKFPostProcessor(PostProcessor):
     """Unscented Kalman Filter with constant-velocity dynamics.
 
     Uses the same ANP variance → R strategy as EKFPostProcessor.
-    For the linear CV model the results are numerically identical to EKF;
-    the sigma-point machinery is for easy extension to nonlinear motion models in the future.
+    For the linear CV model the results are numerically identical to EKF; the sigma-point machinery is for easy extension to nonlinear motion models in the future.
 
     Parameters
     ----------
@@ -1097,10 +1107,8 @@ class MahalanobisPostProcessor(PostProcessor):
 class BiasARPostProcessor(PostProcessor):
     """Decaying bias correction using the mean residual observed during context.
 
-    During the context window GT is known, so the model's prediction errors
-    (residuals) are directly observable.  Their mean is used as a
-    trajectory-specific bias estimate and subtracted from subsequent
-    predictions with exponential decay:
+    During the context window GT is known, so the model's prediction errors (residuals) are directly observable.
+    Their mean is used as a trajectory-specific bias estimate and subtracted from subsequent predictions with exponential decay:
 
         r_bias   = mean( raw[ctx] - gt[ctx] )
         output_t = raw_t - rho^(t - last_ctx_step) * r_bias
@@ -1627,20 +1635,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Online postprocessing comparison for ANP/RANP trajectory predictions.")
     # ── model ──
     p.add_argument("--ckpt", default=None, help="Path to best_checkpoint.pth.tar")
-    p.add_argument("--optuna-best-model-dir", default=None, help="Path to Optuna study directory or best_model subdirectory (auto-detected). Can point to .../study_name, .../study_name/best_model, or nested structures like .../model_type/version/study_name.")
-    p.add_argument("--optuna-root-dir", default=None,
-                   help="Root directory containing many Optuna studies. The script auto-discovers all best_model folders and evaluates all discovered models.")
+    p.add_argument("--optuna-best-model-dir", default=None, help="Path to Optuna study directory or best_model subdirectory. Can point to .../study_name, .../study_name/best_model, or nested structures like .../model_type/version/study_name.")
+    p.add_argument("--optuna-root-dir", default=None, help="Root directory containing many Optuna studies. The script auto-discovers all best_model folders and evaluates all discovered models.")
+    p.add_argument("--versions", default="all", help="Version filter in auto mode, e.g. 'v1', 'v2' or 'v1,v2' (default: all).")
     p.add_argument("--model-type", default="anp", choices=["anp", "ranp"], help="Model architecture")
     p.add_argument("--model-name", default=None, help="Human-readable model name (default: inferred from --ckpt)")
     p.add_argument("--rnn-type", default="lstm", choices=["lstm", "gru"], help="(RANP only) RNN cell type")
     p.add_argument("--rnn-layers", type=int, default=1, help="(RANP only) number of RNN layers")
     # ── data ──
-    p.add_argument("--data-dir", default=None,
-                   help="Default data directory (used for all models unless variant-specific dirs are provided).")
-    p.add_argument("--data-dir-lowvar", default=None,
-                   help="Data directory for low-variance models (auto mode).")
-    p.add_argument("--data-dir-highvar", default=None,
-                   help="Data directory for high-variance models (auto mode).")
+    p.add_argument("--data-dir", default=None, help="Default data directory (used for all models unless variant-specific dirs are provided).")
+    p.add_argument("--data-dir-lowvar", default=None, help="Data directory for low-variance models (auto mode).")
+    p.add_argument("--data-dir-highvar", default=None, help="Data directory for high-variance models (auto mode).")
     p.add_argument("--topology", default="ellipsoidal", choices=["ellipsoidal", "random", "aligned"], help="Topology used only when --single-topology is set")
     p.add_argument("--single-topology", action="store_true", help="Evaluate only --topology (default evaluates aligned, ellipsoidal, random)")
     p.add_argument("--ctx-frac", type=float, default=0.3, help="Fraction of trajectory used as context (first points)")
@@ -1715,6 +1720,16 @@ def main() -> None:
 
     if args.optuna_root_dir:
         all_cfgs = _discover_optuna_model_configs(args.optuna_root_dir)
+        if args.versions.strip().lower() != "all":
+            versions_filter = {v.strip().lower() for v in args.versions.split(",") if v.strip()}
+            before = len(all_cfgs)
+            all_cfgs = [cfg for cfg in all_cfgs if cfg.version and cfg.version.lower() in versions_filter]
+            print(f"[auto ] version filter={sorted(versions_filter)} -> {len(all_cfgs)}/{before} model(s)")
+            if not all_cfgs:
+                raise ValueError(
+                    "No models matched --versions filter. "
+                    "Check available versions and study naming under --optuna-root-dir."
+                )
         # merge optional extra configs on top of discovered ones
         all_cfgs.extend(extra_cfgs)
     else:
@@ -1730,6 +1745,8 @@ def main() -> None:
     # ── evaluate each model config ───────────────────────────────────────────
     for cfg in all_cfgs:
         model_data_dir = _resolve_data_dir_for_model(args, cfg)
+        output_data_variant = cfg.data_variant or _infer_data_variant_from_data_dir(model_data_dir)
+        output_version = cfg.version if cfg.version else "vunknown"
 
         if args.single_topology:
             model_topologies = [args.topology]
@@ -1764,8 +1781,10 @@ def main() -> None:
 
                 model_out_dir = os.path.join(
                     args.output_dir,
-                    cfg.name,
+                    f"version_{output_version}",
                     f"topology_{topology}",
+                    output_data_variant,
+                    cfg.name,
                     f"protocol_{eval_protocol}",
                 )
                 Path(model_out_dir).mkdir(parents=True, exist_ok=True)

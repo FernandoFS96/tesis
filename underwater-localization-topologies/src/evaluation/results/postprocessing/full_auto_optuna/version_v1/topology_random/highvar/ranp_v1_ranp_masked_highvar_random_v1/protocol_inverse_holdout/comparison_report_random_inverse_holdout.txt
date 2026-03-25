@@ -1,0 +1,48 @@
+================================================================================
+POSTPROCESSING COMPARISON — TRAJECTORY LOCALIZATION
+================================================================================
+  Model       : ranp_v1_ranp_masked_highvar_random_v1  (RANP)
+  Checkpoint  : Optuna dir: /home/fernando/tesis/underwater-localization-topologies/src/training/results/optuna/ranp/v1/ranp_masked_highvar_random_v1/best_model
+  Topology    : random
+  Protocol    : inverse_holdout
+  Holdout     : 20%  (final trajectory tail)
+  Context     : 30%  (first points)
+  Val / Test  : 60 / 30 trajectories
+  Date        : 2026-03-25 12:27:28
+
+MAE (evaluation target points)
+--------------------------------------------------------------------------------
+Method                   Mean        Std     Median    Val MAE
+--------------------------------------------------------------------------------
+Raw                   24.1792    15.0103    20.9281          -  (baseline)
+EMA                   23.9261    14.9452    20.1260    12.7455  (-0.2532)
+EMA-Var               24.2701    14.9895    20.8466    12.8387  (+0.0909)
+EKF                   11.1801     6.0788     9.1751     9.4984  (-12.9991)
+UKF                   10.8553     5.9555     9.3994     9.4970  (-13.3239)
+Mahalanobis           12.0184     5.2240    11.1988     8.0997  (-12.1609)
+BiasAR                18.5630     9.8506    17.0933    11.8529  (-5.6163)
+AR-p                  18.0216    17.3441    12.1085     9.9697  (-6.1576)
+
+Latency per trajectory (ms)   [Infer = model forward pass | PP = postprocessing overhead]
+--------------------------------------------------------------------------------
+Method               Infer (ms)      PP (ms)   Total (ms)   PP p95 (ms)
+--------------------------------------------------------------------------------
+Raw                       5.143        0.013        5.156         0.016
+EMA                       5.143        0.189        5.332         0.204
+EMA-Var                   5.143        0.801        5.943         0.866
+EKF                       5.143        3.084        8.227         3.173
+UKF                       5.143        6.795       11.937         7.989
+Mahalanobis               5.143        3.572        8.715         4.559
+BiasAR                    5.143        0.150        5.293         0.179
+AR-p                      5.143        1.073        6.216         1.091
+
+Best hyperparameters (from val-set random search)
+--------------------------------------------------------------------------------
+  EMA             : {"alpha": 0.95}
+  EMA-Var         : {"sigma_ref": 20.0, "alpha_min": 0.05, "alpha_max": 0.95}
+  EKF             : {"sigma_a": 1.0, "R_scale": 5.0, "dt": 1.0, "init_P": 1.0}
+  UKF             : {"sigma_a": 0.3, "R_scale": 0.5, "dt": 1.0, "init_P": 10.0, "ukf_alpha": 1.0}
+  Mahalanobis     : {"mahal_thresh": 2.0, "sigma_a": 2.0, "R_scale": 1.0, "dt": 1.0, "init_P": 100.0}
+  BiasAR          : {"rho": 0.95}
+  AR-p            : {"p": 2, "ridge": 100.0}
+================================================================================
