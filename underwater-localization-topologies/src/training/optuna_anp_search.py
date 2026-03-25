@@ -83,20 +83,20 @@ Run RANP (single process):
     With nohup and redirect to log:
     nohup python optuna_anp_search.py \
         --model ranp \
-        --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+        --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
         --topologies aligned \
         --objective-topology aligned \
         --mask-in-val \
-        --n-trials 200 \
+        --n-trials 100 \
         --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_ranp.db \
-        --study-name ranp_masked_lowvar_aligned_v2 \
+        --study-name ranp_masked_highvar_aligned_v2 \
         --constant-liar \
         --cleanup-trial-checkpoints \
         --disable-pruning \
-        > optuna_ranp_masked_lowvar_aligned_v2_$(date +%F_%H%M%S)_$$.log 2>&1 &
+        > nohup/optuna_ranp_masked_highvar_aligned_v2_$(date +%F_%H%M%S)_$$.log 2>&1 &
 
     monitor with:
-    tail -f optuna_ranp_masked_lowvar_aligned_v2_$(date +%F_%H%M%S)_$$.log 2>&1 &
+    tail -f nohup/optuna_ranp_masked_highvar_aligned_v2_$(date +%F_%H%M%S)_$$.log 2>&1 &
 
 Parallel: start multiple processes pointing to the same storage+study:
   # terminal 1
