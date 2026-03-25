@@ -1,0 +1,17 @@
+version,topology,data_variant,protocol,model_name,model_type,method,mae_mean,latency_total_ms,is_pareto_frontier
+v2,ellipsoidal,lowvar,inverse_holdout,anp_v2_anp_masked_lowvar_ellipsoidal_v2,anp,Raw,7.771453011035919,4.66737162011365,1
+v2,ellipsoidal,lowvar,inverse_holdout,anp_v2_anp_masked_lowvar_ellipsoidal_v2,anp,EMA,7.9359835386276245,4.831958205128709,0
+v2,ellipsoidal,lowvar,inverse_holdout,anp_v2_anp_masked_lowvar_ellipsoidal_v2,anp,EMA-Var,7.521378628412882,5.49776319724818,1
+v2,ellipsoidal,lowvar,inverse_holdout,anp_v2_anp_masked_lowvar_ellipsoidal_v2,anp,EKF,6.3687830626964566,7.716863400613267,1
+v2,ellipsoidal,lowvar,inverse_holdout,anp_v2_anp_masked_lowvar_ellipsoidal_v2,anp,UKF,6.368764911095301,11.32289026863873,1
+v2,ellipsoidal,lowvar,inverse_holdout,anp_v2_anp_masked_lowvar_ellipsoidal_v2,anp,Mahalanobis,6.369734619061152,8.375885267741978,0
+v2,ellipsoidal,lowvar,inverse_holdout,anp_v2_anp_masked_lowvar_ellipsoidal_v2,anp,BiasAR,7.748641848564148,4.806618213964005,1
+v2,ellipsoidal,lowvar,inverse_holdout,anp_v2_anp_masked_lowvar_ellipsoidal_v2,anp,AR-p,8.011496392885844,5.757533316500484,0
+v2,ellipsoidal,lowvar,inverse_holdout,ranp_v2_ranp_masked_lowvar_ellipsoidal_v2,ranp,Raw,9.547081700960796,5.06527095567435,0
+v2,ellipsoidal,lowvar,inverse_holdout,ranp_v2_ranp_masked_lowvar_ellipsoidal_v2,ranp,EMA,9.567896481355032,5.2285404565433655,0
+v2,ellipsoidal,lowvar,inverse_holdout,ranp_v2_ranp_masked_lowvar_ellipsoidal_v2,ranp,EMA-Var,10.158845241864523,5.994089491044481,0
+v2,ellipsoidal,lowvar,inverse_holdout,ranp_v2_ranp_masked_lowvar_ellipsoidal_v2,ranp,EKF,7.89925170938174,8.101874457982678,0
+v2,ellipsoidal,lowvar,inverse_holdout,ranp_v2_ranp_masked_lowvar_ellipsoidal_v2,ranp,UKF,8.32168423930804,11.560323190254469,0
+v2,ellipsoidal,lowvar,inverse_holdout,ranp_v2_ranp_masked_lowvar_ellipsoidal_v2,ranp,Mahalanobis,7.410760872562727,8.388154402685661,0
+v2,ellipsoidal,lowvar,inverse_holdout,ranp_v2_ranp_masked_lowvar_ellipsoidal_v2,ranp,BiasAR,7.8181645452976225,5.190383790371318,0
+v2,ellipsoidal,lowvar,inverse_holdout,ranp_v2_ranp_masked_lowvar_ellipsoidal_v2,ranp,AR-p,12.06572718222936,5.928988405503333,0

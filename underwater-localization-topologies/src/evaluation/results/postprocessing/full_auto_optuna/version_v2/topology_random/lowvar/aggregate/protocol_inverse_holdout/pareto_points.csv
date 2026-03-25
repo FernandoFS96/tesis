@@ -1,0 +1,17 @@
+version,topology,data_variant,protocol,model_name,model_type,method,mae_mean,latency_total_ms,is_pareto_frontier
+v2,random,lowvar,inverse_holdout,anp_v2_anp_masked_lowvar_random_v2,anp,Raw,11.925373069445293,4.54327775320659,1
+v2,random,lowvar,inverse_holdout,anp_v2_anp_masked_lowvar_random_v2,anp,EMA,10.309720591704052,4.711925835969547,1
+v2,random,lowvar,inverse_holdout,anp_v2_anp_masked_lowvar_random_v2,anp,EMA-Var,11.462635294596355,5.352426242704192,0
+v2,random,lowvar,inverse_holdout,anp_v2_anp_masked_lowvar_random_v2,anp,EKF,7.781282869974772,7.519875722937286,1
+v2,random,lowvar,inverse_holdout,anp_v2_anp_masked_lowvar_random_v2,anp,UKF,7.781282877922058,11.003346368670464,0
+v2,random,lowvar,inverse_holdout,anp_v2_anp_masked_lowvar_random_v2,anp,Mahalanobis,7.440905364354451,8.230732474476099,1
+v2,random,lowvar,inverse_holdout,anp_v2_anp_masked_lowvar_random_v2,anp,BiasAR,11.323709654808045,4.680833569727838,1
+v2,random,lowvar,inverse_holdout,anp_v2_anp_masked_lowvar_random_v2,anp,AR-p,11.586319955190023,5.553637561388314,0
+v2,random,lowvar,inverse_holdout,ranp_v2_ranp_masked_lowvar_random_v2,ranp,Raw,14.138228360811869,4.95685023876528,0
+v2,random,lowvar,inverse_holdout,ranp_v2_ranp_masked_lowvar_random_v2,ranp,EMA,13.91264169216156,5.109889743228753,0
+v2,random,lowvar,inverse_holdout,ranp_v2_ranp_masked_lowvar_random_v2,ranp,EMA-Var,14.120247983932495,5.787548236548901,0
+v2,random,lowvar,inverse_holdout,ranp_v2_ranp_masked_lowvar_random_v2,ranp,EKF,10.79573523203532,7.872086584878465,0
+v2,random,lowvar,inverse_holdout,ranp_v2_ranp_masked_lowvar_random_v2,ranp,UKF,10.951846329371135,11.513974781458577,0
+v2,random,lowvar,inverse_holdout,ranp_v2_ranp_masked_lowvar_random_v2,ranp,Mahalanobis,7.887824535369873,8.396852932249507,0
+v2,random,lowvar,inverse_holdout,ranp_v2_ranp_masked_lowvar_random_v2,ranp,BiasAR,11.441998966534932,5.101476229416828,0
+v2,random,lowvar,inverse_holdout,ranp_v2_ranp_masked_lowvar_random_v2,ranp,AR-p,10.644245799382528,6.003113944704334,0

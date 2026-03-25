@@ -1,0 +1,17 @@
+version,topology,data_variant,protocol,model_name,model_type,method,mae_mean,latency_total_ms,is_pareto_frontier
+v2,aligned,highvar,inverse_holdout,anp_v2_anp_masked_highvar_aligned_v2,anp,Raw,21.020777575174968,4.517365681628386,1
+v2,aligned,highvar,inverse_holdout,anp_v2_anp_masked_highvar_aligned_v2,anp,EMA,17.77452739079793,4.68830936588347,1
+v2,aligned,highvar,inverse_holdout,anp_v2_anp_masked_highvar_aligned_v2,anp,EMA-Var,13.21340099175771,5.314678931608796,1
+v2,aligned,highvar,inverse_holdout,anp_v2_anp_masked_highvar_aligned_v2,anp,EKF,9.338028971354166,7.419689046218991,1
+v2,aligned,highvar,inverse_holdout,anp_v2_anp_masked_highvar_aligned_v2,anp,UKF,9.363081653912863,11.111110433315236,0
+v2,aligned,highvar,inverse_holdout,anp_v2_anp_masked_highvar_aligned_v2,anp,Mahalanobis,9.335280426343282,8.272928666944305,1
+v2,aligned,highvar,inverse_holdout,anp_v2_anp_masked_highvar_aligned_v2,anp,BiasAR,18.56541797320048,4.645992256700993,1
+v2,aligned,highvar,inverse_holdout,anp_v2_anp_masked_highvar_aligned_v2,anp,AR-p,23.013121589024863,5.348266614601016,0
+v2,aligned,highvar,inverse_holdout,ranp_v2_ranp_masked_highvar_aligned_v2,ranp,Raw,13.095951588948568,6.079745820413033,1
+v2,aligned,highvar,inverse_holdout,ranp_v2_ranp_masked_highvar_aligned_v2,ranp,EMA,12.649059216181437,6.249364682783683,0
+v2,aligned,highvar,inverse_holdout,ranp_v2_ranp_masked_highvar_aligned_v2,ranp,EMA-Var,13.071673822402953,6.924827598656217,0
+v2,aligned,highvar,inverse_holdout,ranp_v2_ranp_masked_highvar_aligned_v2,ranp,EKF,7.331819645563761,9.116541780531406,1
+v2,aligned,highvar,inverse_holdout,ranp_v2_ranp_masked_highvar_aligned_v2,ranp,UKF,7.331710243225098,12.656708884363372,1
+v2,aligned,highvar,inverse_holdout,ranp_v2_ranp_masked_highvar_aligned_v2,ranp,Mahalanobis,7.403736670811971,9.622128431995709,0
+v2,aligned,highvar,inverse_holdout,ranp_v2_ranp_masked_highvar_aligned_v2,ranp,BiasAR,12.309315474828084,6.210360722616314,1
+v2,aligned,highvar,inverse_holdout,ranp_v2_ranp_masked_highvar_aligned_v2,ranp,AR-p,12.250840330123902,6.943936413154005,1

@@ -1,0 +1,17 @@
+version,topology,data_variant,protocol,model_name,model_type,method,mae_mean,latency_total_ms,is_pareto_frontier
+v2,ellipsoidal,lowvar,holdout,anp_v2_anp_masked_lowvar_ellipsoidal_v2,anp,Raw,9.877272669474284,4.713853953095773,1
+v2,ellipsoidal,lowvar,holdout,anp_v2_anp_masked_lowvar_ellipsoidal_v2,anp,EMA,9.927737613519033,4.875101661309599,0
+v2,ellipsoidal,lowvar,holdout,anp_v2_anp_masked_lowvar_ellipsoidal_v2,anp,EMA-Var,9.129372501373291,5.5591727218901115,1
+v2,ellipsoidal,lowvar,holdout,anp_v2_anp_masked_lowvar_ellipsoidal_v2,anp,EKF,8.622586115201313,7.666894545157749,1
+v2,ellipsoidal,lowvar,holdout,anp_v2_anp_masked_lowvar_ellipsoidal_v2,anp,UKF,8.62258402109146,11.172968746783832,0
+v2,ellipsoidal,lowvar,holdout,anp_v2_anp_masked_lowvar_ellipsoidal_v2,anp,Mahalanobis,8.62258402109146,8.667372019651035,1
+v2,ellipsoidal,lowvar,holdout,anp_v2_anp_masked_lowvar_ellipsoidal_v2,anp,BiasAR,9.820364236831665,4.850084629530707,1
+v2,ellipsoidal,lowvar,holdout,anp_v2_anp_masked_lowvar_ellipsoidal_v2,anp,AR-p,9.873044546445211,5.744559038430452,0
+v2,ellipsoidal,lowvar,holdout,ranp_v2_ranp_masked_lowvar_ellipsoidal_v2,ranp,Raw,11.662585973739624,5.103623804946741,0
+v2,ellipsoidal,lowvar,holdout,ranp_v2_ranp_masked_lowvar_ellipsoidal_v2,ranp,EMA,11.713951241970062,5.273007764481009,0
+v2,ellipsoidal,lowvar,holdout,ranp_v2_ranp_masked_lowvar_ellipsoidal_v2,ranp,EMA-Var,12.184478481610617,5.964863486588002,0
+v2,ellipsoidal,lowvar,holdout,ranp_v2_ranp_masked_lowvar_ellipsoidal_v2,ranp,EKF,11.903163226445516,8.7421317351982,0
+v2,ellipsoidal,lowvar,holdout,ranp_v2_ranp_masked_lowvar_ellipsoidal_v2,ranp,UKF,11.94058111111323,11.813484310793381,0
+v2,ellipsoidal,lowvar,holdout,ranp_v2_ranp_masked_lowvar_ellipsoidal_v2,ranp,Mahalanobis,11.991644994417827,8.974215070096156,0
+v2,ellipsoidal,lowvar,holdout,ranp_v2_ranp_masked_lowvar_ellipsoidal_v2,ranp,BiasAR,11.525413072109222,5.249341041781009,0
+v2,ellipsoidal,lowvar,holdout,ranp_v2_ranp_masked_lowvar_ellipsoidal_v2,ranp,AR-p,11.650090801715852,6.000144818487267,0

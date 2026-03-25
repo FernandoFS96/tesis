@@ -1,0 +1,17 @@
+version,topology,data_variant,protocol,model_name,model_type,method,mae_mean,latency_total_ms,is_pareto_frontier
+v2,random,lowvar,holdout,anp_v2_anp_masked_lowvar_random_v2,anp,Raw,16.79618657430013,4.682304454036056,1
+v2,random,lowvar,holdout,anp_v2_anp_masked_lowvar_random_v2,anp,EMA,15.988369409243266,4.849628025355438,1
+v2,random,lowvar,holdout,anp_v2_anp_masked_lowvar_random_v2,anp,EMA-Var,16.317048748334248,5.534177715890109,0
+v2,random,lowvar,holdout,anp_v2_anp_masked_lowvar_random_v2,anp,EKF,14.828625615437826,7.72428992204368,1
+v2,random,lowvar,holdout,anp_v2_anp_masked_lowvar_random_v2,anp,UKF,14.937199767430624,11.98116367838035,0
+v2,random,lowvar,holdout,anp_v2_anp_masked_lowvar_random_v2,anp,Mahalanobis,14.69296954870224,8.675423885385195,1
+v2,random,lowvar,holdout,anp_v2_anp_masked_lowvar_random_v2,anp,BiasAR,16.79618657430013,4.879978485405444,0
+v2,random,lowvar,holdout,anp_v2_anp_masked_lowvar_random_v2,anp,AR-p,16.796191056569416,5.556981513897577,0
+v2,random,lowvar,holdout,ranp_v2_ranp_masked_lowvar_random_v2,ranp,Raw,19.990456517537435,5.02580041065812,0
+v2,random,lowvar,holdout,ranp_v2_ranp_masked_lowvar_random_v2,ranp,EMA,19.867946767807005,5.187827084834376,0
+v2,random,lowvar,holdout,ranp_v2_ranp_masked_lowvar_random_v2,ranp,EMA-Var,19.960951912403107,5.889891895155111,0
+v2,random,lowvar,holdout,ranp_v2_ranp_masked_lowvar_random_v2,ranp,EKF,19.969830830891926,7.995779036233822,0
+v2,random,lowvar,holdout,ranp_v2_ranp_masked_lowvar_random_v2,ranp,UKF,19.961878760655722,11.440622480586171,0
+v2,random,lowvar,holdout,ranp_v2_ranp_masked_lowvar_random_v2,ranp,Mahalanobis,21.420964483420054,8.853563262770573,0
+v2,random,lowvar,holdout,ranp_v2_ranp_masked_lowvar_random_v2,ranp,BiasAR,19.990456517537435,5.150009202770888,0
+v2,random,lowvar,holdout,ranp_v2_ranp_masked_lowvar_random_v2,ranp,AR-p,19.984783871968588,5.87277243224283,0

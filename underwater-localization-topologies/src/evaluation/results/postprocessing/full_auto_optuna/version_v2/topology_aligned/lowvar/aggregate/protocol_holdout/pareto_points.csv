@@ -1,0 +1,17 @@
+version,topology,data_variant,protocol,model_name,model_type,method,mae_mean,latency_total_ms,is_pareto_frontier
+v2,aligned,lowvar,holdout,anp_v2_anp_masked_lowvar_aligned_v2,anp,Raw,24.767923855781554,4.954256839118898,1
+v2,aligned,lowvar,holdout,anp_v2_anp_masked_lowvar_aligned_v2,anp,EMA,24.697148843606314,5.117491725832224,1
+v2,aligned,lowvar,holdout,anp_v2_anp_masked_lowvar_aligned_v2,anp,EMA-Var,23.822660557428996,5.869722606924673,0
+v2,aligned,lowvar,holdout,anp_v2_anp_masked_lowvar_aligned_v2,anp,EKF,22.911755148569743,7.950206970175107,0
+v2,aligned,lowvar,holdout,anp_v2_anp_masked_lowvar_aligned_v2,anp,UKF,22.911613472302754,11.46772725818058,0
+v2,aligned,lowvar,holdout,anp_v2_anp_masked_lowvar_aligned_v2,anp,Mahalanobis,25.24333369731903,8.750910793120664,0
+v2,aligned,lowvar,holdout,anp_v2_anp_masked_lowvar_aligned_v2,anp,BiasAR,24.767923855781554,5.088664800859988,0
+v2,aligned,lowvar,holdout,anp_v2_anp_masked_lowvar_aligned_v2,anp,AR-p,24.902199920018514,5.832949831771354,0
+v2,aligned,lowvar,holdout,ranp_v2_ranp_masked_lowvar_aligned_v2,ranp,Raw,9.033824916680654,5.649340377810101,1
+v2,aligned,lowvar,holdout,ranp_v2_ranp_masked_lowvar_aligned_v2,ranp,EMA,8.87198246916135,5.847858459067842,0
+v2,aligned,lowvar,holdout,ranp_v2_ranp_masked_lowvar_aligned_v2,ranp,EMA-Var,9.003415683905283,6.75260229036212,0
+v2,aligned,lowvar,holdout,ranp_v2_ranp_masked_lowvar_aligned_v2,ranp,EKF,9.00485192934672,9.36128287576139,0
+v2,aligned,lowvar,holdout,ranp_v2_ranp_masked_lowvar_aligned_v2,ranp,UKF,9.00485192934672,12.500997291256985,0
+v2,aligned,lowvar,holdout,ranp_v2_ranp_masked_lowvar_aligned_v2,ranp,Mahalanobis,9.004853868484497,9.559694669830304,0
+v2,aligned,lowvar,holdout,ranp_v2_ranp_masked_lowvar_aligned_v2,ranp,BiasAR,8.807137503226597,5.783807346597314,1
+v2,aligned,lowvar,holdout,ranp_v2_ranp_masked_lowvar_aligned_v2,ranp,AR-p,8.99580267071724,6.717725524989268,0
