@@ -108,6 +108,7 @@ Run automatic discovery from Optuna root (all discovered models):
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import pickle
@@ -123,6 +124,7 @@ import re
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -1702,13 +1704,13 @@ def save_aggregate_pareto(points: List[dict], output_path: str, title: str) -> N
             )
 
     method_handles = [
-        plt.Line2D([0], [0], marker="o", color="w", label=m,
-                   markerfacecolor=method_colors[m], markersize=8)
+        Line2D([0], [0], marker="o", color="w", label=m,
+               markerfacecolor=method_colors[m], markersize=8)
         for m in methods
     ]
     model_handles = [
-        plt.Line2D([0], [0], marker=marker_by_model[k], color="black", label=k.upper(),
-                   linestyle="None", markersize=7)
+        Line2D([0], [0], marker=marker_by_model[k], color="black", label=k.upper(),
+               linestyle="None", markersize=7)
         for k in sorted(marker_by_model.keys())
     ]
     ax.legend(handles=method_handles + model_handles, fontsize=8, loc="upper right", ncol=2)
@@ -1748,15 +1750,18 @@ def save_aggregate_points_csv(points: List[dict], output_path: str) -> None:
             int(frontier[i]),
         ])
 
-    save_csv(
-        Path(output_path),
-        rows,
-        [
-            "version", "topology", "data_variant", "protocol",
-            "model_name", "model_type", "method",
-            "mae_mean", "latency_total_ms", "is_pareto_frontier",
-        ],
-    )
+    header = [
+        "version", "topology", "data_variant", "protocol",
+        "model_name", "model_type", "method",
+        "mae_mean", "latency_total_ms", "is_pareto_frontier",
+    ]
+    out_path = Path(output_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(header)
+        w.writerows(rows)
+    print(f"[csv  ] aggregate points → {out_path}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
