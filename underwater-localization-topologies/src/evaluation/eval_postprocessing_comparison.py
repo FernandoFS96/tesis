@@ -1627,6 +1627,138 @@ def save_qualitative_plots(
     print(f"[plot ] qualitative plots → {output_dir}")
 
 
+def _pareto_non_dominated_mask(lat_ms: np.ndarray, mae: np.ndarray) -> np.ndarray:
+    """Return boolean mask of non-dominated points for minimization on both axes."""
+    n = len(lat_ms)
+    keep = np.ones(n, dtype=bool)
+    for i in range(n):
+        if not keep[i]:
+            continue
+        dominated = (
+            (lat_ms <= lat_ms[i])
+            & (mae <= mae[i])
+            & ((lat_ms < lat_ms[i]) | (mae < mae[i]))
+        )
+        dominated[i] = False
+        if np.any(dominated):
+            keep[i] = False
+    return keep
+
+
+def save_aggregate_pareto(points: List[dict], output_path: str, title: str) -> None:
+    """Save aggregate Pareto scatter for one (version, topology, data, protocol) group."""
+    if not points:
+        return
+
+    lat_ms = np.array([p["latency_total_ms"] for p in points], dtype=np.float64)
+    mae = np.array([p["mae_mean"] for p in points], dtype=np.float64)
+    frontier = _pareto_non_dominated_mask(lat_ms, mae)
+
+    methods = sorted({p["method"] for p in points})
+    method_colors = {
+        m: c for m, c in zip(
+            methods,
+            matplotlib.colormaps["tab10"](np.linspace(0, 0.9, max(len(methods), 2)))
+        )
+    }
+    marker_by_model = {"anp": "o", "ranp": "s"}
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    for i, p in enumerate(points):
+        marker = marker_by_model.get(p["model_type"], "^")
+        color = method_colors.get(p["method"], "gray")
+        ax.scatter(
+            p["latency_total_ms"],
+            p["mae_mean"],
+            s=130 if frontier[i] else 90,
+            marker=marker,
+            color=color,
+            edgecolors="black" if frontier[i] else "none",
+            linewidths=0.7 if frontier[i] else 0.0,
+            alpha=0.9,
+            zorder=6 if frontier[i] else 4,
+        )
+
+    frontier_points = [points[i] for i in np.where(frontier)[0]]
+    frontier_points = sorted(frontier_points, key=lambda x: (x["latency_total_ms"], x["mae_mean"]))
+    if frontier_points:
+        ax.plot(
+            [p["latency_total_ms"] for p in frontier_points],
+            [p["mae_mean"] for p in frontier_points],
+            color="black",
+            linestyle="-",
+            linewidth=1.3,
+            alpha=0.8,
+            label="Pareto frontier",
+            zorder=5,
+        )
+        for p in frontier_points:
+            ax.annotate(
+                f"{p['model_type']}-{p['version']}-{p['method']}",
+                (p["latency_total_ms"], p["mae_mean"]),
+                textcoords="offset points",
+                xytext=(5, 3),
+                fontsize=8,
+            )
+
+    method_handles = [
+        plt.Line2D([0], [0], marker="o", color="w", label=m,
+                   markerfacecolor=method_colors[m], markersize=8)
+        for m in methods
+    ]
+    model_handles = [
+        plt.Line2D([0], [0], marker=marker_by_model[k], color="black", label=k.upper(),
+                   linestyle="None", markersize=7)
+        for k in sorted(marker_by_model.keys())
+    ]
+    ax.legend(handles=method_handles + model_handles, fontsize=8, loc="upper right", ncol=2)
+
+    ax.set_xlabel("Mean total latency (infer + PP, ms per trajectory)")
+    ax.set_ylabel("Mean MAE (m)")
+    ax.set_title(title)
+    ax.grid(True, alpha=0.35)
+    fig.tight_layout()
+
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150)
+    plt.close(fig)
+    print(f"[plot ] aggregate pareto → {output_path}")
+
+
+def save_aggregate_points_csv(points: List[dict], output_path: str) -> None:
+    """Save aggregate Pareto source points with frontier flag."""
+    if not points:
+        return
+    lat_ms = np.array([p["latency_total_ms"] for p in points], dtype=np.float64)
+    mae = np.array([p["mae_mean"] for p in points], dtype=np.float64)
+    frontier = _pareto_non_dominated_mask(lat_ms, mae)
+
+    rows = []
+    for i, p in enumerate(points):
+        rows.append([
+            p["version"],
+            p["topology"],
+            p["data_variant"],
+            p["protocol"],
+            p["model_name"],
+            p["model_type"],
+            p["method"],
+            p["mae_mean"],
+            p["latency_total_ms"],
+            int(frontier[i]),
+        ])
+
+    save_csv(
+        Path(output_path),
+        rows,
+        [
+            "version", "topology", "data_variant", "protocol",
+            "model_name", "model_type", "method",
+            "mae_mean", "latency_total_ms", "is_pareto_frontier",
+        ],
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Main
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1741,6 +1873,7 @@ def main() -> None:
         if args.eval_protocol == "both_holdouts"
         else [args.eval_protocol]
     )
+    aggregate_points: Dict[Tuple[str, str, str, str], List[dict]] = {}
 
     # ── evaluate each model config ───────────────────────────────────────────
     for cfg in all_cfgs:
@@ -1852,6 +1985,21 @@ def main() -> None:
                     print(f"        {res.name:<16} MAE={m:.4f}  infer={lat_infer:.2f} ms  pp={lat_post:.3f} ms  total={lat_total:.2f} ms")
                     eval_results.append(res)
 
+                    agg_key = (output_version, topology, output_data_variant, eval_protocol)
+                    aggregate_points.setdefault(agg_key, []).append(
+                        {
+                            "version": output_version,
+                            "topology": topology,
+                            "data_variant": output_data_variant,
+                            "protocol": eval_protocol,
+                            "model_name": cfg.name,
+                            "model_type": cfg.model_type,
+                            "method": res.name,
+                            "mae_mean": float(m),
+                            "latency_total_ms": float(lat_total),
+                        }
+                    )
+
                 # ── reports (suffix includes topology + protocol) ───────────
                 suffix      = f"{topology}_{eval_protocol}"
                 txt_path    = os.path.join(model_out_dir, f"comparison_report_{suffix}.txt")
@@ -1871,6 +2019,16 @@ def main() -> None:
                 )
 
                 print(f"\n[done ] outputs saved to {model_out_dir}")
+
+    # ── aggregate Pareto plots per version / topology / data / protocol ─────
+    for (version, topology, data_variant, protocol), points in sorted(aggregate_points.items()):
+        out_dir = Path(args.output_dir) / f"version_{version}" / f"topology_{topology}" / data_variant / "aggregate" / f"protocol_{protocol}"
+        title = (
+            f"Aggregate Pareto | version={version} | topology={topology} | "
+            f"data={data_variant} | protocol={protocol}"
+        )
+        save_aggregate_pareto(points, str(out_dir / "pareto_all_models.png"), title)
+        save_aggregate_points_csv(points, str(out_dir / "pareto_points.csv"))
 
     print("\n[done ] all models evaluated.")
 
