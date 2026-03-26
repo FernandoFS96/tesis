@@ -118,7 +118,7 @@ HOLDOUT_FRAC_DEFAULT = 0.2
 CONTEXT_FRACS = [0.05, 0.10, 0.20, 0.30, 0.50, 0.70, 0.90]
 BERNOULLI_P_DROPS = [0.0, 0.1, 0.2, 0.4, 0.6, 0.8] # 0.0 = all sensors
 K_ACTIVE_VALUES = [10, 9, 8, 7, 5, 3, 1] # sensors kept
-CLUSTER_SIZES = [1, 2, 3, 4, 5] # sensors REMOVED
+CLUSTER_SIZES = [1, 2, 3, 4, 5, 7] # sensors REMOVED
 
 # =============================================================================
 # I/O helpers
