@@ -8,7 +8,7 @@ POSTPROCESSING COMPARISON — TRAJECTORY LOCALIZATION
   Holdout     : 20%  (final trajectory tail)
   Context     : 30%  (first points)
   Val / Test  : 120 / 60 trajectories
-  Date        : 2026-03-25 13:56:47
+  Date        : 2026-03-26 13:29:09
 
 MAE (evaluation target points)
 --------------------------------------------------------------------------------
@@ -27,14 +27,14 @@ Latency per trajectory (ms)   [Infer = model forward pass | PP = postprocessing 
 --------------------------------------------------------------------------------
 Method               Infer (ms)      PP (ms)   Total (ms)   PP p95 (ms)
 --------------------------------------------------------------------------------
-Raw                       4.786        0.010        4.797         0.013
-EMA                       4.786        0.183        4.969         0.230
-EMA-Var                   4.786        0.810        5.596         0.873
-EKF                       4.786        2.999        7.785         3.357
-UKF                       4.786        6.513       11.299         6.971
-Mahalanobis               4.786        3.924        8.710         4.098
-BiasAR                    4.786        0.141        4.927         0.159
-AR-p                      4.786        1.038        5.824         1.132
+Raw                       4.786        0.011        4.797         0.014
+EMA                       4.786        0.194        4.980         0.223
+EMA-Var                   4.786        0.858        5.644         0.927
+EKF                       4.786        3.045        7.831         3.226
+UKF                       4.786        6.613       11.400         6.841
+Mahalanobis               4.786        3.924        8.710         4.034
+BiasAR                    4.786        0.160        4.947         0.166
+AR-p                      4.786        1.083        5.869         1.271
 
 Best hyperparameters (from val-set random search)
 --------------------------------------------------------------------------------
