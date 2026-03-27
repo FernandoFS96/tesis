@@ -49,19 +49,19 @@ Outputs
 Usage
 -----
   cd <project-root>
-  python finetune_ood.py \\
-    --optuna-root  src/training/results/optuna \\
-    --lowvar-data  data/data/data_processed_topologies_low_variance \\
-    --topologies   ellipsoidal \\
-    --model-types  anp,ranp \\
-    --study-version v2 \\
-    --n-traj       10,20,50,100,200,300,all \\
-    --strategies   decoder_heads,decoder_full,decoder_det_last,decoder_lat_last \\
-    --lr           1e-4 \\
-    --epochs       500 \\
-    --patience     50 \\
-    --context-fracs 0.1,0.2,0.3,0.4,0.5,0.6 \\
-    --output-dir   results/finetune_ood \\
+  python finetune_ood.py \
+    --optuna-root  /home/fernando/tesis/underwater-localization-topologies/src/training/results/optuna \
+    --lowvar-data  /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+    --topologies   ellipsoidal,random,aligned \
+    --model-types  anp,ranp \
+    --study-version v2 \
+    --n-traj       10,20,50,100,200,300,all \
+    --strategies   decoder_heads,decoder_full,decoder_det_last,decoder_lat_last \
+    --lr           1e-4 \
+    --epochs       1000 \
+    --patience     150 \
+    --context-fracs 0.1,0.2,0.3,0.4,0.5,0.6,0.7 \
+    --output-dir   results/finetune_ood \
     --device       cuda
 
 Notes
@@ -92,6 +92,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
+from tqdm.auto import tqdm
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -367,7 +368,15 @@ def finetune_model(
     log_rows: list    = []
     t_start           = time.time()
 
-    for epoch in range(epochs):
+    epoch_iter = tqdm(
+        range(epochs),
+        desc=f"FT[{strategy}|n={n_traj}]",
+        leave=False,
+        dynamic_ncols=True,
+        disable=not sys.stdout.isatty(),
+    )
+
+    for epoch in epoch_iter:
 
         # ── train ────────────────────────────────────────────────────────────
         model.train()
@@ -450,6 +459,12 @@ def finetune_model(
                 f"best_val_mae={best_val_mae:.4f} m"
             )
             break
+
+        epoch_iter.set_postfix({
+            "val_mae": f"{val_mae:.4f}",
+            "best": f"{best_val_mae:.4f}",
+            "pat": f"{patience_counter}/{patience}",
+        })
 
     total_time = time.time() - t_start
 
