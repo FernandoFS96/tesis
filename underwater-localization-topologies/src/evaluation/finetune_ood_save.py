@@ -18,7 +18,6 @@ Fine-tuning strategies
   decoder_full     – entire Decoder module
   decoder_det_last – Decoder + last cross-attention block of DeterministicEncoder
   decoder_lat_last – Decoder + mu/log_var heads of LatentEncoder
-  decoder_det_full – Decoder + all cross-attention blocks of DeterministicEncoder
 
 Data budgets
 ------------
@@ -49,43 +48,22 @@ Outputs
 
 Usage
 -----
-    cd <project-root>
-    python finetune_ood.py \
-        --optuna-root  /home/fernando/tesis/underwater-localization-topologies/src/training/results/optuna \
-        --lowvar-data  /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-        --topologies   ellipsoidal,random,aligned \
-        --model-types  anp,ranp \
-        --study-version v2 \
-        --n-traj       10,20,50,100,200,300,all \
-        --strategies   decoder_heads,decoder_full,decoder_det_last,decoder_det_full,decoder_lat_last \
-        --lr           1e-4 \
-        --epochs       1000 \
-        --patience     150 \
-        --context-fracs 0.1,0.2,0.3,0.4,0.5,0.6,0.7 \
-        --output-dir   results/finetune_ood \
-        --device       cuda
+  cd <project-root>
+  python finetune_ood.py \
+    --optuna-root  /home/fernando/tesis/underwater-localization-topologies/src/training/results/optuna \
+    --lowvar-data  /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+    --topologies   ellipsoidal,random,aligned \
+    --model-types  anp,ranp \
+    --study-version v2 \
+    --n-traj       10,20,50,100,200,300,all \
+    --strategies   decoder_heads,decoder_full,decoder_det_last,decoder_lat_last \
+    --lr           1e-4 \
+    --epochs       1000 \
+    --patience     150 \
+    --context-fracs 0.1,0.2,0.3,0.4,0.5,0.6,0.7 \
+    --output-dir   results/finetune_ood \
+    --device       cuda
 
-    Example for a single config:
-    python finetune_ood.py \
-        --optuna-root  /home/fernando/tesis/underwater-localization-topologies/src/training/results/optuna \
-        --lowvar-data  /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-        --topologies   ellipsoidal \
-        --model-types  anp \
-        --study-version v2 \
-        --strategies   decoder_heads,decoder_full,decoder_det_last,decoder_det_full,decoder_lat_last \
-        --skip-existing \
-        --device cuda
-
-    python finetune_ood.py \
-        --optuna-root   /home/fernando/tesis/underwater-localization-topologies/src/training/results/optuna \
-        --lowvar-data   /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-        --topologies    ellipsoidal,random,aligned \
-        --model-types   anp \
-        --strategies    decoder_heads,decoder_full,decoder_det_last,decoder_det_full,decoder_lat_last \
-        --n-seeds       3 \
-        --patience     5 \
-        --skip-existing \
-        --device        cuda
 Notes
 -----
 - Uses existing val split for early-stopping; test split for final evaluation.
@@ -114,8 +92,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
+from tqdm.auto import tqdm
 import matplotlib
-from tqdm import tqdm
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
@@ -140,7 +118,6 @@ DEFAULT_STRATEGIES = [
     "decoder_heads",
     "decoder_full",
     "decoder_det_last",
-    "decoder_det_full",
     "decoder_lat_last",
 ]
 DEFAULT_N_TRAJ = [10, 20, 50, 100, 200, 300, "all"]
@@ -149,14 +126,12 @@ STRATEGY_COLORS = {
     "decoder_heads":    "#2980b9",
     "decoder_full":     "#27ae60",
     "decoder_det_last": "#e67e22",
-    "decoder_det_full": "#c0392b",
     "decoder_lat_last": "#8e44ad",
 }
 STRATEGY_LABELS = {
     "decoder_heads":    "Heads only  (mean+var proj.)",
     "decoder_full":     "Full Decoder",
     "decoder_det_last": "Full Decoder + Det.Enc. last cross-attn",
-    "decoder_det_full": "Full Decoder + Full Det.Enc.",
     "decoder_lat_last": "Full Decoder + Lat.Enc. μ/σ heads",
 }
 
@@ -270,7 +245,7 @@ def get_finetune_params(model: nn.Module, strategy: str) -> List[nn.Parameter]:
         params += list(model.decoder.mean_projection.parameters()) #type: ignore
         params += list(model.decoder.log_var_projection.parameters()) #type: ignore
 
-    elif strategy in ("decoder_full", "decoder_det_last", "decoder_det_full", "decoder_lat_last"):
+    elif strategy in ("decoder_full", "decoder_det_last", "decoder_lat_last"):
         params += list(model.decoder.parameters()) #type: ignore
 
         if strategy == "decoder_det_last":
@@ -278,18 +253,12 @@ def get_finetune_params(model: nn.Module, strategy: str) -> List[nn.Parameter]:
                 model.deterministic_encoder.cross_attentions[-1].parameters() #type: ignore
             )
 
-        elif strategy == "decoder_det_full":
-            params += list(model.deterministic_encoder.parameters()) #type: ignore
-
         elif strategy == "decoder_lat_last":
             params += list(model.latent_encoder.mu.parameters()) #type: ignore
             params += list(model.latent_encoder.log_var.parameters()) #type: ignore
- 
+
     return params
 
-# =============================================================================
-# Unified forward pass (ANP / RANP)
-# =============================================================================
 
 def freeze_all_except(model: nn.Module, active_params: List[nn.Parameter]) -> None:
     """Freeze every parameter not in active_params."""
@@ -334,7 +303,7 @@ def model_forward(
 # Fine-tuning loop
 # =============================================================================
 
-def subsample_data(data: list, n: int | str, seed: int = 42) -> list:
+def subsample_data(data: list, n: int | str, seed: int = 18) -> list:
     """Return at most *n* trajectories sampled without replacement."""
     if n == "all" or int(n) >= len(data):
         return data
@@ -360,8 +329,8 @@ def finetune_model(
     device:      str | torch.device,
     save_dir:    Path,
     holdout_frac:    float = 0.2,
-    es_context_frac: float = 0.4,
-    seed:            int   = 0,
+    es_context_frac: float = 0.3,
+    seed:        int = 0,
 ) -> Dict:
     """
     Fine-tune *model* in-place using the given strategy and data budget.
@@ -371,12 +340,10 @@ def finetune_model(
     The per-epoch log is written to save_dir / finetune_log.csv.
     """
     save_dir.mkdir(parents=True, exist_ok=True)
-
-    # ── subsample fine-tuning data ───────────────────────────────────────────
     # ── reproducibilidad de la run ────────────────────────────────────────────
     torch.manual_seed(seed)
     np.random.seed(seed)
-
+    # ── subsample fine-tuning data ───────────────────────────────────────────
     ft_data      = subsample_data(train_data, n_traj, seed=seed)
     train_loader = make_dataloader(ft_data, batch_size, shuffle=True)
     val_loader   = make_dataloader(val_data, batch_size, shuffle=False)
@@ -499,7 +466,7 @@ def finetune_model(
         epoch_iter.set_postfix({
             "val_mae": f"{val_mae:.4f}",
             "best": f"{best_val_mae:.4f}",
-            "ES": f"{patience_counter}/{patience}",
+            "pat": f"{patience_counter}/{patience}",
         })
 
     total_time = time.time() - t_start
@@ -593,7 +560,6 @@ def _n_traj_x_axis(n_traj_values):
 
 def plot_mae_vs_ntraj(
     mae_results:       Dict,
-    mae_std_results:   Dict,
     ood_by_frac:       Dict[float, float],
     oracle_by_frac:    Dict[float, float],
     strategies:        List[str],
@@ -614,23 +580,15 @@ def plot_mae_vs_ntraj(
     )
 
     for strategy in strategies:
-        y     = np.array([
+        y = [
             mae_results.get((strategy, str(n)), {}).get(context_frac, float("nan"))
             for n in n_traj_values
-        ], dtype=float)
-        y_std = np.array([
-            mae_std_results.get((strategy, str(n)), {}).get(context_frac, 0.0)
-            for n in n_traj_values
-        ], dtype=float)
+        ]
         ax.plot(
             ticks, y, marker="o",
             color=STRATEGY_COLORS[strategy],
             label=STRATEGY_LABELS[strategy],
             linewidth=2, markersize=7
-        )
-        ax.fill_between(
-            ticks, y - y_std, y + y_std,
-            alpha=0.15, color=STRATEGY_COLORS[strategy]
         )
 
     ax.set_xticks(ticks)
@@ -653,7 +611,6 @@ def plot_mae_vs_ntraj(
 
 def plot_gap_closed(
     mae_results:       Dict,
-    mae_std_results:   Dict,
     ood_by_frac:       Dict[float, float],
     oracle_by_frac:    Dict[float, float],
     strategies:        List[str],
@@ -674,24 +631,16 @@ def plot_gap_closed(
     ax.axhline(  0.0, color="#e74c3c", ls="--", lw=1.5, label="OoD baseline  (0 %)")
 
     for strategy in strategies:
-        y, y_lo, y_hi = [], [], []
+        y = []
         for n in n_traj_values:
-            mae  = mae_results.get((strategy, str(n)), {}).get(context_frac, float("nan"))
-            std  = mae_std_results.get((strategy, str(n)), {}).get(context_frac, 0.0)
-            pct  = 100.0 * (ood - mae) / gap if np.isfinite(mae) else float("nan")
-            plo  = 100.0 * (ood - (mae + std)) / gap if np.isfinite(mae) else float("nan")
-            phi  = 100.0 * (ood - (mae - std)) / gap if np.isfinite(mae) else float("nan")
-            y.append(pct); y_lo.append(plo); y_hi.append(phi)
-        y_arr = np.array(y, dtype=float)
+            mae = mae_results.get((strategy, str(n)), {}).get(context_frac, float("nan"))
+            pct = 100.0 * (ood - mae) / gap if np.isfinite(mae) else float("nan")
+            y.append(pct)
         ax.plot(
-            ticks, y_arr, marker="o",
+            ticks, y, marker="o",
             color=STRATEGY_COLORS[strategy],
             label=STRATEGY_LABELS[strategy],
             linewidth=2, markersize=7
-        )
-        ax.fill_between(
-            ticks, np.array(y_lo, dtype=float), np.array(y_hi, dtype=float),
-            alpha=0.15, color=STRATEGY_COLORS[strategy]
         )
 
     ax.set_xticks(ticks)
@@ -951,24 +900,15 @@ def aggregate_seed_results(
     seed_time_list: List[float],
 ) -> Tuple[Dict[float, float], Dict[float, float], float, float]:
     """
-    Agrega resultados de N seeds independientes de fine-tuning.
-    Devuelve (mae_mean, mae_std, time_mean, time_std) donde
-    mae_mean y mae_std son dicts {context_frac: valor}.
+    Agrega resultados de N seeds.
+    Devuelve (mae_mean, mae_std, time_mean, time_std) donde mae_mean y mae_std son dicts {frac: valor}.
     """
     fracs = list(seed_mae_list[0].keys())
-    mae_mean = {
-        f: float(np.mean([r[f] for r in seed_mae_list]))
-        for f in fracs
-    }
-    mae_std = {
-        f: float(np.std([r[f] for r in seed_mae_list], ddof=1))
-        if len(seed_mae_list) > 1 else 0.0
-        for f in fracs
-    }
+    mae_mean = {f: float(np.mean([r[f] for r in seed_mae_list])) for f in fracs}
+    mae_std = {f: float(np.std([r[f] for r in seed_mae_list], ddof=1)) if len(seed_mae_list) > 1 else 0.0 for f in fracs}
     time_mean = float(np.mean(seed_time_list))
     time_std  = float(np.std(seed_time_list, ddof=1)) if len(seed_time_list) > 1 else 0.0
     return mae_mean, mae_std, time_mean, time_std
-
 
 def run_experiment(
     topology:      str,
@@ -1071,137 +1011,104 @@ def run_experiment(
     # ── 5. Fine-tuning loop ───────────────────────────────────────────────────
     strategies    = args.strategies
     n_traj_values = args.n_traj
-    mae_results      : Dict = {}
-    mae_std_results  : Dict = {}
-    time_results     : Dict = {}
-    summary_rows     : List = []
+    mae_results   : Dict = {}
+    time_results  : Dict = {}
+    summary_rows  : List = []
 
     for strategy in strategies:
         print(f"\n[ft] ── Strategy: {strategy} ──")
         for n in n_traj_values:
-            n_str  = str(n)
-            n_seeds = args.n_seeds
+            n_str   = str(n)
+            ft_dir  = out_base / "checkpoints" / strategy / f"n_traj_{n_str}"
+            ckpt    = ft_dir / "finetuned_checkpoint.pth.tar"
 
-            # acumuladores por seed
-            seed_mae_list:    List[Dict[float, float]] = []
-            seed_time_list:   List[float]              = []
-            seed_epochs:      List[int]                = []
-            seed_n_params:    List[int]                = []
-            seed_n_traj_used: List[int]                = []
-
-            for seed in range(n_seeds):
-                seed_dir = out_base / "checkpoints" / strategy / f"n_traj_{n_str}" / f"seed_{seed}"
-                ckpt     = seed_dir / "finetuned_checkpoint.pth.tar"
-
-                if args.skip_existing and ckpt.exists():
-                    eval_json = seed_dir / "eval_results.json"
-                    if eval_json.exists():
-                        with open(eval_json) as ef:
-                            saved = json.load(ef)
-                        seed_mae_list.append({float(k): v for k, v in saved["mae_by_frac"].items()})
-                        seed_time_list.append(saved["total_time_s"])
-                        seed_epochs.append(saved.get("n_epochs", 0))
-                        seed_n_params.append(saved.get("n_trainable_params", 0))
-                        seed_n_traj_used.append(saved.get("n_traj_used", 0))
-                        print(f"  [skip] strategy={strategy}  n_traj={n_str}  seed={seed}")
-                    continue
-
-                print(f"  n_traj={n_str}  seed={seed}")
-
-                model_copy = copy.deepcopy(hv_model)
-                model_copy.to(args.device)
-
-                ft_meta = finetune_model(
-                    model        = model_copy,
-                    model_type   = model_type,
-                    strategy     = strategy,
-                    train_data   = lv_train,
-                    val_data     = lv_val,
-                    y_mean       = y_mean_lv,
-                    y_std        = y_std_lv,
-                    x_means_SP   = x_means_lv,
-                    n_traj       = n,
-                    lr           = args.lr,
-                    epochs       = args.epochs,
-                    patience     = args.patience,
-                    batch_size   = args.batch_size,
-                    device       = args.device,
-                    save_dir     = seed_dir,
-                    holdout_frac     = args.holdout_frac,
-                    es_context_frac  = args.es_context_frac,
-                    seed         = seed,
-                )
-
-                model_copy.eval()
-                ft_eval = evaluate_model(
-                    model_copy, model_type, eval_loader,
-                    y_mean_lv, y_std_lv, x_means_lv,
-                    context_fracs, args.device, holdout_frac=args.holdout_frac,
-                )
-
-                with open(seed_dir / "eval_results.json", "w") as ef:
-                    json.dump({
-                        "mae_by_frac":        {str(k): v for k, v in ft_eval.items()},
-                        "total_time_s":       ft_meta["total_time_s"],
-                        "n_epochs":           ft_meta["n_epochs"],
-                        "n_trainable_params": ft_meta["n_trainable_params"],
-                        "n_traj_used":        ft_meta["n_traj_used"],
-                    }, ef, indent=2)
-
-                seed_mae_list.append(ft_eval)
-                seed_time_list.append(ft_meta["total_time_s"])
-                seed_epochs.append(ft_meta["n_epochs"])
-                seed_n_params.append(ft_meta["n_trainable_params"])
-                seed_n_traj_used.append(ft_meta["n_traj_used"])
-
-            if not seed_mae_list:
+            if args.skip_existing and ckpt.exists():
+                print(f"  [skip] n_traj={n_str}  (checkpoint found)")
+                # load evaluation from saved log if available
+                eval_csv = ft_dir / "eval_results.json"
+                if eval_csv.exists():
+                    with open(eval_csv) as ef:
+                        saved = json.load(ef)
+                    mae_results[(strategy, n_str)] = {
+                        float(k): v for k, v in saved["mae_by_frac"].items()
+                    }
+                    time_results[(strategy, n_str)] = saved["total_time_s"]
                 continue
 
-            # ── agregar seeds ──────────────────────────────────────────────────
-            mae_mean, mae_std, time_mean, time_std = aggregate_seed_results(
-                seed_mae_list, seed_time_list
-            )
-            mae_results[(strategy, n_str)]     = mae_mean
-            mae_std_results[(strategy, n_str)] = mae_std
-            time_results[(strategy, n_str)]    = time_mean
+            print(f"  n_traj = {n_str}")
 
+            # fresh copy of source model
+            model_copy = copy.deepcopy(hv_model)
+            model_copy.to(args.device)
+
+            ft_meta = finetune_model(
+                model        = model_copy,
+                model_type   = model_type,
+                strategy     = strategy,
+                train_data   = lv_train,
+                val_data     = lv_val,
+                y_mean       = y_mean_lv,
+                y_std        = y_std_lv,
+                x_means_SP   = x_means_lv,
+                n_traj       = n,
+                lr           = args.lr,
+                epochs       = args.epochs,
+                patience     = args.patience,
+                batch_size   = args.batch_size,
+                device       = args.device,
+                save_dir     = ft_dir,
+                holdout_frac     = args.holdout_frac,
+                es_context_frac  = args.es_context_frac,
+            )
+
+            # evaluate fine-tuned model on test/val set
+            model_copy.eval()
+            ft_eval = evaluate_model(
+                model_copy, model_type, eval_loader,
+                y_mean_lv, y_std_lv, x_means_lv,
+                context_fracs, args.device, holdout_frac=args.holdout_frac,
+            )
+            mae_results[(strategy, n_str)]  = ft_eval
+            time_results[(strategy, n_str)] = ft_meta["total_time_s"]
+
+            # save per-config eval
+            with open(ft_dir / "eval_results.json", "w") as ef:
+                json.dump({
+                    "mae_by_frac": {str(k): v for k, v in ft_eval.items()},
+                    "total_time_s": ft_meta["total_time_s"],
+                }, ef, indent=2)
+
+            # diagnostics
             mean_ood    = np.mean(list(ood_by_frac.values()))
             mean_oracle = np.mean(list(oracle_by_frac.values()))
-            mean_ft     = np.mean(list(mae_mean.values()))
-            mean_std    = float(np.mean(list(mae_std.values())))
+            mean_ft     = np.mean(list(ft_eval.values()))
             gap         = mean_ood - mean_oracle
             pct_closed  = 100.0 * (mean_ood - mean_ft) / max(gap, 1e-6)
 
             print(
-                f"    → MAE={mean_ft:.4f}±{mean_std:.4f} m  |  "
-                f"gap={pct_closed:.1f}%  |  "
-                f"time={time_mean:.1f}±{time_std:.1f}s  |  "
-                f"seeds={len(seed_mae_list)}"
+                f"    → test MAE={mean_ft:.4f} m  |  "
+                f"gap closed={pct_closed:.1f}%  |  "
+                f"time={ft_meta['total_time_s']:.1f}s  |  "
+                f"epochs={ft_meta['n_epochs']}"
             )
 
+            # accumulate summary row
             row = {
-                "topology":           topology,
-                "model_type":         model_type,
-                "strategy":           strategy,
-                "n_traj":             n_str,
-                "n_seeds":            len(seed_mae_list),
-                "n_traj_used":        int(np.mean(seed_n_traj_used)),
-                "n_trainable_params": seed_n_params[0] if seed_n_params else 0,
-                "total_time_s_mean":  round(time_mean, 2),
-                "total_time_s_std":   round(time_std,  2),
-                "n_epochs_mean":      round(float(np.mean(seed_epochs)), 1),
-                "n_epochs_std":       round(float(np.std(seed_epochs, ddof=1)) if len(seed_epochs) > 1 else 0.0, 1),
-                "test_mean_mae":      round(mean_ft,  6),
-                "test_std_mae":       round(mean_std, 6),
-                "ood_baseline_mean":  round(mean_ood,    6),
-                "oracle_mean":        round(mean_oracle,  6),
-                "gap_closed_pct":     round(pct_closed,   2),
+                "topology":            topology,
+                "model_type":          model_type,
+                "strategy":            strategy,
+                "n_traj":              n_str,
+                "n_traj_used":         ft_meta["n_traj_used"],
+                "n_trainable_params":  ft_meta["n_trainable_params"],
+                "total_time_s":        round(ft_meta["total_time_s"], 2),
+                "n_epochs":            ft_meta["n_epochs"],
+                "best_val_mae":        round(ft_meta["best_val_mae"], 6),
+                "test_mean_mae":       round(mean_ft, 6),
+                "ood_baseline_mean":   round(mean_ood, 6),
+                "oracle_mean":         round(mean_oracle, 6),
+                "gap_closed_pct":      round(pct_closed, 2),
                 **{
-                    f"test_mae_ctx{int(f*100)}": round(mae_mean[f], 6)
-                    for f in context_fracs
-                },
-                **{
-                    f"test_std_ctx{int(f*100)}": round(mae_std[f], 6)
+                    f"test_mae_ctx{int(f*100)}": round(ft_eval[f], 6)
                     for f in context_fracs
                 },
                 **{
@@ -1215,7 +1122,7 @@ def run_experiment(
             }
             summary_rows.append(row)
 
-        # ── 6. Save summary CSV ───────────────────────────────────────────────────
+    # ── 6. Save summary CSV ───────────────────────────────────────────────────
     if summary_rows:
         csv_path = out_base / "finetune_summary.csv"
         fieldnames = list(summary_rows[0].keys())
@@ -1232,12 +1139,12 @@ def run_experiment(
     for frac in context_fracs:
         pct = int(frac * 100)
         plot_mae_vs_ntraj(
-            mae_results, mae_std_results, ood_by_frac, oracle_by_frac,
+            mae_results, ood_by_frac, oracle_by_frac,
             strategies, n_traj_values, frac,
             plots_dir / f"mae_vs_ntraj_ctx{pct}.png",
         )
         plot_gap_closed(
-            mae_results, mae_std_results, ood_by_frac, oracle_by_frac,
+            mae_results, ood_by_frac, oracle_by_frac,
             strategies, n_traj_values, frac,
             plots_dir / f"gap_closed_ctx{pct}.png",
         )
@@ -1295,90 +1202,36 @@ def run_experiment(
 # =============================================================================
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="Fine-tune OoD ANP/RANP models (highvar → lowvar adaptation)",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
+    p = argparse.ArgumentParser(description="Fine-tune OoD ANP/RANP models (highvar → lowvar adaptation)", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
     # ── paths ────────────────────────────────────────────────────────────────
-    p.add_argument(
-        "--optuna-root", required=True,
-        help="Root of Optuna results (contains anp/ and ranp/ subdirectories)."
-    )
-    p.add_argument(
-        "--lowvar-data", required=True,
-        help="Root of low-variance processed data (topology_<x>/ folders inside)."
-    )
-    p.add_argument(
-        "--output-dir", default="results/finetune_ood",
-        help="Directory where all outputs (checkpoints, CSVs, plots) are saved."
-    )
+    p.add_argument("--optuna-root", required=True, help="Root of Optuna results (contains anp/ and ranp/ subdirectories).")
+    p.add_argument("--lowvar-data", required=True, help="Root of low-variance processed data (topology_<x>/ folders inside).")
+    p.add_argument("--output-dir", default="results/finetune_ood", help="Directory where all outputs (checkpoints, CSVs, plots) are saved.")
 
     # ── scope ────────────────────────────────────────────────────────────────
-    p.add_argument(
-        "--topologies", default="ellipsoidal",
-        help="Comma-separated topologies to process: aligned,ellipsoidal,random."
-    )
-    p.add_argument(
-        "--model-types", default="anp",
-        help="Comma-separated model types: anp,ranp."
-    )
-    p.add_argument(
-        "--study-version", default="v2",
-        help="Optuna study version tag (e.g. v1, v2)."
-    )
+    p.add_argument("--topologies", default="ellipsoidal", help="Comma-separated topologies to process: aligned,ellipsoidal,random.")
+    p.add_argument("--model-types", default="anp", help="Comma-separated model types: anp,ranp.")
+    p.add_argument("--study-version", default="v2", help="Optuna study version tag (e.g. v1, v2).")
 
     # ── fine-tuning ──────────────────────────────────────────────────────────
-    p.add_argument(
-        "--strategies",
-        default=",".join(DEFAULT_STRATEGIES),
-        help=(
-            "Comma-separated fine-tuning strategies: "
-            "decoder_heads, decoder_full, decoder_det_last, decoder_det_full, decoder_lat_last."
-        ),
-    )
-    p.add_argument(
-        "--n-traj", default="10,20,50,100,200,300,all",
-        help="Comma-separated data budgets (use 'all' for full training set)."
-    )
-    p.add_argument("--lr",       type=float, default=1e-4,
-                   help="Fine-tuning learning rate.")
-    p.add_argument("--epochs",   type=int,   default=1000,
-                   help="Maximum fine-tuning epochs.")
-    p.add_argument("--patience", type=int,   default=100,
-                   help="Early-stopping patience (inverse holdout val MAE).")
+    p.add_argument("--strategies", default=",".join(DEFAULT_STRATEGIES), help=("Comma-separated fine-tuning strategies: decoder_heads, decoder_full, decoder_det_last, decoder_lat_last."))
+    p.add_argument("--n-traj", default="10,20,50,100,200,300,all",help="Comma-separated data budgets (use 'all' for full training set).")
+    p.add_argument("--lr", type=float, default=1e-4,help="Fine-tuning learning rate.")
+    p.add_argument("--epochs", type=int, default=1000,help="Maximum fine-tuning epochs.")
+    p.add_argument("--patience", type=int, default=100,help="Early-stopping patience (inverse holdout val MAE).")
     p.add_argument("--batch-size", type=int, default=8)
 
     # ── evaluation ───────────────────────────────────────────────────────────
-    p.add_argument(
-        "--holdout-frac", type=float, default=0.2,
-        help="Fraction of trajectory reserved as target in inverse holdout."
-    )
-    p.add_argument(
-        "--es-context-frac", type=float, default=0.3,
-        help="Context fraction used during early-stopping validation."
-    )
-    p.add_argument(
-        "--context-frac", type=float, default=0.3,
-        help="Primary context fraction for summary plots."
-    )
-    p.add_argument(
-        "--context-fracs", default="0.1,0.2,0.3,0.4,0.5,0.6,0.7",
-        help="Comma-separated context fractions for the full evaluation sweep."
-    )
+    p.add_argument("--holdout-frac", type=float, default=0.2, help="Fraction of trajectory reserved as target in inverse holdout.")
+    p.add_argument("--es-context-frac", type=float, default=0.3, help="Context fraction used during early-stopping validation.")
+    p.add_argument("--context-frac", type=float, default=0.3, help="Primary context fraction for summary plots.")
+    p.add_argument("--context-fracs", default="0.1,0.2,0.3,0.4,0.5,0.6,0.7", help="Comma-separated context fractions for the full evaluation sweep.")
 
     # ── misc ─────────────────────────────────────────────────────────────────
-    p.add_argument("--device", default="cuda",
-                   help="Torch device: cpu | cuda | cuda:0 …")
-    p.add_argument(
-        "--skip-existing", action="store_true",
-        help="Skip (topology, model, strategy, n_traj) combos that already have a checkpoint."
-    )
-    p.add_argument(
-        "--n-seeds", type=int, default=3,
-        help="Número de seeds independientes de fine-tuning. "
-             "Si >1, reporta media ± std sobre las runs."
-    )
+    p.add_argument("--device", default="cuda",help="Torch device: cpu | cuda | cuda:0 …")
+    p.add_argument("--skip-existing", action="store_true", help="Skip (topology, model, strategy, n_traj) combos that already have a checkpoint.")
+    p.add_argument("--n-seeds", type=int, default=3, help="Número de seeds independientes de fine-tuning. Si >1, reporta media ± std sobre las runs.")
 
     return p.parse_args()
 
@@ -1415,7 +1268,6 @@ def main() -> None:
     print(f"  Strategies  : {args.strategies}")
     print(f"  Data budgets: {args.n_traj}")
     print(f"  Ctx fracs   : {context_fracs}")
-    print(f"  N seeds     : {args.n_seeds}")
     print(f"  Device      : {args.device}")
     print(f"  Output dir  : {args.output_dir}")
     print()
