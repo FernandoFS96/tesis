@@ -69,23 +69,19 @@ Usage
     python finetune_ood.py \
         --optuna-root  /home/fernando/tesis/underwater-localization-topologies/src/training/results/optuna \
         --lowvar-data  /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-        --topologies   ellipsoidal \
+        --topologies   ellipsoidal,random,aligned \
         --model-types  anp \
         --study-version v2 \
+        --n-traj       10,20,50,100,200,300,all \
         --strategies   decoder_heads,decoder_full,decoder_det_last,decoder_det_full,decoder_lat_last \
+        --lr           5e-4 \
+        --epochs       1000 \
+        --patience     100 \
+        --context-fracs 0.1,0.2,0.3,0.4,0.5,0.6,0.7 \
+        --output-dir   results/finetune_ood \
+        --n-seed       5 \
         --skip-existing \
-        --device cuda
-
-    python finetune_ood.py \
-        --optuna-root   /home/fernando/tesis/underwater-localization-topologies/src/training/results/optuna \
-        --lowvar-data   /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-        --topologies    ellipsoidal,random,aligned \
-        --model-types   anp \
-        --strategies    decoder_heads,decoder_full,decoder_det_last,decoder_det_full,decoder_lat_last \
-        --n-seeds       3 \
-        --patience     5 \
-        --skip-existing \
-        --device        cuda
+        --device       cuda \
 Notes
 -----
 - Uses existing val split for early-stopping; test split for final evaluation.
