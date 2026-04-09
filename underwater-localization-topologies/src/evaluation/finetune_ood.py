@@ -1184,85 +1184,36 @@ def run_experiment(
 # =============================================================================
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="Fine-tune OoD ANP/RANP models (highvar → lowvar adaptation)",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
+    p = argparse.ArgumentParser(description="Fine-tune OoD ANP/RANP models (highvar → lowvar adaptation)", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
     # ── paths ────────────────────────────────────────────────────────────────
-    p.add_argument(
-        "--optuna-root", required=True,
-        help="Root of Optuna results (contains anp/ and ranp/ subdirectories)."
-    )
-    p.add_argument(
-        "--lowvar-data", required=True,
-        help="Root of low-variance processed data (topology_<x>/ folders inside)."
-    )
-    p.add_argument(
-        "--output-dir", default="results/finetune_ood",
-        help="Directory where all outputs (checkpoints, CSVs, plots) are saved."
-    )
+    p.add_argument("--optuna-root", required=True, help="Root of Optuna results (contains anp/ and ranp/ subdirectories).")
+    p.add_argument("--lowvar-data", required=True, help="Root of low-variance processed data (topology_<x>/ folders inside).")
+    p.add_argument("--output-dir", default="results/finetune_ood", help="Directory where all outputs (checkpoints, CSVs, plots) are saved.")
 
     # ── scope ────────────────────────────────────────────────────────────────
-    p.add_argument(
-        "--topologies", default="ellipsoidal",
-        help="Comma-separated topologies to process: aligned,ellipsoidal,random."
-    )
-    p.add_argument(
-        "--model-types", default="anp",
-        help="Comma-separated model types: anp,ranp."
-    )
-    p.add_argument(
-        "--study-version", default="v2",
-        help="Optuna study version tag (e.g. v1, v2)."
-    )
+    p.add_argument("--topologies", default="ellipsoidal", help="Comma-separated topologies to process: aligned,ellipsoidal,random.")
+    p.add_argument("--model-types", default="anp", help="Comma-separated model types: anp,ranp.")
+    p.add_argument("--study-version", default="v2", help="Optuna study version tag (e.g. v1, v2).")
 
     # ── fine-tuning ──────────────────────────────────────────────────────────
-    p.add_argument(
-        "--strategies",
-        default=",".join(DEFAULT_STRATEGIES),
-        help=(
-            "Comma-separated fine-tuning strategies: "
-            "decoder_heads, decoder_full, decoder_det_last, decoder_lat_last."
-        ),
-    )
-    p.add_argument(
-        "--n-traj", default="10,20,50,100,200,300,all",
-        help="Comma-separated data budgets (use 'all' for full training set)."
-    )
-    p.add_argument("--lr",       type=float, default=1e-4,
-                   help="Fine-tuning learning rate.")
-    p.add_argument("--epochs",   type=int,   default=500,
-                   help="Maximum fine-tuning epochs.")
-    p.add_argument("--patience", type=int,   default=50,
-                   help="Early-stopping patience (inverse holdout val MAE).")
+    p.add_argument("--strategies", default=",".join(DEFAULT_STRATEGIES), help=("Comma-separated fine-tuning strategies: decoder_heads, decoder_full, decoder_det_last, decoder_lat_last."))
+    p.add_argument("--n-traj", default="10,20,50,100,200,300,all",help="Comma-separated data budgets (use 'all' for full training set).")
+    p.add_argument("--lr", type=float, default=1e-4,help="Fine-tuning learning rate.")
+    p.add_argument("--epochs", type=int, default=1000,help="Maximum fine-tuning epochs.")
+    p.add_argument("--patience", type=int, default=100,help="Early-stopping patience (inverse holdout val MAE).")
     p.add_argument("--batch-size", type=int, default=8)
 
     # ── evaluation ───────────────────────────────────────────────────────────
-    p.add_argument(
-        "--holdout-frac", type=float, default=0.2,
-        help="Fraction of trajectory reserved as target in inverse holdout."
-    )
-    p.add_argument(
-        "--es-context-frac", type=float, default=0.4,
-        help="Context fraction used during early-stopping validation."
-    )
-    p.add_argument(
-        "--context-frac", type=float, default=0.3,
-        help="Primary context fraction for summary plots."
-    )
-    p.add_argument(
-        "--context-fracs", default="0.1,0.2,0.3,0.4,0.5,0.6",
-        help="Comma-separated context fractions for the full evaluation sweep."
-    )
+    p.add_argument("--holdout-frac", type=float, default=0.2, help="Fraction of trajectory reserved as target in inverse holdout.")
+    p.add_argument("--es-context-frac", type=float, default=0.3, help="Context fraction used during early-stopping validation.")
+    p.add_argument("--context-frac", type=float, default=0.3, help="Primary context fraction for summary plots.")
+    p.add_argument("--context-fracs", default="0.1,0.2,0.3,0.4,0.5,0.6,0.7", help="Comma-separated context fractions for the full evaluation sweep.")
 
     # ── misc ─────────────────────────────────────────────────────────────────
-    p.add_argument("--device", default="cuda",
-                   help="Torch device: cpu | cuda | cuda:0 …")
-    p.add_argument(
-        "--skip-existing", action="store_true",
-        help="Skip (topology, model, strategy, n_traj) combos that already have a checkpoint."
-    )
+    p.add_argument("--device", default="cuda",help="Torch device: cpu | cuda | cuda:0 …")
+    p.add_argument("--skip-existing", action="store_true", help="Skip (topology, model, strategy, n_traj) combos that already have a checkpoint.")
+    p.add_argument("--n-seeds", type=int, default=3, help="Número de seeds independientes de fine-tuning. Si >1, reporta media ± std sobre las runs.")
 
     return p.parse_args()
 
