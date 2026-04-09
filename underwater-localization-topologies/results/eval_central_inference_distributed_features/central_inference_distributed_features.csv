@@ -1,4 +1,0 @@
-topology,context_percent,ctx_sample_mode,mc_samples,mae_centralized_direct,mae_central_from_recon,time_direct_total_s,time_recon_total_s,recon_max_abs_diff,n_trajectories,comm_features_total_kib,comm_outputs_total_kib,num_time_points,num_sensors
-aligned,30,first,1,15.447354388236999,15.215343993902206,0.8561491220170865,0.628396752072149,0.0,120,47109.375,1265.625,201,10
-ellipsoidal,30,first,1,6.037770555416743,6.051107599337896,0.6821570390602574,0.6335063379665371,0.0,120,47109.375,1265.625,201,10
-random,30,first,1,5.402666101853053,5.4430532058080034,0.674326839929563,0.6385420439910376,0.0,120,47109.375,1265.625,201,10
