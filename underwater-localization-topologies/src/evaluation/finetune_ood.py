@@ -82,6 +82,23 @@ Usage
         --n-seed       5 \
         --skip-existing \
         --device       cuda \
+
+    python finetune_ood.py \
+        --optuna-root  /home/fernando/tesis/underwater-localization-topologies/src/training/results/optuna \
+        --lowvar-data  /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+        --topologies   ellipsoidal,random,aligned \
+        --model-types  ranp \
+        --study-version v2 \
+        --n-traj       10,20,50,100,200,300,all \
+        --strategies   decoder_full,decoder_det_last,rnn_proj_only,rnn_proj_decoder,rnn_full_decoder \
+        --lr           5e-4 \
+        --epochs       1000 \
+        --patience     100 \
+        --context-fracs 0.1,0.2,0.3,0.4,0.5,0.6,0.7 \
+        --output-dir   results/finetune_ood \
+        --n-seed       5 \
+        --skip-existing \
+        --device       cuda
 Notes
 -----
 - Uses existing val split for early-stopping; test split for final evaluation.
@@ -147,6 +164,10 @@ STRATEGY_COLORS = {
     "decoder_det_last": "#e67e22",
     "decoder_det_full": "#c0392b",
     "decoder_lat_last": "#8e44ad",
+    # RANP-specific strategies (touch TemporalEncoder)
+    "rnn_proj_only":    "#1abc9c",
+    "rnn_proj_decoder": "#f39c12",
+    "rnn_full_decoder": "#e74c3c",
 }
 STRATEGY_LABELS = {
     "decoder_heads":    "Heads only  (mean+var proj.)",
@@ -154,6 +175,10 @@ STRATEGY_LABELS = {
     "decoder_det_last": "Full Decoder + Det.Enc. last cross-attn",
     "decoder_det_full": "Full Decoder + Full Det.Enc.",
     "decoder_lat_last": "Full Decoder + Lat.Enc. μ/σ heads",
+    # RANP-specific strategies (touch TemporalEncoder)
+    "rnn_proj_only":    "RANP: RNN input_proj + LayerNorm",
+    "rnn_proj_decoder": "RANP: RNN input_proj + LayerNorm + Full Decoder",
+    "rnn_full_decoder": "RANP: Full TemporalEncoder + Full Decoder",
 }
 
 # =============================================================================
@@ -242,22 +267,40 @@ def build_inverse_holdout_indices(
 # Fine-tuning parameter selection & freezing
 # =============================================================================
 
-def get_finetune_params(model: nn.Module, strategy: str) -> List[nn.Parameter]:
+def get_finetune_params(
+    model: nn.Module,
+    strategy: str,
+    model_type: str = "anp",
+) -> List[nn.Parameter]:
     """
     Return the parameter list to be optimized for each strategy.
     All other model parameters will be frozen.
 
-    Strategies
-    ----------
+    ANP strategies (work on both ANP and RANP)
+    -------------------------------------------
     decoder_heads    : mean_projection + log_var_projection  (output heads only)
     decoder_full     : entire model.decoder
     decoder_det_last : decoder_full + last cross-attn block of DeterministicEncoder
+    decoder_det_full : decoder_full + full DeterministicEncoder
     decoder_lat_last : decoder_full + mu/log_var heads of LatentEncoder
+
+    RANP-only strategies (require model.temporal_encoder)
+    -----------------------------------------------------
+    rnn_proj_only    : TemporalEncoder.input_proj + LayerNorm only
+    rnn_proj_decoder : rnn_proj_only + full Decoder
+    rnn_full_decoder : full TemporalEncoder + full Decoder
     """
     if strategy not in STRATEGY_LABELS:
         raise ValueError(
             f"Unknown strategy '{strategy}'. "
             f"Valid options: {list(STRATEGY_LABELS.keys())}"
+        )
+
+    ranp_strategies = {"rnn_proj_only", "rnn_proj_decoder", "rnn_full_decoder"}
+    if strategy in ranp_strategies and model_type != "ranp":
+        raise ValueError(
+            f"Strategy '{strategy}' is only valid for RANP models "
+            f"(model_type='{model_type}' given)."
         )
 
     params: List[nn.Parameter] = []
@@ -280,7 +323,23 @@ def get_finetune_params(model: nn.Module, strategy: str) -> List[nn.Parameter]:
         elif strategy == "decoder_lat_last":
             params += list(model.latent_encoder.mu.parameters()) #type: ignore
             params += list(model.latent_encoder.log_var.parameters()) #type: ignore
- 
+
+    elif strategy == "rnn_proj_only":
+        # Only input_proj + LayerNorm: lightest RNN components, directly see domain features.
+        params += list(model.temporal_encoder.input_proj.parameters()) #type: ignore
+        params += list(model.temporal_encoder.norm.parameters()) #type: ignore
+
+    elif strategy == "rnn_proj_decoder":
+        # input_proj + LayerNorm + full Decoder: combines both adaptation axes.
+        params += list(model.temporal_encoder.input_proj.parameters()) #type: ignore
+        params += list(model.temporal_encoder.norm.parameters()) #type: ignore
+        params += list(model.decoder.parameters()) #type: ignore
+
+    elif strategy == "rnn_full_decoder":
+        # Full TemporalEncoder (input_proj, LayerNorm, RNN weights) + full Decoder.
+        params += list(model.temporal_encoder.parameters()) #type: ignore
+        params += list(model.decoder.parameters()) #type: ignore
+
     return params
 
 # =============================================================================
@@ -330,7 +389,7 @@ def model_forward(
 # Fine-tuning loop
 # =============================================================================
 
-def subsample_data(data: list, n: int | str, seed: int = 42) -> list:
+def subsample_data(data: list, n: int | str, seed: int = 18) -> list:
     """Return at most *n* trajectories sampled without replacement."""
     if n == "all" or int(n) >= len(data):
         return data
@@ -382,7 +441,7 @@ def finetune_model(
     x_means_SP = x_means_SP.to(device)
 
     # ── freeze / unfreeze ────────────────────────────────────────────────────
-    active_params = get_finetune_params(model, strategy)
+    active_params = get_finetune_params(model, strategy, model_type)
     freeze_all_except(model, active_params)
     n_trainable = sum(p.numel() for p in active_params)
     n_total     = sum(p.numel() for p in model.parameters())
@@ -1329,8 +1388,9 @@ def parse_args() -> argparse.Namespace:
         "--strategies",
         default=",".join(DEFAULT_STRATEGIES),
         help=(
-            "Comma-separated fine-tuning strategies: "
-            "decoder_heads, decoder_full, decoder_det_last, decoder_det_full, decoder_lat_last."
+            "Comma-separated fine-tuning strategies. "
+            "ANP/RANP: decoder_heads, decoder_full, decoder_det_last, decoder_det_full, decoder_lat_last. "
+            "RANP-only: rnn_proj_only, rnn_proj_decoder, rnn_full_decoder."
         ),
     )
     p.add_argument(
@@ -1341,7 +1401,7 @@ def parse_args() -> argparse.Namespace:
                    help="Fine-tuning learning rate.")
     p.add_argument("--epochs",   type=int,   default=1000,
                    help="Maximum fine-tuning epochs.")
-    p.add_argument("--patience", type=int,   default=100,
+    p.add_argument("--patience", type=int,   default=150,
                    help="Early-stopping patience (inverse holdout val MAE).")
     p.add_argument("--batch-size", type=int, default=8)
 
@@ -1351,7 +1411,7 @@ def parse_args() -> argparse.Namespace:
         help="Fraction of trajectory reserved as target in inverse holdout."
     )
     p.add_argument(
-        "--es-context-frac", type=float, default=0.3,
+        "--es-context-frac", type=float, default=0.4,
         help="Context fraction used during early-stopping validation."
     )
     p.add_argument(
@@ -1359,7 +1419,7 @@ def parse_args() -> argparse.Namespace:
         help="Primary context fraction for summary plots."
     )
     p.add_argument(
-        "--context-fracs", default="0.1,0.2,0.3,0.4,0.5,0.6,0.7",
+        "--context-fracs", default="0.1,0.2,0.3,0.4,0.5,0.6",
         help="Comma-separated context fractions for the full evaluation sweep."
     )
 
@@ -1371,7 +1431,7 @@ def parse_args() -> argparse.Namespace:
         help="Skip (topology, model, strategy, n_traj) combos that already have a checkpoint."
     )
     p.add_argument(
-        "--n-seeds", type=int, default=3,
+        "--n-seeds", type=int, default=1,
         help="Número de seeds independientes de fine-tuning. "
              "Si >1, reporta media ± std sobre las runs."
     )
