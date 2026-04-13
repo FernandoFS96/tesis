@@ -84,6 +84,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
+from tqdm.auto import tqdm
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -1104,6 +1105,14 @@ def run_experiment(
     for lora_target in lora_targets:
         print(f"\n  ── Target: {lora_target} ──")
 
+        total_cfgs = len(ranks) * len(alpha_ratios) * len(n_traj_values)
+        cfg_bar = tqdm(
+            total=total_cfgs,
+            desc=f"{model_type}:{lora_target}",
+            unit="cfg",
+            leave=True,
+        )
+
         for rank in ranks:
             for ar in alpha_ratios:
                 alpha = rank * ar
@@ -1117,6 +1126,8 @@ def run_experiment(
                     )
                     ckpt = cfg_dir / "lora_checkpoint.pth.tar"
 
+                    cfg_bar.set_postfix(rank=rank, alpha=f"{alpha:.0f}", n=n_str)
+
                     if args.skip_existing and ckpt.exists():
                         eval_json = cfg_dir / "eval_results.json"
                         if eval_json.exists():
@@ -1125,6 +1136,7 @@ def run_experiment(
                             results[cfg_key]      = {float(k): v for k, v in saved["mae_by_frac"].items()}
                             time_results[cfg_key] = saved["total_time_s"]
                             print(f"    [skip] {lora_target}  r={rank}  α={alpha:.0f}  n={n_str}")
+                            cfg_bar.update(1)
                             continue
 
                     print(f"    r={rank}  α={alpha:.0f}  n={n_str}")
@@ -1155,6 +1167,14 @@ def run_experiment(
                         es_ctx_frac  = args.es_context_frac,
                         seed         = args.seed,
                     )
+
+                    cfg_bar.set_postfix(
+                        rank=rank,
+                        alpha=f"{alpha:.0f}",
+                        n=n_str,
+                        time_s=f"{ft_meta['total_time_s']:.1f}",
+                    )
+                    cfg_bar.update(1)
 
                     rnn_corr = ft_meta.pop("rnn_correction")
 
@@ -1219,6 +1239,8 @@ def run_experiment(
                         },
                     }
                     summary_rows.append(row)
+
+                cfg_bar.close()
 
     # ── 5. Save CSV ───────────────────────────────────────────────────────────
     if summary_rows:
