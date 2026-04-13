@@ -56,12 +56,12 @@ Run RANP (single process):
     python optuna_anp_search.py \
     --model ranp \
     --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-    --topologies aligned \
-    --objective-topology aligned \
+    --topologies random \
+    --objective-topology random \
     --mask-in-val \
-    --n-trials 50 \
+    --n-trials 25 \
     --storage sqlite:////home/fernando/tesis/underwater-localization-topologies/results/optuna_ranp.db \
-    --study-name ranp_masked_lowvar_aligned_v2 \
+    --study-name ranp_masked_lowvar_random_v3 \
     --constant-liar \
     --cleanup-trial-checkpoints \
     --disable-pruning
@@ -227,12 +227,12 @@ def make_objective(args, results_root: Path):
         # ---------------------------
         hp = {
             # model / optimizer
-            "num_hidden": trial.suggest_int("num_hidden", 128, 320, step=64), 
-            "weight_decay": trial.suggest_categorical("weight_decay", [1e-4, 5e-5, 1e-5, 5e-6]),
+            "num_hidden": trial.suggest_int("num_hidden", 128, 256, step=64), 
+            "weight_decay": trial.suggest_categorical("weight_decay", [1e-5, 5e-6, 1e-6]),
             "lr": None,  # set later based on model type
 
             # training dynamics
-            "kl_warmup_epochs": trial.suggest_int("kl_warmup_epochs", 500, 2000, step=500),
+            "kl_warmup_epochs": trial.suggest_int("kl_warmup_epochs", 1500, 2500, step=500),
 
             # context sampling
             "ctx_sample_mode": trial.suggest_categorical("ctx_sample_mode", ["first"]),#trial.suggest_categorical("ctx_sample_mode", ["first", "random"]),
@@ -248,11 +248,11 @@ def make_objective(args, results_root: Path):
 
         # RANP-specific: RNN encoder hyperparameters
         if args.model == "ranp":
-            hp["lr"]             = trial.suggest_categorical("lr", [9e-4, 7e-4, 5e-4])
+            hp["lr"]             = trial.suggest_categorical("lr", [9e-4, 7e-4, 5e-4, 3e-4])
             hp["rnn_type"]       = trial.suggest_categorical("rnn_type", ["lstm", "gru"])
-            hp["rnn_hidden_dim"] = trial.suggest_categorical("rnn_hidden_dim", [32, 64, 128])
+            hp["rnn_hidden_dim"] = trial.suggest_categorical("rnn_hidden_dim", [16, 32, 64])
             hp["rnn_layers"]     = trial.suggest_int("rnn_layers", 1, 2, step=1)
-            hp["rnn_dropout"]    = trial.suggest_categorical("rnn_dropout", [0.1, 0.2])
+            hp["rnn_dropout"]    = trial.suggest_categorical("rnn_dropout", [0.1, 0.15])
         else:
             hp["lr"] = trial.suggest_categorical("lr", [5e-4, 3e-4, 1e-4])
 
