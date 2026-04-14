@@ -9,9 +9,9 @@ Using bernoulli dropout with 20% drop probability and filling masked sensors wit
 
     python train_anp_topologies_masked.py \
         --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-        --save-dir /home/fernando/tesis/underwater-localization-topologies/results/ANP_topologies_masked \
+        --save-dir /home/fernando/tesis/underwater-localization-topologies/results/ANP_topologies_no_masked \
         --topologies random,ellipsoidal,aligned \
-        --batch-size 8 \
+        --batch-size 16 \
         --epochs 5000 \
         --patience 250 \
         --device cuda \
@@ -19,10 +19,10 @@ Using bernoulli dropout with 20% drop probability and filling masked sensors wit
         --num-sensors 10 \
         --num-time-points 201 \
         --sensor-drop-mode bernoulli \
-        --sensor-drop-p 0.3 \
+        --sensor-drop-p 0 \
         --mask-fill train_mean \
         --mask-in-val \
-        --kl-warmup-epochs 10000 \
+        --kl-warmup-epochs 2000 \
         --holdout-frac 0.2 \
         --es-context-frac 0.4 \
         --robust-context-fracs 0.2,0.4,0.6,0.8 \
@@ -389,8 +389,8 @@ def train_anp_topology_masked(
     sensor_drop_p=0.2,
     mask_fill="train_mean",
     mask_in_val=False,
-    kl_warmup_epochs=500,
-    num_hidden=128,
+    kl_warmup_epochs=2000,
+    num_hidden=256,
     lr=5e-4,
     weight_decay=1e-4,
     trial=None,

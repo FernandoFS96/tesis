@@ -4,31 +4,31 @@ Docstring for src.training.train_r-anp_topologies_masked
 This script trains RANP models with sensor masking for each topology and logs detailed diagnostics.
 
 Usage with RNN encoder and masking:
-python train_r-anp_topologies_masked.py
-    --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance
-    --save-dir /home/fernando/tesis/underwater-localization-topologies/results/RANP_topologies_masked
-    --topologies aligned,ellipsoidal,random
-    --batch-size 8
-    --epochs 3000
-    --patience 300
-    --device cuda
-    --ctx-sample-mode first
-    --num-sensors 10
-    --num-time-points 201
-    --sensor-drop-mode bernoulli
-    --sensor-drop-p 0.3
-    --mask-fill train_mean
-    --mask-in-val
-    --kl-warmup-epochs 1000
-    --rnn-type lstm
-    --rnn-hidden-dim 128
-    --rnn-layers 1
-    --rnn-dropout 0.1
-    --holdout-frac 0.2
-    --es-context-frac 0.4
-    --robust-context-fracs 0.2,0.4,0.6,0.8
-    --robust-eval-every 5
-    --robust-alpha 0.8
+python train_r-anp_topologies_masked.py \
+    --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+    --save-dir /home/fernando/tesis/underwater-localization-topologies/src/training/results/RANP_topologies_no_masked/lowvar \
+    --topologies aligned,ellipsoidal,random \
+    --batch-size 8 \
+    --epochs 5000 \
+    --patience 250 \
+    --device cuda \
+    --ctx-sample-mode first \
+    --num-sensors 10 \
+    --num-time-points 201 \
+    --sensor-drop-mode bernoulli \
+    --sensor-drop-p 0 \
+    --mask-fill train_mean \
+    --mask-in-val \
+    --kl-warmup-epochs 1500 \
+    --rnn-type lstm \
+    --rnn-hidden-dim 64 \
+    --rnn-layers 1 \
+    --rnn-dropout 0.15 \
+    --holdout-frac 0.2 \
+    --es-context-frac 0.4 \
+    --robust-context-fracs 0.2,0.4,0.6,0.8 \
+    --robust-eval-every 5 \
+    --robust-alpha 0.8 \
 
 Using GRU instead of LSTM:  
 python train_r-anp_topologies_masked.py
@@ -422,8 +422,8 @@ def train_ranp_topology_masked(
     mask_in_val=False,
     kl_warmup_epochs=800,
     num_hidden=128,
-    lr=5e-4,
-    weight_decay=1e-4,
+    lr=9e-4,
+    weight_decay=1e-06,
     trial=None,
     report_every=25,
     save_checkpoints: bool = True,
