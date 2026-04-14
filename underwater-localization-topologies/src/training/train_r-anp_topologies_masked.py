@@ -668,13 +668,14 @@ def train_ranp_topology_masked(
         model.eval()
         val_loss = 0.0
         val_mae_per_frac = {f: 0.0 for f in val_fracs}
+        # Always compute both holdout MAEs for reporting/analysis.
+        # The include_fixed_holdout_in_es flag only controls whether fixed holdout
+        # contributes to the weighted early-stopping/objective score.
         val_mae_holdout = {
             "inverse_context_holdout": 0.0,
+            "fixed_holdout": 0.0,
         }
-        holdout_protocols = ["inverse_context_holdout"]
-        if include_fixed_holdout_in_es:
-            val_mae_holdout["fixed_holdout"] = 0.0
-            holdout_protocols.append("fixed_holdout")
+        holdout_protocols = ["inverse_context_holdout", "fixed_holdout"]
         val_nll, val_kl = 0.0, 0.0
         val_var_min, val_var_mean, val_var_max = 0.0, 0.0, 0.0
         val_nll_nonctx = 0.0
@@ -806,10 +807,7 @@ def train_ranp_topology_masked(
         val_loss /= len(val_loader)
         val_mae_per_frac = {f: v / len(val_loader) for f, v in val_mae_per_frac.items()}
         val_mae = val_mae_per_frac[VAL_ES_FRAC]
-        if include_fixed_holdout_in_es:
-            val_mae_fixed_holdout = val_mae_holdout["fixed_holdout"] / len(val_loader)
-        else:
-            val_mae_fixed_holdout = float("nan")
+        val_mae_fixed_holdout = val_mae_holdout["fixed_holdout"] / len(val_loader)
         val_mae_inverse_holdout = val_mae_holdout["inverse_context_holdout"] / len(val_loader)
         if include_fixed_holdout_in_es:
             val_weighted_score = (
@@ -888,9 +886,9 @@ def train_ranp_topology_masked(
                     os.path.join(save_dir, 'best_checkpoint_legacy_ctx040.pth.tar'),
                 )
 
-        if include_fixed_holdout_in_es and val_mae_fixed_holdout < best_val_mae_fixed_holdout:
+        if val_mae_fixed_holdout < best_val_mae_fixed_holdout:
             best_val_mae_fixed_holdout = val_mae_fixed_holdout
-            if save_checkpoints:
+            if save_checkpoints and include_fixed_holdout_in_es:
                 torch.save(
                     {'model': model.state_dict(), 'optimizer': optimizer.state_dict()},
                     os.path.join(save_dir, 'best_checkpoint_fixed_holdout.pth.tar'),
