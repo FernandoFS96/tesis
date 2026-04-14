@@ -57,6 +57,16 @@ Usage
   --ranks 4,8,16 --alpha-ratios 1.0,2.0 \
   --n-traj 100,200,all --device cuda
 
+
+  python explore_lora_ood.py \
+  --optuna-root /home/fernando/tesis/underwater-localization-topologies/src/training/results/optuna \
+  --lowvar-data /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+  --topologies  ellipsoidal,random,aligned \
+  --model-types ranp \
+  --lora-targets lora_anp_base,lora_rnn_out,lora_full \
+  --ranks 4,8,16 --alpha-ratios 1.0,2.0 \
+  --n-traj 100,200,all --device cuda
+
 Notes
 -----
 - Same data pipeline and evaluation protocol (inverse_context_holdout) as
@@ -1240,7 +1250,7 @@ def run_experiment(
                     }
                     summary_rows.append(row)
 
-                cfg_bar.close()
+        cfg_bar.close()
 
     # ── 5. Save CSV ───────────────────────────────────────────────────────────
     if summary_rows:
