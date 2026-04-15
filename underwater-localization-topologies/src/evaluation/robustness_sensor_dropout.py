@@ -1262,70 +1262,91 @@ def main():
         # ─────────────────────────────────────────────────────────────────────
         # E1 – Oracle
         # ─────────────────────────────────────────────────────────────────────
-        e1_res = run_e1_oracle(
-            models, test_data, y_mean, y_std, x_means_SP,
-            ctx_fracs=ctx_fracs, device=device,
-            out_dir=topo_out, batch_size=args.batch_size,
-        )
+        e1_sentinel = topo_out / "E1_oracle" / "e1_oracle_results.csv"
+        if _already_done(e1_sentinel):
+            # Reload results from CSV so downstream experiments still have data
+            e1_res = None  # E1 results not needed by later experiments
+        else:
+            e1_res = run_e1_oracle(
+                models, test_data, y_mean, y_std, x_means_SP,
+                ctx_fracs=ctx_fracs, device=device,
+                out_dir=topo_out, batch_size=args.batch_size,
+            )
         topo_results["E1"] = e1_res
 
         # ─────────────────────────────────────────────────────────────────────
         # E2 – Random k-dropout
         # ─────────────────────────────────────────────────────────────────────
-        e2_res = run_e2_random_dropout(
-            models, test_data, y_mean, y_std, x_means_SP,
-            ctx_frac=args.ctx_frac, device=device,
-            out_dir=topo_out, batch_size=args.batch_size,
-            n_draws=args.n_draws, seed=args.seed,
-        )
+        e2_sentinel = topo_out / "E2_random_dropout" / "e2_random_dropout_results.csv"
+        if _already_done(e2_sentinel):
+            e2_res = None
+        else:
+            e2_res = run_e2_random_dropout(
+                models, test_data, y_mean, y_std, x_means_SP,
+                ctx_frac=args.ctx_frac, device=device,
+                out_dir=topo_out, batch_size=args.batch_size,
+                n_draws=args.n_draws, seed=args.seed,
+            )
         topo_results["E2"] = e2_res
 
         # ─────────────────────────────────────────────────────────────────────
         # E3 – Sensor importance
         # ─────────────────────────────────────────────────────────────────────
-        e3b_ranking, oracle_mae = run_e3_sensor_importance(
-            models, test_data, y_mean, y_std, x_means_SP,
-            ctx_frac=args.ctx_frac, device=device,
-            out_dir=topo_out, batch_size=args.batch_size,
-        )
+        e3_sentinel = topo_out / "E3_sensor_importance" / "e3b_sensor_ranking.txt"
+        if _already_done(e3_sentinel):
+            # Reload ranking from the saved text file for E5 to consume
+            e3b_ranking = _load_e3b_ranking(e3_sentinel)
+            oracle_mae  = {}
+        else:
+            e3b_ranking, oracle_mae = run_e3_sensor_importance(
+                models, test_data, y_mean, y_std, x_means_SP,
+                ctx_frac=args.ctx_frac, device=device,
+                out_dir=topo_out, batch_size=args.batch_size,
+            )
         topo_results["E3_ranking"] = e3b_ranking
         topo_results["oracle_mae"] = oracle_mae
 
         # ─────────────────────────────────────────────────────────────────────
         # E4 – Spatial dropout
         # ─────────────────────────────────────────────────────────────────────
-        sensor_positions = try_load_sensor_positions(args.sensor_positions_dir, topology)
-        e4_res = run_e4_spatial_dropout(
-            models, test_data, y_mean, y_std, x_means_SP,
-            topology=topology, ctx_frac=args.ctx_frac,
-            device=device, out_dir=topo_out,
-            sensor_positions=sensor_positions, batch_size=args.batch_size,
-        )
+        e4_dir      = topo_out / "E4_spatial_dropout"
+        e4_sentinel = next(e4_dir.glob("e4_*.csv"), None) if e4_dir.exists() else None
+        if e4_sentinel is not None:
+            print(f"  [skip] Already done — found {e4_sentinel.name} in E4_spatial_dropout/")
+            e4_res = None
+        else:
+            sensor_positions = try_load_sensor_positions(args.sensor_positions_dir, topology)
+            e4_res = run_e4_spatial_dropout(
+                models, test_data, y_mean, y_std, x_means_SP,
+                topology=topology, ctx_frac=args.ctx_frac,
+                device=device, out_dir=topo_out,
+                sensor_positions=sensor_positions, batch_size=args.batch_size,
+            )
         topo_results["E4"] = e4_res
 
         # ─────────────────────────────────────────────────────────────────────
         # E5 – Fine-tuning adaptation
         # ─────────────────────────────────────────────────────────────────────
         if not args.skip_e5:
-            # Load validation data (needed only for E5 fine-tuning)
-            topo_dir = Path(args.data_dir) / f"topology_{topology}"
-            with open(topo_dir / "val_data.pkl", "rb") as f:
-                val_data = pickle.load(f)
-
-            e5_res = run_e5_finetune(
-                models, train_data, val_data, test_data,
-                y_mean, y_std, x_means_SP,
-                e3b_ranking=e3b_ranking,
-                ctx_frac=args.ctx_frac, device=device,
-                out_dir=topo_out, batch_size=args.batch_size,
-                n_traj_budgets=e5_n_traj,
-                k_removed_sensors=args.e5_k_removed,
-                ft_lr=args.e5_lr, ft_epochs=args.e5_epochs,
-                ft_patience=args.e5_patience,
-            )
+            e5_sentinel = topo_out / "E5_finetune" / "e5_finetune_summary.csv"
+            if _already_done(e5_sentinel):
+                e5_res = None
+            else:
+                topo_dir = Path(args.data_dir) / f"topology_{topology}"
+                with open(topo_dir / "val_data.pkl", "rb") as f:
+                    val_data = pickle.load(f)
+                e5_res = run_e5_finetune(
+                    models, train_data, val_data, test_data,
+                    y_mean, y_std, x_means_SP,
+                    e3b_ranking=e3b_ranking,
+                    ctx_frac=args.ctx_frac, device=device,
+                    out_dir=topo_out, batch_size=args.batch_size,
+                    n_traj_budgets=e5_n_traj,
+                    k_removed_sensors=args.e5_k_removed,
+                    ft_lr=args.e5_lr, ft_epochs=args.e5_epochs,
+                    ft_patience=args.e5_patience,
+                )
             topo_results["E5"] = e5_res
-
-        all_topology_results[topology] = topo_results
 
     # ── Cross-topology summary ────────────────────────────────────────────────
     print("\n[summary] Cross-topology plots …")
