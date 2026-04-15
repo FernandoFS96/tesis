@@ -1180,6 +1180,12 @@ def parse_args():
 
     return p.parse_args()
 
+def _already_done(sentinel_path: Path) -> bool:
+    """Return True if the sentinel output file already exists (experiment was completed)."""
+    if sentinel_path.exists():
+        print(f"  [skip] Already done — found {sentinel_path.relative_to(sentinel_path.parents[3])}")
+        return True
+    return False
 
 def main():
     args = parse_args()
