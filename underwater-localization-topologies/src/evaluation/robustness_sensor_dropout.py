@@ -1187,6 +1187,34 @@ def _already_done(sentinel_path: Path) -> bool:
         return True
     return False
 
+def _load_e3b_ranking(ranking_path: Path) -> dict:
+    """
+    Re-parse the e3b_sensor_ranking.txt file written by run_e3_sensor_importance
+    so that E5 can consume it even when E3 is skipped.
+    Returns dict: model_name → list of (sensor_idx, delta_mae)
+    """
+    import re
+    ranking = {}
+    current_model = None
+    with open(ranking_path, "r") as f:
+        for line in f:
+            line = line.rstrip()
+            # Detect model header lines (not a rank line, not a separator)
+            if line and not line.startswith("Most") and not line.startswith("=") \
+                    and not re.match(r"\s*#\d+", line):
+                # Strip trailing colon → model label
+                candidate = line.strip().rstrip(":")
+                if candidate:
+                    current_model = candidate
+                    ranking[current_model] = []
+            elif current_model and re.match(r"\s*#\d+", line):
+                m = re.search(r"Sensor\s+(\d+)\s+ΔMAE=([+-]?\d+\.\d+)", line)
+                if m:
+                    ranking[current_model].append(
+                        (int(m.group(1)), float(m.group(2)))
+                    )
+    return ranking
+
 def main():
     args = parse_args()
     random.seed(args.seed)
