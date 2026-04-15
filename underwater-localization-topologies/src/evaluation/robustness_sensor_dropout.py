@@ -336,7 +336,26 @@ def predict(model: nn.Module, model_name: str,
         mean, var, _, kl, nll = model(context_x, ctx_y, target_x, tar_y, beta=1.0)
     return mean, var, kl, nll
 
-
+def predict_with_grad(model: nn.Module, model_name: str,
+                      x_aug: torch.Tensor, ctx_idx: torch.Tensor,
+                      ctx_y: torch.Tensor, tar_idx: torch.Tensor,
+                      tar_y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Same as predict() but WITHOUT torch.no_grad() — for use in training/fine-tuning loops."""
+    is_ranp = "ranp" in model_name
+    if is_ranp:
+        mean, var, _, kl, nll = model(
+            x_seq=x_aug,
+            context_indices=ctx_idx,
+            context_y=ctx_y,
+            target_indices=tar_idx,
+            target_y=tar_y,
+            beta=1.0,
+        )
+    else:
+        context_x = x_aug[:, ctx_idx, :]
+        target_x  = x_aug[:, tar_idx, :]
+        mean, var, _, kl, nll = model(context_x, ctx_y, target_x, tar_y, beta=1.0)
+    return mean, var, kl, nll
 # ══════════════════════════════════════════════════════════════════════════════
 # Core evaluation: MAE + NLL for one mask configuration
 # ══════════════════════════════════════════════════════════════════════════════
@@ -907,8 +926,7 @@ def _finetune_model(model: nn.Module, model_name: str,
             tar_y = y_norm[:, tar_idx, :]
 
             opt.zero_grad()
-            mean_n, var_n, kl, nll = predict(ft_model, model_name, x_aug,
-                                              ctx_idx, ctx_y, tar_idx, tar_y)
+            mean_n, var_n, kl, nll = predict_with_grad(ft_model, model_name, x_aug, ctx_idx, ctx_y, tar_idx, tar_y)
             # Simple NLL loss for fine-tuning (beta=0 – no KL term to avoid collapsing)
             loss = nll if nll is not None else F.l1_loss(mean_n, tar_y)
             loss.backward()
