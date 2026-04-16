@@ -1190,7 +1190,7 @@ def parse_args():
 
     # E5 fine-tuning
     p.add_argument("--skip-e5", action="store_true", help="Skip the fine-tuning experiment (E5)")
-    p.add_argument("--e5-n-traj", default="20,50,100", help="Comma-separated data budgets for E5 fine-tuning")
+    p.add_argument("--e5-n-traj", default="20,50,100,250", help="Comma-separated data budgets for E5 fine-tuning")
     p.add_argument("--e5-k-removed", type=int, default=3, help="Number of most critical sensors to permanently remove in E5")
     p.add_argument("--e5-lr",        type=float, default=5e-4)
     p.add_argument("--e5-epochs",    type=int, default=1000)
