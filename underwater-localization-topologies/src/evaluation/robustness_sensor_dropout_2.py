@@ -978,7 +978,8 @@ def _finetune_model(model: nn.Module, model_name: str,
                     device: torch.device, batch_size: int = 8,
                     ctx_frac: float = FIXED_CTX_FRAC,
                     holdout_frac: float = HOLDOUT_FRAC,
-                    seed: int = 99) -> Tuple[nn.Module, List[float], List[float]]:
+                    seed: int = 99,
+                    progress_desc: Optional[str] = None) -> Tuple[nn.Module, List[float], List[float]]:
     """Fine-tune decoder of a deep-copied model on n_traj trajectories.
 
     Both the training forward pass and the validation loop use the
@@ -1006,7 +1007,12 @@ def _finetune_model(model: nn.Module, model_name: str,
     no_improve   = 0
     train_log, val_log = [], []
 
-    for epoch in range(epochs):
+    epoch_iter = tqdm(
+        range(epochs),
+        desc=progress_desc or f"      FT {model_name} n={n_traj} seed={seed}",
+        leave=False,
+    )
+    for epoch in epoch_iter:
         ft_model.train()
         ep_loss = []
         for x_raw, y_raw in loader:
@@ -1067,6 +1073,11 @@ def _finetune_model(model: nn.Module, model_name: str,
 
         val_mae = float(np.mean(val_maes))
         val_log.append(val_mae)
+        epoch_iter.set_postfix(
+            train_loss=f"{train_log[-1]:.4f}",
+            val_mae=f"{val_mae:.4f}",
+            best_val=f"{best_val_mae:.4f}" if best_val_mae < float("inf") else "inf",
+        )
         if val_mae < best_val_mae:
             best_val_mae = val_mae
             best_state   = copy.deepcopy(ft_model.state_dict())
@@ -1144,6 +1155,9 @@ def run_e5_finetune(models, train_data, val_data, test_data,
                     n_traj=n_traj, lr=ft_lr, epochs=ft_epochs,
                     patience=ft_patience, device=device,
                     batch_size=batch_size, ctx_frac=ctx_frac, seed=seed,
+                    progress_desc=(
+                        f"      FT {name} n_traj={n_traj} seed={run_idx + 1}/{n_runs}"
+                    ),
                 )
                 res = evaluate_mask({name: ft_model}, test_data, y_mean, y_std, x_means_SP,
                                     active_sensors=active_config, ctx_frac=ctx_frac,
