@@ -1317,8 +1317,8 @@ def parse_args():
     p.add_argument("--study-version", default="v2", help="Optuna study version tag (e.g. v2)")
 
     # Evaluation
-    p.add_argument("--ctx-frac", type=float, default=0.40, help="Fixed context fraction used in E2, E3, E4, E5")
-    p.add_argument("--ctx-fracs", default="0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8", help="Context fractions for E1 oracle sweep")
+    p.add_argument("--ctx-frac", type=float, default=0.30, help="Fixed context fraction used in E2, E3, E4, E5")
+    p.add_argument("--ctx-fracs", default="0.1,0.2,0.3,0.4,0.5,0.6,0.7", help="Context fractions for E1 oracle sweep")
     p.add_argument("--holdout-frac", type=float, default=0.20, help="Tail fraction used as evaluation target")
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument("--n-draws", type=int, default=30, help="Random draws per k-value in E2")
@@ -1333,7 +1333,7 @@ def parse_args():
     p.add_argument("--e5-k-removed", type=int, default=3, help="Number of most critical sensors to permanently remove in E5")
     p.add_argument("--e5-lr",        type=float, default=5e-4)
     p.add_argument("--e5-epochs",    type=int, default=1000)
-    p.add_argument("--e5-patience",  type=int, default=100)
+    p.add_argument("--e5-patience",  type=int, default=150)
 
     return p.parse_args()
 
