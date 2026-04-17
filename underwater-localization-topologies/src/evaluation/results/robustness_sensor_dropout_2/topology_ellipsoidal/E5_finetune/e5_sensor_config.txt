@@ -1,0 +1,4 @@
+Removed sensors (most critical from E3b/anp_masked): [9, 5, 7]
+Active sensors: [0, 1, 2, 3, 4, 6, 8]
+k_removed: 3
+n_runs (fine-tuning seeds): 5

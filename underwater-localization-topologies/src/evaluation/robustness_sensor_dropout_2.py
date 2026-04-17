@@ -6,15 +6,14 @@ Evaluates ANP and RANP robustness to sensor dropout on low-variance data.
 
 Five experiments, all run per-topology (ellipsoidal, random, aligned):
 
-  E1 – Oracle          : all 10 sensors active, MAE/NLL over context fraction sweep.
-  E2 – Random k-dropout: sweep active sensors 1→10, averaged over random draws.
-  E3 – Sensor importance: single-sensor ablation (k=1 active) and leave-one-out (k=9 active).
-  E4 – Spatial dropout : topology-specific structured removal.
-                         Ellipsoidal → arc removal (consecutive angular sector).
-                         Aligned     → edge failure (from one side) and center-gap.
-                         Random      → radius-based removal from array centroid.
-  E5 – Fine-tuning     : adapt masked model to a fixed reduced config (worst sensors from E3b)
-                         using decoder-only fine-tuning at multiple data budgets.
+  E1 – Oracle            : all 10 sensors active, MAE/NLL over context fraction sweep.
+  E2 – Random k-dropout  : sweep active sensors 1→10, averaged over random draws.
+  E3 – Sensor importance : single-sensor ablation (k=1 active) and leave-one-out (k=9 active).
+  E4 – Spatial dropout   : topology-specific structured removal.
+                            Ellipsoidal → arc removal (consecutive angular sector).
+                            Aligned     → edge failure (from one side) and center-gap.
+                            Random      → radius-based removal from array centroid.
+  E5 – Fine-tuning       : adapt masked model to a fixed reduced config (worst sensors from E3b) using decoder-only fine-tuning at multiple data budgets.
 
 Models compared (4 total):
   anp_basic   – ANP,  p_drop=0, num_hidden=128
@@ -33,16 +32,6 @@ Outputs (per topology):
 
 Usage
 -----
-    python robustness_sensor_dropout.py \\
-        --data-dir      /path/to/data_processed_topologies_low_variance \\
-        --optuna-root   /home/fernando/tesis/underwater-localization-topologies/src/training/results/optuna \\
-        --basic-anp-dir /path/to/results/ANP_topologies_no_masked/masked_dropbernoulli_p0.0_train_mean_first \\
-        --basic-ranp-dir /path/to/results/RANP_topologies_no_masked/lowvar/ranp_dropbernoulli_p0.0_train_mean_first_rnn-lstm_h64_l1 \\
-        --topologies    ellipsoidal,random,aligned \\
-        --study-version v2 \\
-        --output-dir    results/robustness_sensor_dropout \\
-        --device        cuda
-
     python robustness_sensor_dropout_2.py \
         --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
         --optuna-root /home/fernando/tesis/underwater-localization-topologies/src/training/results/optuna\
@@ -54,13 +43,10 @@ Usage
         --device cuda \
         --n-runs 5 \
         --force-rerun \
-        --skip-e5           # remove this flag when you want fine-tuning
+        --skip-e5 # remove this flag for fine-tuning (takes longer)
 
   # To include sensor positions for E4 (random topology radius-based removal):
     --sensor-positions-dir /path/to/raw/data   (contains channel_option_*/topology_*/channel_info/)
-
-  # To skip the time-consuming fine-tuning experiment:
-    --skip-e5
 """
 
 from __future__ import annotations
@@ -136,7 +122,6 @@ MODEL_STYLES  = {
 
 HOLDOUT_FRAC  = 0.20   # fraction of trajectory reserved for target evaluation
 FIXED_CTX_FRAC = 0.40  # default context fraction used in E2/E3/E4
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Data utilities
@@ -218,8 +203,7 @@ def load_basic_ranp(ckpt_path: str, device: torch.device) -> nn.Module:
     return model
 
 
-def load_optuna_model(optuna_root: str, model_type: str, topology: str,
-                      study_version: str, device: torch.device):
+def load_optuna_model(optuna_root: str, model_type: str, topology: str, study_version: str, device: torch.device):
     """Load best Optuna model for a given type and topology."""
     study_name = f"{model_type}_masked_lowvar_{topology}_{study_version}"
     model, hparams, meta = load_optuna_best_model_from_study(
@@ -283,8 +267,7 @@ def apply_sensor_mask(
     x_means_SP: torch.Tensor,     # (S, P)
 ) -> torch.Tensor:                # (B, T, Dx+S)
     """
-    Zero-out masked sensors (replacing with train-mean) and append the binary
-    mask as additional features — exactly as done in training.
+    Zero-out masked sensors (replacing with train-mean) and append the binary mask as additional features — exactly as done in training.
     """
     B, T, Dx = x_batch.shape
     P, S = NUM_TIME_POINTS, NUM_SENSORS
@@ -383,10 +366,9 @@ def evaluate_mask(
       - Target  : fixed tail [holdout_start … T-1]
       - Context : window immediately BEFORE the tail [holdout_start-n_ctx … holdout_start-1]
 
-    When n_runs > 1, the full evaluation is repeated n_runs times and the
-    results are averaged. This accounts for z-sampling stochasticity in the
-    model's latent path and yields more stable MAE estimates. The standard
-    deviation across runs is also reported as mae_std.
+    When n_runs > 1, the full evaluation is repeated n_runs times and the results are averaged. 
+    This accounts for z-sampling stochasticity in the model's latent path and yields more stable MAE estimates. 
+    The standard deviation across runs is also reported as mae_std.
 
     Returns: results[model_name] = {
         "mae":      mean MAE across runs (and batches),
@@ -468,8 +450,7 @@ def evaluate_mask(
 def run_e1_oracle(models, test_data, y_mean, y_std, x_means_SP,
                   ctx_fracs, device, out_dir, batch_size=8, n_runs=1):
     """All sensors active; sweep context fractions.
-    With n_runs > 1, each context fraction is evaluated n_runs times and
-    the results are averaged, with ±1σ bands shown on the plots.
+    With n_runs > 1, each context fraction is evaluated n_runs times and the results are averaged, with ±1σ bands shown on the plots.
     """
     print("\n  [E1] Oracle evaluation …")
     out_dir = Path(out_dir) / "E1_oracle"
@@ -538,7 +519,7 @@ def run_e1_oracle(models, test_data, y_mean, y_std, x_means_SP,
 
 def run_e2_random_dropout(models, test_data, y_mean, y_std, x_means_SP,
                           ctx_frac, device, out_dir, batch_size=8,
-                          n_draws=30, seed=42, n_runs=1):
+                          n_draws=30, seed=18, n_runs=1):
     """Sweep number of active sensors 1→10, averaging over random draws.
 
     n_draws : number of random sensor subsets per k level (sensor-config variance).
@@ -639,8 +620,7 @@ def run_e3_sensor_importance(models, test_data, y_mean, y_std, x_means_SP,
     E3a – Only sensor s active (k=1)      → most informative sensor.
     E3b – All except sensor s active (k=9) → most critical sensor.
 
-    With n_runs > 1 each configuration is evaluated n_runs times; the
-    resulting mae_std is shown as error bars on the bar charts.
+    With n_runs > 1 each configuration is evaluated n_runs times; the resulting mae_std is shown as error bars on the bar charts.
     Returns e3b_ranking[model_name] = sorted list of (sensor_idx, delta_mae).
     """
     print("\n  [E3] Sensor importance ablations …")
@@ -765,8 +745,7 @@ def _get_spatial_removal_schedule(topology: str,
                                   sensor_positions: Optional[np.ndarray]) -> Dict[str, List[List[int]]]:
     """
     Returns removal schedules keyed by mode name.
-    Each schedule is a list of 10 entries (one per removal step k=0..9),
-    where each entry is the list of ACTIVE sensor indices.
+    Each schedule is a list of 10 entries (one per removal step k=0..9), where each entry is the list of ACTIVE sensor indices.
 
     Ellipsoidal → "arc" mode (consecutive angular sector removed)
     Aligned     → "edge_left", "edge_right", "center_gap"
@@ -839,12 +818,9 @@ def _get_spatial_removal_schedule(topology: str,
     return schedules
 
 
-def run_e4_spatial_dropout(models, test_data, y_mean, y_std, x_means_SP,
-                           topology, ctx_frac, device, out_dir,
-                           sensor_positions=None, batch_size=8, n_runs=1):
+def run_e4_spatial_dropout(models, test_data, y_mean, y_std, x_means_SP, topology, ctx_frac, device, out_dir, sensor_positions=None, batch_size=8, n_runs=1):
     """Topology-specific structured sensor removal.
-    With n_runs > 1, each configuration is evaluated n_runs times;
-    ±1σ bands are shown on plots and mae_std is written to CSVs.
+    With n_runs > 1, each configuration is evaluated n_runs times; ±1σ bands are shown on plots and mae_std is written to CSVs.
     """
     print(f"\n  [E4] Spatial dropout ({topology}) …")
     out_dir = Path(out_dir) / "E4_spatial_dropout"
@@ -982,8 +958,7 @@ def _finetune_model(model: nn.Module, model_name: str,
                     progress_desc: Optional[str] = None) -> Tuple[nn.Module, List[float], List[float]]:
     """Fine-tune decoder of a deep-copied model on n_traj trajectories.
 
-    Both the training forward pass and the validation loop use the
-    INVERSE CONTEXT HOLDOUT protocol, consistent with evaluate_mask.
+    Both the training forward pass and the validation loop use the INVERSE CONTEXT HOLDOUT protocol, consistent with evaluate_mask.
     The seed controls both trajectory sub-sampling and torch RNG.
     """
     ft_model = copy.deepcopy(model)
@@ -1101,12 +1076,10 @@ def run_e5_finetune(models, train_data, val_data, test_data,
                     n_runs=1):
     """Fine-tune masked models on the reduced sensor config identified in E3b.
 
-    n_runs controls how many independent fine-tuning seeds are used per
-    (model, n_traj) combination.  Results (test MAE) are reported as
-    mean ± std across seeds, giving a reliable picture of adaptation quality.
+    n_runs controls how many independent fine-tuning seeds are used per (model, n_traj) combination.
+    Results (test MAE) are reported as mean ± std across seeds, giving a reliable picture of adaptation quality.
 
-    Baselines (no fine-tuning) are evaluated with n_runs evaluate_mask calls
-    so their uncertainty estimate is comparable.
+    Baselines (no fine-tuning) are evaluated with n_runs evaluate_mask calls so their uncertainty estimate is comparable.
     """
     print(f"\n  [E5] Fine-tuning adaptation (k_removed={k_removed_sensors}, n_runs={n_runs}) …")
     if n_traj_budgets is None:
@@ -1201,7 +1174,12 @@ def run_e5_finetune(models, train_data, val_data, test_data,
             ax2.set_ylabel("Train loss")
             seed_info = f"  ({n_runs} seeds: {ft_mae_mean:.3f}±{ft_mae_std:.3f} m)"
             ax.set_title(f"E5 Fine-tuning: {name} n_traj={n_traj}{seed_info}")
-            ax.legend(loc="upper right"); ax2.legend(loc="center right")
+            handles1, labels1 = ax.get_legend_handles_labels()
+            if labels1:
+                ax.legend(loc="upper right")
+            handles2, labels2 = ax2.get_legend_handles_labels()
+            if labels2:
+                ax2.legend(loc="center right")
             plt.tight_layout()
             fig.savefig(curve_dir / "finetune_curve.png", dpi=150)
             plt.close(fig)
@@ -1235,7 +1213,10 @@ def run_e5_finetune(models, train_data, val_data, test_data,
     ax.set_xlabel("Fine-tuning trajectories (n_traj)")
     ax.set_ylabel("MAE (m)")
     ax.set_title(f"E5 – Fine-tuning adaptation (removed: {critical_sensors}){run_label}")
-    ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
+    handles, labels = ax.get_legend_handles_labels()
+    if labels:
+        ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3)
     plt.tight_layout()
     fig.savefig(out_dir / "e5_mae_vs_ntraj.png", dpi=150)
     plt.close(fig)
@@ -1324,24 +1305,16 @@ def parse_args():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     # Paths
-    p.add_argument("--data-dir",     required=True,
-                   help="Root of processed low-variance data (topology_*/ folders)")
-    p.add_argument("--optuna-root",  required=True,
-                   help="Root of Optuna results (anp/ and ranp/ subdirs)")
-    p.add_argument("--basic-anp-dir", required=True,
-                   help="Root dir for basic ANP models (topology_*/ inside)")
-    p.add_argument("--basic-ranp-dir", required=True,
-                   help="Root dir for basic RANP models (topology_*/ inside)")
-    p.add_argument("--output-dir",   default="results/robustness_sensor_dropout",
-                   help="Output directory for all results")
-    p.add_argument("--sensor-positions-dir", default=None,
-                   help="Optional: raw data dir for loading sensor positions (E4 random topology)")
+    p.add_argument("--data-dir", required=True, help="Root of processed low-variance data (topology_*/ folders)")
+    p.add_argument("--optuna-root", required=True, help="Root of Optuna results (anp/ and ranp/ subdirs)")
+    p.add_argument("--basic-anp-dir", required=True, help="Root dir for basic ANP models (topology_*/ inside)")
+    p.add_argument("--basic-ranp-dir", required=True, help="Root dir for basic RANP models (topology_*/ inside)")
+    p.add_argument("--output-dir", default="results/robustness_sensor_dropout", help="Output directory for all results")
+    p.add_argument("--sensor-positions-dir", default=None, help="Optional: raw data dir for loading sensor positions (E4 random topology)")
 
     # Scope
-    p.add_argument("--topologies",   default="ellipsoidal,random,aligned",
-                   help="Comma-separated topologies to evaluate")
-    p.add_argument("--study-version", default="v2",
-                   help="Optuna study version tag (e.g. v2)")
+    p.add_argument("--topologies", default="ellipsoidal,random,aligned", help="Comma-separated topologies to evaluate")
+    p.add_argument("--study-version", default="v2", help="Optuna study version tag (e.g. v2)")
 
     # Evaluation
     p.add_argument("--ctx-frac", type=float, default=0.40, help="Fixed context fraction used in E2, E3, E4, E5")
@@ -1351,13 +1324,8 @@ def parse_args():
     p.add_argument("--n-draws", type=int, default=30, help="Random draws per k-value in E2")
     p.add_argument("--seed",    type=int, default=18)
     p.add_argument("--device",  default="cuda")
-    p.add_argument("--force-rerun", action="store_true",
-                   help="Ignore existing results and overwrite all experiments. "
-                        "Without this flag, completed experiments are skipped.")
-    p.add_argument("--n-runs", type=int, default=1,
-                   help="Repeat each evaluate_mask call n_runs times and average. "
-                        "Captures z-sampling variance in E1–E4 and fine-tuning seed "
-                        "variance in E5. n_runs=1 is fastest (no averaging).")
+    p.add_argument("--force-rerun", action="store_true", help="Ignore existing results and overwrite all experiments. Without this flag, completed experiments are skipped.")
+    p.add_argument("--n-runs", type=int, default=1, help="Repeat each evaluate_mask call n_runs times and average. Captures z-sampling variance in E1–E4 and fine-tuning seed variance in E5. n_runs=1 is fastest (no averaging).")
 
     # E5 fine-tuning
     p.add_argument("--skip-e5", action="store_true", help="Skip the fine-tuning experiment (E5)")
@@ -1383,8 +1351,7 @@ def _already_done(sentinel_path: Path, force_rerun: bool = False) -> bool:
 
 def _load_e3b_ranking(ranking_path: Path) -> dict:
     """
-    Re-parse the e3b_sensor_ranking.txt file written by run_e3_sensor_importance
-    so that E5 can consume it even when E3 is skipped.
+    Re-parse the e3b_sensor_ranking.txt file written by run_e3_sensor_importance so that E5 can consume it even when E3 is skipped.
     Returns dict: model_name → list of (sensor_idx, delta_mae)
     """
     import re
