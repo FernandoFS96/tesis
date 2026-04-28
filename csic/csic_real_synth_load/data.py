@@ -154,7 +154,7 @@ def load_prepared_data(output_dir):
 
 def build_shared_raw_dataset(data, target_names):
     y = data[target_names].copy()
-    feature_columns = ["Potential"]
+    feature_columns = ["Potential", "Cycle", "Cycle_progress"] #["Potential"]
     for prefix in SHARED_RAW_EIS_PREFIXES:
         feature_columns.extend([f"{prefix}_{i}" for i in range(50)])
     missing_columns = [column for column in feature_columns if column not in data.columns]

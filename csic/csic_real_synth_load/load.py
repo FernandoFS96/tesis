@@ -20,10 +20,11 @@ else:
 def main():
     base_folder = Path(__file__).resolve().parent
     config_params = {"base_folder": str(base_folder),
-                     "output_folder": os.getcwd(),
+                     "output_folder": os.path.join(os.getcwd(), "prepared_data"),
                      "real_data_version": "v2",
                      "synth_data_version": "v3",
-                     "targets": ["SoC (%)", "Cycle"]}
+                     "targets": ["SoC (%)"]  # antes: ["SoC (%)", "Cycle"]
+                     }
 
     # Load data
     data = load_real_and_synth_data(config_params)
