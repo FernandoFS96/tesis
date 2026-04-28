@@ -5,14 +5,23 @@
 
 # Packages to import
 import os
+import sys
+from pathlib import Path
 
-from csic.csic_real_synth_load.data import load_real_and_synth_data
+if __package__ in (None, ""):
+    package_root = Path(__file__).resolve().parents[2]
+    if str(package_root) not in sys.path:
+        sys.path.insert(0, str(package_root))
+    from csic.csic_real_synth_load.data import load_real_and_synth_data
+else:
+    from .data import load_real_and_synth_data
 
 
 def main():
-    config_params = {"base_folder": os.getcwd(),
-                     "real_data_version": "V2",
-                     "synth_data_version": "V3",
+    base_folder = Path(__file__).resolve().parent
+    config_params = {"base_folder": str(base_folder),
+                     "real_data_version": "v2",
+                     "synth_data_version": "v3",
                      "targets": ["SoC (%)", "Cycle"]}
 
     # Load data
