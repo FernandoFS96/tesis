@@ -4,9 +4,12 @@
 
 
 # Packages to import
+import json
 import os
 import re
+import pickle
 import warnings
+from pathlib import Path
 
 import pandas as pd
 
@@ -78,6 +81,77 @@ def normalize_data(x_train, x_test, y_train, y_test):
     return norm_values, denorm_values
 
 
+def _series_to_dict(series):
+    return {key: value.item() if hasattr(value, "item") else value for key, value in series.items()}
+
+
+def save_prepared_data(data, output_dir, exp_params, feature_columns, synth_lengths, synth_metadata):
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    normalized_synth_datasets = data["normalized_synth_datasets"]
+    normalized_real_dataset = data["normalized_real_dataset"]
+
+    manifest = {
+        "base_folder": exp_params["base_folder"],
+        "real_data_version": exp_params["real_data_version"],
+        "synth_data_version": exp_params["synth_data_version"],
+        "targets": list(exp_params["targets"]),
+        "feature_columns": list(feature_columns),
+        "num_features": len(feature_columns),
+        "num_synthetic_datasets": len(normalized_synth_datasets),
+        "synth_lengths": list(synth_lengths),
+        "synth_metadata": synth_metadata,
+    }
+
+    real_x_path = output_path / "real_X_normalized.csv"
+    real_y_path = output_path / "real_y_normalized.csv"
+    normalized_real_dataset[0].to_csv(real_x_path, index=True)
+    normalized_real_dataset[1].to_csv(real_y_path, index=True)
+
+    synth_entries = []
+    for index, (x_frame, y_frame) in enumerate(normalized_synth_datasets, start=1):
+        x_path = output_path / f"synthetic_{index:03d}_X_normalized.csv"
+        y_path = output_path / f"synthetic_{index:03d}_y_normalized.csv"
+        x_frame.to_csv(x_path, index=True)
+        y_frame.to_csv(y_path, index=True)
+        synth_entries.append({"index": index,
+                              "x_path": x_path.name,
+                              "y_path": y_path.name,
+                              "rows": len(x_frame)})
+
+    manifest["real_paths"] = {"X": real_x_path.name, "y": real_y_path.name}
+    manifest["synthetic_paths"] = synth_entries
+    manifest["denorm_values"] = {
+        "X_mean": _series_to_dict(data["denorm_values"]["X_mean"]),
+        "X_std": _series_to_dict(data["denorm_values"]["X_std"]),
+        "y_mean": _series_to_dict(data["denorm_values"]["y_mean"]),
+        "y_std": _series_to_dict(data["denorm_values"]["y_std"]),
+    }
+
+    manifest_path = output_path / "manifest.json"
+    with manifest_path.open("w", encoding="utf-8") as manifest_file:
+        json.dump(manifest, manifest_file, indent=2, ensure_ascii=False)
+
+    pickle_path = output_path / "prepared_data.pkl"
+    with pickle_path.open("wb") as pickle_file:
+        pickle.dump(data, pickle_file)
+
+    return {"output_dir": str(output_path),
+            "manifest_path": str(manifest_path),
+            "pickle_path": str(pickle_path),
+            "real_x_path": str(real_x_path),
+            "real_y_path": str(real_y_path),
+            "synthetic_entries": synth_entries}
+
+
+def load_prepared_data(output_dir):
+    output_path = Path(output_dir)
+    pickle_path = output_path / "prepared_data.pkl"
+    with pickle_path.open("rb") as pickle_file:
+        return pickle.load(pickle_file)
+
+
 def build_shared_raw_dataset(data, target_names):
     y = data[target_names].copy()
     feature_columns = ["Potential"]
@@ -102,10 +176,12 @@ def load_real_and_synth_data(exp_params):
     file_names = sorted(
         file_name for file_name in os.listdir(synth_data_path) if file_name.endswith("_EIS_vectors.csv"))
     synth_data_frames = []
+    synth_metadata = []
     for file_name in file_names:
         file_data = pd.read_csv(synth_data_path + os.sep + file_name)
         file_data = add_domain_normalized_cycle_target(file_data)
         metadata = parse_v3_filename_metadata(file_name)
+        synth_metadata.append(metadata)
         synth_data_frames.append((file_data, metadata))
 
     # First, save number of samples per frame and concatenate them
@@ -138,5 +214,9 @@ def load_real_and_synth_data(exp_params):
     data = {"normalized_synth_datasets": normalized_synth_datasets,
             "normalized_real_dataset": normalized_real_dataset,
             "denorm_values": denorm_values}
+
+    output_dir = exp_params.get("output_folder", os.getcwd())
+    data["saved_data_info"] = save_prepared_data(data, output_dir, exp_params, train_feature_columns,
+                                                  synth_lengths, synth_metadata)
 
     return data

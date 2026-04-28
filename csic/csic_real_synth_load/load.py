@@ -20,6 +20,7 @@ else:
 def main():
     base_folder = Path(__file__).resolve().parent
     config_params = {"base_folder": str(base_folder),
+                     "output_folder": os.getcwd(),
                      "real_data_version": "v2",
                      "synth_data_version": "v3",
                      "targets": ["SoC (%)", "Cycle"]}
@@ -30,6 +31,7 @@ def main():
     # Print data stats
     print(f"[shared_raw] Number of synthetic datasets: {len(data['normalized_synth_datasets'])}")
     print(f"[shared_raw] Number of real samples: {len(data['normalized_real_dataset'][0])}")
+    print(f"[shared_raw] Saved prepared data to: {data['saved_data_info']['output_dir']}")
 
 if __name__ == "__main__":
     main()
