@@ -1,0 +1,17 @@
+{
+  "test/ctx10/loss": 58.827565828959145,
+  "test/ctx10/nll": 8.49457852045695,
+  "test/ctx10/kl": 50.332987785339355,
+  "test/ctx10/mae_SoC_pct": 4.670062065124512,
+  "test/ctx10/mae_Cycle": 14.372729301452637,
+  "test/ctx30/loss": 17.005788962046307,
+  "test/ctx30/nll": 5.136739373207092,
+  "test/ctx30/kl": 11.869048873583475,
+  "test/ctx30/mae_SoC_pct": 3.964008172353109,
+  "test/ctx30/mae_Cycle": 14.334916432698568,
+  "test/ctx50/loss": 9.557497342427572,
+  "test/ctx50/nll": 6.937983512878418,
+  "test/ctx50/kl": 2.619514067967733,
+  "test/ctx50/mae_SoC_pct": 4.483664671579997,
+  "test/ctx50/mae_Cycle": 14.834547996520996
+}

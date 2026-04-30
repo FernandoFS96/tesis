@@ -36,6 +36,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import torch
+from tqdm import tqdm
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import Adam
@@ -435,7 +436,8 @@ def train(cfg: Config):
 
     print(f"\n🚀  Iniciando entrenamiento — {cfg.epochs} epochs\n")
 
-    for epoch in range(1, cfg.epochs + 1):
+    pbar = tqdm(range(1, cfg.epochs + 1), desc="Training", unit="epoch")
+    for epoch in pbar:
         model.train()
         ep_losses, ep_nlls, ep_kls = [], [], []
 
@@ -499,24 +501,19 @@ def train(cfg: Config):
                     run_dir / "best.pt"
                 )
 
-        # ── Logging ───────────────────────────────────────────────────────────
-        if epoch % cfg.log_every == 0 or epoch == cfg.epochs:
-            elapsed = time.time() - t0
-            val_str = ""
-            if "val/ctx30/loss" in row:
-                soc_k = "val/ctx30/mae_SoC_pct"
-                cyc_k = "val/ctx30/mae_Cycle"
-                mae_soc = row.get(soc_k, float("nan"))
-                mae_cyc = row.get(cyc_k, float("nan"))
-                val_str = (f"  │  val_loss={row['val/ctx30/loss']:.4f}"
-                           f"  MAE_SoC={mae_soc:.4f}"
-                           f"  MAE_Cycle={mae_cyc:.4f}")
-            print(f"  Epoch {epoch:4d}/{cfg.epochs}"
-                  f"  loss={train_loss:.4f}  nll={train_nll:.4f}"
-                  f"  kl={train_kl:.5f}  lr={lr_now:.2e}"
-                  f"{val_str}"
-                  f"  [{elapsed:.0f}s]")
-
+        # ── Actualizar barra de progreso ───────────────────────────────────────
+        postfix_dict = {
+            "loss": f"{train_loss:.4f}",
+            "nll": f"{train_nll:.4f}",
+            "kl": f"{train_kl:.5f}",
+            "lr": f"{lr_now:.2e}",
+        }
+        if "val/ctx30/loss" in row:
+            postfix_dict["val_loss"] = f"{row['val/ctx30/loss']:.4f}"
+            postfix_dict["mae_soc"] = f"{row.get('val/ctx30/mae_SoC_pct', float('nan')):.4f}"
+            postfix_dict["mae_cyc"] = f"{row.get('val/ctx30/mae_Cycle', float('nan')):.4f}"
+        
+        pbar.set_postfix(postfix_dict)
         metrics_rows.append(row)
 
     # Guardar último checkpoint
