@@ -23,7 +23,7 @@ def main():
                      "output_folder": os.path.join(os.getcwd(), "prepared_data"),
                      "real_data_version": "v2",
                      "synth_data_version": "v3",
-                     "targets": ["SoC (%)"]  # antes: ["SoC (%)", "Cycle"]
+                     "targets": ["SoC (%)", "Cycle"] # antes: ["SoC (%)", "Cycle"]
                      }
 
     # Load data

@@ -1,0 +1,63 @@
+{
+  "data_dir": "../csic_real_synth_load/prepared_data",
+  "train_task_ids": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16
+  ],
+  "val_task_ids": [
+    17,
+    18,
+    19,
+    20,
+    21
+  ],
+  "test_task_ids": [
+    22,
+    23,
+    24
+  ],
+  "num_hidden": 128,
+  "input_dim": 203,
+  "output_dim": 2,
+  "ctx_min_frac": 0.1,
+  "ctx_max_frac": 0.6,
+  "val_ctx_fracs": [
+    0.1,
+    0.3,
+    0.5
+  ],
+  "max_context_pts": 512,
+  "max_target_pts": 1024,
+  "epochs": 200,
+  "episodes_per_epoch": 100,
+  "lr": 0.0003,
+  "lr_min": 1e-05,
+  "beta": 1.0,
+  "grad_clip": 1.0,
+  "seed": 42,
+  "run_dir": "./runs/20260430_162800",
+  "log_every": 10,
+  "val_every": 10,
+  "eval_only": false,
+  "ckpt": "",
+  "target_cols": [
+    "SoC (%)",
+    "Cycle"
+  ],
+  "n_params": 1119492
+}
