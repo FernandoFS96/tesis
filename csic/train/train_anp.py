@@ -104,6 +104,7 @@ class Config:
 
     # ── Entrenamiento ─────────────────────────────────────────────────────────
     epochs:          int   = 500
+    early_stopping:  int   = 100   # é pocas sin mejora antes de detener
     episodes_per_epoch: int = 100   # episodios por época (batches de 1 tarea)
     lr:              float = 3e-4
     lr_min:          float = 1e-5   # lr mínimo para cosine annealing
@@ -432,7 +433,7 @@ def train(cfg: Config):
 
     # ── Entrenamiento ─────────────────────────────────────────────────────────
     best_val_loss = float("inf")
-    patience = 100  # épocas sin mejora antes de detener
+    patience = cfg.early_stopping  # épocas sin mejora antes de detener
     epochs_without_improvement = 0
     t0 = time.time()
 
@@ -511,16 +512,16 @@ def train(cfg: Config):
 
         # ── Actualizar barra de progreso ───────────────────────────────────────
         postfix_dict = {
-            "loss": f"{train_loss:.4f}",
-            "nll": f"{train_nll:.4f}",
-            "kl": f"{train_kl:.5f}",
+            "loss": f"{train_loss:.2f}",
+            "nll": f"{train_nll:.2f}",
+            "kl": f"{train_kl:.3f}",
             "lr": f"{lr_now:.2e}",
         }
         if "val/ctx30/loss" in row:
-            postfix_dict["val_loss"] = f"{row['val/ctx30/loss']:.4f}"
-            postfix_dict["mae_soc"] = f"{row.get('val/ctx30/mae_SoC_pct', float('nan')):.4f}"
-            postfix_dict["mae_cyc"] = f"{row.get('val/ctx30/mae_Cycle', float('nan')):.4f}"
-            postfix_dict["no_improve"] = f"{epochs_without_improvement}/{patience}"
+            postfix_dict["val_loss"] = f"{row['val/ctx30/loss']:.2f}"
+            postfix_dict["mae_soc"] = f"{row.get('val/ctx30/mae_SoC_pct', float('nan')):.2f}"
+            postfix_dict["mae_cyc"] = f"{row.get('val/ctx30/mae_Cycle', float('nan')):.2f}"
+            postfix_dict["E_S"] = f"{epochs_without_improvement}/{patience}"
         
         pbar.set_postfix(postfix_dict)
         metrics_rows.append(row)
@@ -598,33 +599,27 @@ def eval_only(cfg: Config):
 
 def parse_args():
     p = argparse.ArgumentParser(description="Entrenamiento ANP — Baterías")
-    p.add_argument("--data_dir",     type=str,   default=None,
-                   help="Ruta al directorio que contiene prepared_data.pkl")
-    p.add_argument("--run_dir",      type=str,   default="")
-    p.add_argument("--num_hidden",   type=int,   default=128)
-    p.add_argument("--epochs",       type=int,   default=200)
-    p.add_argument("--episodes",     type=int,   default=100,
-                   dest="episodes_per_epoch")
+    p.add_argument("--data_dir",     type=str, default=None, help="Ruta al directorio que contiene prepared_data.pkl")
+    p.add_argument("--run_dir",      type=str, default="")
+    p.add_argument("--num_hidden",   type=int, default=128)
+    p.add_argument("--epochs",       type=int, default=500)
+    p.add_argument("--episodes",     type=int, default=100, dest="episodes_per_epoch")
+    p.add_argument("--early_stopping", type=int, default=100, help="Paciencia para early stopping (épocas sin mejora)")
     p.add_argument("--lr",           type=float, default=3e-4)
     p.add_argument("--beta",         type=float, default=1.0)
-    p.add_argument("--ctx_min",      type=float, default=0.10,
-                   dest="ctx_min_frac")
-    p.add_argument("--ctx_max",      type=float, default=0.60,
-                   dest="ctx_max_frac")
-    p.add_argument("--max_ctx_pts",  type=int,   default=512,
-                   dest="max_context_pts")
-    p.add_argument("--max_tgt_pts",  type=int,   default=1024,
-                   dest="max_target_pts")
+    p.add_argument("--ctx_min",      type=float, default=0.10, dest="ctx_min_frac")
+    p.add_argument("--ctx_max",      type=float, default=0.60, dest="ctx_max_frac")
+    p.add_argument("--max_ctx_pts",  type=int,   default=512, dest="max_context_pts")
+    p.add_argument("--max_tgt_pts",  type=int,   default=1024, dest="max_target_pts")
     p.add_argument("--grad_clip",    type=float, default=1.0)
-    p.add_argument("--seed",         type=int,   default=42)
+    p.add_argument("--seed",         type=int,   default=18)
     p.add_argument("--eval_only",    action="store_true")
     p.add_argument("--ckpt",         type=str,   default="")
     p.add_argument("--log_every",    type=int,   default=10)
     p.add_argument("--val_every",    type=int,   default=10)
 
     # Split manual (opcional)
-    p.add_argument("--train_ids", type=int, nargs="+", default=None,
-                   help="Índices 0-based de los datasets de train")
+    p.add_argument("--train_ids", type=int, nargs="+", default=None, help="Índices 0-based de los datasets de train")
     p.add_argument("--val_ids",   type=int, nargs="+", default=None)
     p.add_argument("--test_ids",  type=int, nargs="+", default=None)
     return p.parse_args()
@@ -638,6 +633,7 @@ def main():
         run_dir           = args.run_dir,
         num_hidden        = args.num_hidden,
         epochs            = args.epochs,
+        early_stopping    = args.early_stopping,
         episodes_per_epoch= args.episodes_per_epoch,
         lr                = args.lr,
         beta              = args.beta,
