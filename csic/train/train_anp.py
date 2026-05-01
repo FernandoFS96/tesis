@@ -103,7 +103,7 @@ class Config:
     max_target_pts:  int  = 1024
 
     # ── Entrenamiento ─────────────────────────────────────────────────────────
-    epochs:          int   = 200
+    epochs:          int   = 500
     episodes_per_epoch: int = 100   # episodios por época (batches de 1 tarea)
     lr:              float = 3e-4
     lr_min:          float = 1e-5   # lr mínimo para cosine annealing
@@ -114,7 +114,7 @@ class Config:
     # ── Logging / Guardado ────────────────────────────────────────────────────
     run_dir:         str   = ""     # se auto-genera si está vacío
     log_every:       int   = 10     # imprimir cada N epochs
-    val_every:       int   = 10     # validar cada N epochs
+    val_every:       int   = 1     # validar cada N epochs
     eval_only:       bool  = False
     ckpt:            str   = ""     # checkpoint a cargar (para eval_only)
 
@@ -432,6 +432,8 @@ def train(cfg: Config):
 
     # ── Entrenamiento ─────────────────────────────────────────────────────────
     best_val_loss = float("inf")
+    patience = 100  # épocas sin mejora antes de detener
+    epochs_without_improvement = 0
     t0 = time.time()
 
     print(f"\n🚀  Iniciando entrenamiento — {cfg.epochs} epochs\n")
@@ -494,12 +496,18 @@ def train(cfg: Config):
 
             if main_val < best_val_loss:
                 best_val_loss = main_val
+                epochs_without_improvement = 0
                 torch.save(
                     {"epoch": epoch, "model": model.state_dict(),
                      "optimizer": optimizer.state_dict(),
                      "val_loss": best_val_loss, "cfg": cfg_dict},
                     run_dir / "best.pt"
                 )
+            else:
+                epochs_without_improvement += 1
+                if epochs_without_improvement >= patience:
+                    print(f"Early stopping en epoch {epoch}")
+                    break
 
         # ── Actualizar barra de progreso ───────────────────────────────────────
         postfix_dict = {
@@ -512,6 +520,7 @@ def train(cfg: Config):
             postfix_dict["val_loss"] = f"{row['val/ctx30/loss']:.4f}"
             postfix_dict["mae_soc"] = f"{row.get('val/ctx30/mae_SoC_pct', float('nan')):.4f}"
             postfix_dict["mae_cyc"] = f"{row.get('val/ctx30/mae_Cycle', float('nan')):.4f}"
+            postfix_dict["no_improve"] = f"{epochs_without_improvement}/{patience}"
         
         pbar.set_postfix(postfix_dict)
         metrics_rows.append(row)
