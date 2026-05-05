@@ -122,7 +122,7 @@ class Config:
     lr_min:             float = 1e-5   # cosine annealing minimum LR
     beta:               float = 1.0    # KL weight in ELBO: loss = NLL + beta*KL
     grad_clip:          float = 1.0    # max gradient norm before clipping
-    seed:               int   = 42
+    seed:               int   = 18
 
     # ── Logging / checkpointing ───────────────────────────────────────────────
     run_dir:   str  = ""    # auto-generated as ./runs/<timestamp>/ if empty
@@ -336,13 +336,13 @@ def train(cfg: Config) -> tuple:
             "loss": f"{train_loss:.3f}",
             "nll":  f"{train_nll:.3f}",
             "kl":   f"{train_kl:.4f}",
-            "lr":   f"{lr_now:.1e}",
+            #"lr":   f"{lr_now:.1e}",
         }
         if "val/loss" in row:
             postfix["val"]      = f"{row['val/loss']:.3f}"
             postfix["mae_soc"]  = f"{row.get('val/mae_SoC_pct', float('nan')):.2f}"
             postfix["mae_cyc"]  = f"{row.get('val/mae_Cycle', float('nan')):.2f}"
-            postfix["patience"] = f"{epochs_without_improve}/{cfg.early_stopping}"
+            postfix["E_S"] = f"{epochs_without_improve}/{cfg.early_stopping}"
         pbar.set_postfix(postfix)
 
         metrics_rows.append(row)
@@ -461,21 +461,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--data_dir",       type=str,   default=None)
     p.add_argument("--run_dir",        type=str,   default="")
     p.add_argument("--num_hidden",     type=int,   default=128)
-    p.add_argument("--ctx_cycles",     type=int,   default=50)
-    p.add_argument("--tgt_cycles",     type=int,   default=50)
-    p.add_argument("--meas_per_cycle", type=int,   default=30,
-                   dest="measurements_per_cycle")
+    p.add_argument("--ctx_cycles",     type=int,   default=60)
+    p.add_argument("--tgt_cycles",     type=int,   default=60)
+    p.add_argument("--meas_per_cycle", type=int,   default=30, dest="measurements_per_cycle")
     p.add_argument("--epochs",         type=int,   default=500)
-    p.add_argument("--early_stop",     type=int,   default=100,
-                   dest="early_stopping")
-    p.add_argument("--episodes",       type=int,   default=100,
-                   dest="episodes_per_epoch")
-    p.add_argument("--batch_size",     type=int,   default=4)
+    p.add_argument("--early_stop",     type=int,   default=100, dest="early_stopping")
+    p.add_argument("--episodes",       type=int,   default=100, dest="episodes_per_epoch")
+    p.add_argument("--batch_size",     type=int,   default=8)
     p.add_argument("--lr",             type=float, default=3e-4)
     p.add_argument("--lr_min",         type=float, default=1e-5)
     p.add_argument("--beta",           type=float, default=1.0)
     p.add_argument("--grad_clip",      type=float, default=1.0)
-    p.add_argument("--seed",           type=int,   default=42)
+    p.add_argument("--seed",           type=int,   default=18)
     p.add_argument("--log_every",      type=int,   default=10)
     p.add_argument("--val_every",      type=int,   default=1)
     p.add_argument("--eval_only",      action="store_true")
