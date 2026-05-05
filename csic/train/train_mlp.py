@@ -57,6 +57,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+from matplotlib.figure import Figure
 import numpy as np
 import pandas as pd
 import torch
@@ -323,9 +324,14 @@ def plot_mlp_curves(
     epochs = metrics_df["epoch"].values
 
     def _col(name: str) -> np.ndarray | None:
-        return metrics_df[name].values if name in metrics_df.columns else None
+        # Ensure we always return a NumPy ndarray (not a pandas ExtensionArray)
+        if name not in metrics_df.columns:
+            return None
+        vals = metrics_df[name].to_numpy()
+        # Coerce to a float ndarray to avoid ExtensionArray/ categorical types
+        return np.asarray(vals, dtype=float)
 
-    def _save(fig: plt.Figure, path: Path) -> None:
+    def _save(fig: Figure, path: Path) -> None:
         fig.tight_layout()
         fig.savefig(path, dpi=_C["dpi"], bbox_inches="tight")
         plt.close(fig)
