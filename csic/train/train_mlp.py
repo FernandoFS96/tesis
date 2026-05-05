@@ -474,18 +474,32 @@ def train_one_mlp(
     epochs_without_improve = 0
     rows                   = []
 
-    for epoch in range(1, cfg.epochs + 1):
+    epoch_pbar = tqdm(
+        range(1, cfg.epochs + 1),
+        desc=f"{model_name} epochs",
+        dynamic_ncols=True,
+        leave=False,
+    )
+
+    for epoch in epoch_pbar:
         # ── Train ─────────────────────────────────────────────────────────────
         model.train()
         batches    = make_row_batches(X_train, y_train, cfg.batch_size, shuffle=True)
         batch_losses = []
-        for X_b, y_b in batches:
+        batch_pbar = tqdm(
+            batches,
+            desc=f"{model_name} batches",
+            dynamic_ncols=True,
+            leave=False,
+        )
+        for X_b, y_b in batch_pbar:
             X_b, y_b = X_b.to(device), y_b.to(device)
             optimizer.zero_grad()
             loss = criterion(model(X_b), y_b)
             loss.backward()
             optimizer.step()
             batch_losses.append(loss.item())
+            batch_pbar.set_postfix({"loss": f"{loss.item():.4f}"})
         train_loss = float(np.mean(batch_losses))
 
         scheduler.step()
@@ -504,6 +518,13 @@ def train_one_mlp(
             safe = col.replace(" ", "_").replace("(","").replace(")","").replace("%","pct")
             row[f"val/mae_{safe}"] = val
         rows.append(row)
+        epoch_pbar.set_postfix(
+            {
+                "train_loss": f"{train_loss:.4f}",
+                "val_loss": f"{val_loss:.4f}",
+                "best_val": f"{best_val_loss:.4f}",
+            }
+        )
 
         # ── Early stopping ─────────────────────────────────────────────────────
         if val_loss < best_val_loss:
@@ -517,6 +538,8 @@ def train_one_mlp(
             epochs_without_improve += 1
             if epochs_without_improve >= cfg.early_stopping:
                 break
+
+    epoch_pbar.close()
 
     metrics_df = pd.DataFrame(rows)
     metrics_df.to_csv(model_dir / "metrics.csv", index=False)
@@ -644,8 +667,14 @@ def run(cfg: Config) -> None:
 
     specialist_models: list = []
 
+    specialist_iter = tqdm(
+        list(zip(cfg.train_task_ids, train_windows)),
+        desc="Specialist models",
+        dynamic_ncols=True,
+    )
+
     for task_idx, (task_id, (X_ctx, y_ctx, X_tgt, y_tgt)) in enumerate(
-        zip(cfg.train_task_ids, train_windows)
+        specialist_iter
     ):
         label      = f"specialist_{task_idx+1:02d}"
         model_dir  = run_dir / label
@@ -653,6 +682,7 @@ def run(cfg: Config) -> None:
 
         print(f"\n  [{task_idx+1:02d}/{len(cfg.train_task_ids)}]  {model_name}")
         print(f"   ctx_rows={len(X_ctx)}  tgt_rows={len(X_tgt)}")
+        specialist_iter.set_postfix({"current": label})
 
         model = MLP(cfg.input_dim, cfg.output_dim, cfg.neurons, cfg.dropout)
         print(f"   params: {model.count_params():,}")
@@ -832,17 +862,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--neurons",        type=int,   default=128,
                    help="Hidden layer width (matches ANP num_hidden)")
     p.add_argument("--dropout",        type=float, default=0.1)
-    p.add_argument("--ctx_cycles",     type=int,   default=50)
-    p.add_argument("--tgt_cycles",     type=int,   default=50)
+    p.add_argument("--ctx_cycles",     type=int,   default=60)
+    p.add_argument("--tgt_cycles",     type=int,   default=60)
     p.add_argument("--meas_per_cycle", type=int,   default=30,
                    dest="measurements_per_cycle")
-    p.add_argument("--epochs",         type=int,   default=500)
-    p.add_argument("--early_stop",     type=int,   default=50,
+    p.add_argument("--epochs",         type=int,   default=1000)
+    p.add_argument("--early_stop",     type=int,   default=200,
                    dest="early_stopping")
     p.add_argument("--lr",             type=float, default=1e-3)
     p.add_argument("--batch_size",     type=int,   default=256)
     p.add_argument("--weight_decay",   type=float, default=1e-4)
-    p.add_argument("--seed",           type=int,   default=42)
+    p.add_argument("--seed",           type=int,   default=18)
     p.add_argument("--train_ids",      type=int,   nargs="+", default=None)
     p.add_argument("--val_ids",        type=int,   nargs="+", default=None)
     p.add_argument("--test_ids",       type=int,   nargs="+", default=None)
