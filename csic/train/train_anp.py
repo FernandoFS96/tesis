@@ -56,6 +56,13 @@ from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
 
+# Enable memory-efficient attention kernels (Flash Attention 2 if supported, memory-efficient SDPA otherwise). 
+# Applied automatically to all F.scaled_dot_product_attention calls throughout the model.
+from torch.nn.attention import sdpa_kernel, SDPBackend
+torch.backends.cuda.enable_flash_sdp(True)
+torch.backends.cuda.enable_mem_efficient_sdp(True)
+
+
 from train_utils import (
     load_prepared_data,
     validate_targets,
@@ -114,12 +121,12 @@ class Config:
     measurements_per_cycle:  int = 30   # measurements per cycle in the dataset
 
     # ── Training ──────────────────────────────────────────────────────────────
-    epochs:             int   = 500
-    early_stopping:     int   = 100    # patience: epochs without val improvement
+    epochs:             int   = 1000
+    early_stopping:     int   = 200    # patience: epochs without val improvement
     episodes_per_epoch: int   = 100    # total episodes drawn per epoch
     batch_size:         int   = 4      # episodes per GPU forward pass
-    lr:                 float = 3e-4
-    lr_min:             float = 1e-5   # cosine annealing minimum LR
+    lr:                 float = 1e-4
+    lr_min:             float = 5e-5   # cosine annealing minimum LR
     beta:               float = 1.0    # KL weight in ELBO: loss = NLL + beta*KL
     grad_clip:          float = 1.0    # max gradient norm before clipping
     seed:               int   = 18
@@ -333,13 +340,13 @@ def train(cfg: Config) -> tuple:
 
         # ── Progress bar ──────────────────────────────────────────────────────
         postfix: dict = {
-            "loss": f"{train_loss:.3f}",
-            "nll":  f"{train_nll:.3f}",
-            "kl":   f"{train_kl:.4f}",
+            "loss": f"{train_loss:.2f}",
+            "nll":  f"{train_nll:.2f}",
+            "kl":   f"{train_kl:.3f}",
             #"lr":   f"{lr_now:.1e}",
         }
         if "val/loss" in row:
-            postfix["val"]      = f"{row['val/loss']:.3f}"
+            postfix["val"]      = f"{row['val/loss']:.2f}"
             postfix["mae_soc"]  = f"{row.get('val/mae_SoC_pct', float('nan')):.2f}"
             postfix["mae_cyc"]  = f"{row.get('val/mae_Cycle', float('nan')):.2f}"
             postfix["E_S"] = f"{epochs_without_improve}/{cfg.early_stopping}"
@@ -464,12 +471,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--ctx_cycles",     type=int,   default=60)
     p.add_argument("--tgt_cycles",     type=int,   default=60)
     p.add_argument("--meas_per_cycle", type=int,   default=30, dest="measurements_per_cycle")
-    p.add_argument("--epochs",         type=int,   default=500)
-    p.add_argument("--early_stop",     type=int,   default=100, dest="early_stopping")
+    p.add_argument("--epochs",         type=int,   default=1000)
+    p.add_argument("--early_stop",     type=int,   default=200, dest="early_stopping")
     p.add_argument("--episodes",       type=int,   default=100, dest="episodes_per_epoch")
     p.add_argument("--batch_size",     type=int,   default=8)
-    p.add_argument("--lr",             type=float, default=3e-4)
-    p.add_argument("--lr_min",         type=float, default=1e-5)
+    p.add_argument("--lr",             type=float, default=1e-4)
+    p.add_argument("--lr_min",         type=float, default=5e-5)
     p.add_argument("--beta",           type=float, default=1.0)
     p.add_argument("--grad_clip",      type=float, default=1.0)
     p.add_argument("--seed",           type=int,   default=18)
