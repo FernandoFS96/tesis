@@ -50,6 +50,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+import matplotlib.patches
 import numpy as np
 import pandas as pd
 import torch
@@ -131,12 +132,21 @@ def compute_mae(
     denorm_values: dict,
     target_cols:   List[str],
 ) -> Dict[str, float]:
-    """Denormalized MAE per target column."""
+    """Denormalized MAE per target column. Clips SoC predictions to [0, 100]."""
     result = {}
     for i, col in enumerate(target_cols):
         m = denorm_values["y_mean"].get(col, 0.0)
         s = denorm_values["y_std"].get(col, 1.0)
-        result[col] = float(np.abs(pred[:, i] * s + m - (true[:, i] * s + m)).mean())
+        
+        # Denormalize predictions
+        pred_denorm = pred[:, i] * s + m
+        true_denorm = true[:, i] * s + m
+        
+        # Clip SoC predictions to [0, 100] since it's a battery percentage
+        if col == "SoC (%)":
+            pred_denorm = np.clip(pred_denorm, 0.0, 100.0)
+        
+        result[col] = float(np.abs(pred_denorm - true_denorm).mean())
     return result
 
 
@@ -384,6 +394,17 @@ def plot_heatmaps(
                 if not np.isnan(v):
                     ax.text(c, r, f"{v:.2f}", ha="center", va="center",
                             fontsize=6, color="black")
+
+        # Highlight best (minimum) value per column with green box
+        for c in range(n_tasks):
+            col_vals = vals[:, c]
+            if not np.all(np.isnan(col_vals)):
+                min_row = np.nanargmin(col_vals)
+                rect = matplotlib.patches.Rectangle(
+                    (c - 0.5, min_row - 0.5), 1, 1,
+                    linewidth=2.5, edgecolor='lime', facecolor='none'
+                )
+                ax.add_patch(rect)
 
         # Vertical separator between train / val / test
         if train_count > 0:
