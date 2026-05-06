@@ -206,9 +206,9 @@ def objective(
 
     pbar = tqdm(
         range(1, EPOCHS + 1),
-        desc=f"Trial {trial_id:03d} "
-             f"[h={num_hidden} b={batch_size} lr={lr:.0e} β={beta} d={attn_dropout}]",
+        desc=f"Training",
         unit="ep",
+        dynamic_ncols=True,
         leave=True,   # keep the bar visible after the trial ends
     )
 
@@ -255,11 +255,11 @@ def objective(
         # Update progress bar with current metrics
         soc_key = "val/mae_SoC_pct"
         pbar.set_postfix({
-            "loss": f"{train_loss:.3f}",
-            "val": f"{val_loss:.3f}",
+            "loss": f"{train_loss:.2f}",
+            "val": f"{val_loss:.2f}",
             "mae_soc": f"{val_metrics.get(soc_key, float('nan')):.2f}",
-            "best_mae_soc": f"{min(best_mae_soc, val_metrics.get(soc_key, float('nan'))):.2f}",
-            "E_S": f"{no_improve}/{EARLY_STOP}",
+            "best_mae": f"{min(best_mae_soc, val_metrics.get(soc_key, float('nan'))):.2f}",
+            "es": f"{no_improve}/{EARLY_STOP}",
         })
 
         # Track best and apply early stopping
