@@ -51,7 +51,7 @@ import random
 import sys
 from pathlib import Path
 from typing import List
-
+from tqdm import tqdm
 import numpy as np
 import pandas as pd
 import torch
@@ -199,12 +199,20 @@ def objective(
 
     # ── Training loop ─────────────────────────────────────────────────────────
     steps_per_epoch  = max(1, EPISODES // batch_size)
-    best_val_loss    = float("inf")
+    best_mae_soc    = float("inf")
     best_model_state = None
     no_improve       = 0
     metrics_rows: list = []
 
-    for epoch in range(1, EPOCHS + 1):
+    pbar = tqdm(
+        range(1, EPOCHS + 1),
+        desc=f"Trial {trial_id:03d} "
+             f"[h={num_hidden} b={batch_size} lr={lr:.0e} β={beta} d={attn_dropout}]",
+        unit="ep",
+        leave=True,   # keep the bar visible after the trial ends
+    )
+
+    for epoch in pbar:
         model.train()
         ep_losses, ep_nlls, ep_kls = [], [], []
 
@@ -244,20 +252,33 @@ def objective(
         row.update(val_metrics)
         val_loss = val_metrics["val/loss"]
 
+        # Update progress bar with current metrics
+        soc_key = "val/mae_SoC_pct"
+        pbar.set_postfix({
+            "loss": f"{train_loss:.3f}",
+            "val": f"{val_loss:.3f}",
+            "mae_soc": f"{val_metrics.get(soc_key, float('nan')):.2f}",
+            "best_mae_soc": f"{min(best_mae_soc, val_metrics.get(soc_key, float('nan'))):.2f}",
+            "E_S": f"{no_improve}/{EARLY_STOP}",
+        })
+
         # Track best and apply early stopping
-        if val_loss < best_val_loss:
-            best_val_loss    = val_loss
+        current_mae_soc = val_metrics.get("val/mae_SoC_pct", float("inf"))
+        if current_mae_soc  < best_mae_soc:
+            best_mae_soc = current_mae_soc
             best_model_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-            no_improve       = 0
+            no_improve = 0
         else:
             no_improve += 1
 
         metrics_rows.append(row)
 
         if no_improve >= EARLY_STOP:
-            print(f"     early stopping at epoch {epoch} "
-                  f"(no improvement for {EARLY_STOP} epochs)")
+            pbar.set_description(
+                f"Trial {trial_id:03d} ⏹ early stop ep={epoch}"
+            )
             break
+    pbar.close()
 
     # ── Save trial outputs ────────────────────────────────────────────────────
     # 1. Best model weights
@@ -266,7 +287,7 @@ def objective(
             "trial":      trial_id,
             "epoch":      epoch,
             "model":      best_model_state,
-            "val_loss":   best_val_loss,
+            "val_MAE":   best_mae_soc,
             "params":     trial.params,
             "n_params":   n_params,
             "target_cols": target_cols,
@@ -286,7 +307,7 @@ def objective(
         json.dump(
             {
                 "trial_id":    trial_id,
-                "val_loss":    best_val_loss,
+                "val_MAE":    best_mae_soc,
                 "params":      trial.params,
                 "n_params":    n_params,
                 "ctx_cycles":  CTX_CYCLES,
@@ -299,10 +320,10 @@ def objective(
             f, indent=2,
         )
 
-    print(f"     best val_loss = {best_val_loss:.4f}  "
+    print(f"     best val_MAE = {best_mae_soc:.2f}  "
           f"(epoch {epoch}  |  saved to trial_{trial_id:03d}/)")
 
-    return best_val_loss
+    return best_mae_soc
 
 
 # ==============================================================================
@@ -387,11 +408,11 @@ def main() -> None:
     print(f"🔍  Trials  : {args.n_trials}")
     print(f"\n  Search space:")
     print(f"    num_hidden   : {[64, 128, 192, 256]}")
-    print(f"    batch_size   : {[2, 4, 6, 8, 9]}")
+    print(f"    batch_size   : {[2, 4, 6, 8]}")
     print(f"    lr           : {LR_CHOICES}")
     print(f"    beta         : {BETA_CHOICES}")
     print(f"    attn_dropout : {DROPOUT_CHOICES}")
-    total_combinations = 4 * 5 * 4 * 5 * 4
+    total_combinations = 4 * 4 * 4 * 4 * 3
     print(f"\n  Total possible combinations : {total_combinations}")
     print(f"  Trials requested            : {args.n_trials}")
     print(f"  Coverage                    : {args.n_trials/total_combinations*100:.1f}%")
@@ -430,7 +451,7 @@ def main() -> None:
     best = study.best_trial
     print(f"\n{'='*58}")
     print(f"  Best trial   : #{best.number:03d}")
-    print(f"  Best val loss: {best.value:.4f}")
+    print(f"  Best val loss: {best.value:.2f}")
     print(f"\n  Best hyperparameters:")
     for k, v in best.params.items():
         print(f"    {k:<20} = {v}")

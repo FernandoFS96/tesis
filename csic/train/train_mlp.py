@@ -4,16 +4,12 @@ train_mlp.py
 Specialist MLP and Domain-Randomized (DR) MLP baseline training script.
 
 Purpose:
-    Provide a supervised baseline against which the ANP meta-learning model
-    can be compared, following the professor's recommendation:
-        "Train 17 specialist MLPs (one per task) + 3 OOD, validate on all
-         tasks to confirm the numbers are what we expect."
+    Provide a supervised baseline against which the ANP meta-learning model can be compared, following the professor's recommendation:
+        "Train 17 specialist MLPs (one per task) + 3 OOD, validate on all tasks to confirm the numbers are what we expect."
 
 Models trained:
-    - 17 Specialist MLPs  — one per training task, fitted only on that task's
-                            first ctx_cycles cycles.
-    - 1 DR-MLP            — trained on all 17 training tasks concatenated,
-                            acting as a domain-randomized generalist baseline.
+    - 17 Specialist MLPs  — one per training task, fitted only on that task's first ctx_cycles cycles.
+    - 1 DR-MLP            — trained on all 17 training tasks concatenated, acting as a domain-randomized generalist baseline.
 
 Evaluation window (same as ANP):
     - Context (train input): cycles 1  – ctx_cycles      (default 50)
@@ -363,7 +359,7 @@ def plot_mlp_curves(
                 label=f"Val MAE — {col}")
         best = np.nanmin(v)
         ax.axhline(best, color="gray", linestyle=":", linewidth=1.0,
-                   label=f"Best = {best:.4f}")
+                   label=f"Best = {best:.2f}")
         ax.set_xlabel("Epoch"); ax.set_ylabel(f"MAE [{col}]")
         ax.set_title(f"{title} — MAE {col}")
         ax.legend(); ax.grid(True, alpha=0.3)
@@ -470,7 +466,7 @@ def train_one_mlp(
     X_val_t = torch.tensor(X_val, dtype=torch.float32).to(device)
     y_val_t = torch.tensor(y_val, dtype=torch.float32).to(device)
 
-    best_val_loss          = float("inf")
+    best_soc_mae           = float("inf")
     epochs_without_improve = 0
     rows                   = []
 
@@ -499,7 +495,7 @@ def train_one_mlp(
             loss.backward()
             optimizer.step()
             batch_losses.append(loss.item())
-            batch_pbar.set_postfix({"loss": f"{loss.item():.4f}"})
+            batch_pbar.set_postfix({"loss": f"{loss.item():.2f}"})
         train_loss = float(np.mean(batch_losses))
 
         scheduler.step()
@@ -513,6 +509,7 @@ def train_one_mlp(
             ).item())
 
         mae = compute_mae(pred_val, y_val, denorm_values, target_cols)
+        soc_mae = mae.get("SoC (%)", float("inf"))
         row = {"epoch": epoch, "train/loss": train_loss, "val/loss": val_loss}
         for col, val in mae.items():
             safe = col.replace(" ", "_").replace("(","").replace(")","").replace("%","pct")
@@ -520,18 +517,19 @@ def train_one_mlp(
         rows.append(row)
         epoch_pbar.set_postfix(
             {
-                "train_loss": f"{train_loss:.4f}",
-                "val_loss": f"{val_loss:.4f}",
-                "best_val": f"{best_val_loss:.4f}",
+                "train_loss": f"{train_loss:.2f}",
+                "val_loss": f"{val_loss:.2f}",
+                "val_mae_soc": f"{soc_mae:.2f}",
+                "best_soc_mae": f"{best_soc_mae:.2f}",
             }
         )
 
         # ── Early stopping ─────────────────────────────────────────────────────
-        if val_loss < best_val_loss:
-            best_val_loss          = val_loss
+        if soc_mae < best_soc_mae:
+            best_soc_mae = soc_mae
             epochs_without_improve = 0
             torch.save(
-                {"epoch": epoch, "model": model.state_dict(), "val_loss": best_val_loss},
+                {"epoch": epoch, "model": model.state_dict(), "val_mae": best_soc_mae},
                 model_dir / "best.pt",
             )
         else:

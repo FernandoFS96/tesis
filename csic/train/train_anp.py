@@ -250,7 +250,7 @@ def train(cfg: Config) -> tuple:
         json.dump(cfg_dict, f, indent=2)
 
     # ── Training state ────────────────────────────────────────────────────────
-    best_val_loss          = float("inf")
+    best_val_MAE          = float("inf")
     epochs_without_improve = 0
     metrics_rows           = []
     steps_per_epoch        = max(1, cfg.episodes_per_epoch // cfg.batch_size)
@@ -315,17 +315,18 @@ def train(cfg: Config) -> tuple:
             )
             row.update(val_metrics)
 
-            current_val = val_metrics.get("val/loss", float("inf"))
+            #early stopping over SoC MAE desnormalized back to percentage points (easier to interpret than raw loss)
+            current_val = val_metrics.get("val/mae_SoC_pct", float("inf")) #current_val = val_metrics.get("val/loss", float("inf"))
 
-            if current_val < best_val_loss:
-                best_val_loss          = current_val
+            if current_val < best_val_MAE:
+                best_val_MAE          = current_val
                 epochs_without_improve = 0
                 torch.save(
                     {
                         "epoch":     epoch,
                         "model":     model.state_dict(),
                         "optimizer": optimizer.state_dict(),
-                        "val_loss":  best_val_loss,
+                        "val_MAE":   best_val_MAE,
                         "cfg":       cfg_dict,
                     },
                     run_dir / "best.pt",
@@ -346,7 +347,7 @@ def train(cfg: Config) -> tuple:
             #"lr":   f"{lr_now:.1e}",
         }
         if "val/loss" in row:
-            postfix["val"]      = f"{row['val/loss']:.2f}"
+            postfix["val_loss"]      = f"{row['val/loss']:.2f}"
             postfix["mae_soc"]  = f"{row.get('val/mae_SoC_pct', float('nan')):.2f}"
             postfix["mae_cyc"]  = f"{row.get('val/mae_Cycle', float('nan')):.2f}"
             postfix["E_S"] = f"{epochs_without_improve}/{cfg.early_stopping}"
