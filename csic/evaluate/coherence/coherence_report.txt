@@ -1,0 +1,32 @@
+======================================================================
+PHYSICAL COHERENCE REPORT
+Thresholds: SoC ∈ [0.0, 100.0]%  spike > 30.0%  mono_threshold = 10.0%
+======================================================================
+
+── ANP (8 tasks, 14,400 predictions) ──
+Violation type                         Count   % of preds
+---------------------------------------------------------
+  SoC below 0%                           238         1.65%
+  SoC above 100%                         284         1.97%
+  SoC spike (>30%/step)                    0         0.00%
+  SoC trend not decreasing                 0         0.00%
+  Cycle negative                         185         1.28%
+  Cycle trend decreasing                   0         0.00%
+  Tasks with any violation                 7 / 8 tasks
+
+  SoC predicted range across all tasks:
+    Global min: -1.44%  Global max: 106.80%  (valid: [0, 100]%)
+
+── DR-MLP (8 tasks, 14,400 predictions) ──
+Violation type                         Count   % of preds
+---------------------------------------------------------
+  SoC below 0%                             0         0.00%
+  SoC above 100%                           0         0.00%
+  SoC spike (>30%/step)                    0         0.00%
+  SoC trend not decreasing                 0         0.00%
+  Cycle negative                           0         0.00%
+  Cycle trend decreasing                   0         0.00%
+  Tasks with any violation                 0 / 8 tasks
+
+  SoC predicted range across all tasks:
+    Global min: 1.57%  Global max: 92.69%  (valid: [0, 100]%)

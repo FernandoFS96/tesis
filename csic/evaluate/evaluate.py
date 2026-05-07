@@ -773,9 +773,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args    = parse_args()
     out_dir = Path(args.out_dir) if args.out_dir else (
-        Path(__file__).resolve().parent / "results" /
-        __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")
-    )
+        Path(__file__).resolve().parent / "results" )
 
     run(
         mlp_run_dir    = Path(args.mlp_run),
