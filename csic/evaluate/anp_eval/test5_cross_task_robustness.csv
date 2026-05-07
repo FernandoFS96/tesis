@@ -1,0 +1,51 @@
+pred_task,ctx_task,matched,target,mae
+val_01,val_01,True,SoC (%),1.0146999732653048
+val_01,val_01,True,Cycle,9.57903070700274
+val_01,val_02,False,SoC (%),4.850549322789481
+val_01,val_02,False,Cycle,46.24725423006035
+val_01,val_03,False,SoC (%),12.521588118736124
+val_01,val_03,False,Cycle,63.464205055761774
+val_01,val_04,False,SoC (%),6.360343986546355
+val_01,val_04,False,Cycle,74.19207666252939
+val_01,val_05,False,SoC (%),5.162497191072111
+val_01,val_05,False,Cycle,30.28417539455826
+val_02,val_01,False,SoC (%),4.745676042894428
+val_02,val_01,False,Cycle,65.57705879352613
+val_02,val_02,True,SoC (%),1.4061203455130111
+val_02,val_02,True,Cycle,12.738727563593873
+val_02,val_03,False,SoC (%),8.529570209482232
+val_02,val_03,False,Cycle,50.96599869213152
+val_02,val_04,False,SoC (%),12.024606025758693
+val_02,val_04,False,Cycle,106.78787790062381
+val_02,val_05,False,SoC (%),9.555529462300651
+val_02,val_05,False,Cycle,73.53861948590396
+val_03,val_01,False,SoC (%),9.577209815961995
+val_03,val_01,False,Cycle,107.40633170689999
+val_03,val_02,False,SoC (%),4.958851635281478
+val_03,val_02,False,Cycle,64.7799098772054
+val_03,val_03,True,SoC (%),1.523541135527541
+val_03,val_03,True,Cycle,12.694960757287989
+val_03,val_04,False,SoC (%),14.017145321397289
+val_03,val_04,False,Cycle,137.56380457234852
+val_03,val_05,False,SoC (%),11.810434339118608
+val_03,val_05,False,Cycle,104.6409629046662
+val_04,val_01,False,SoC (%),10.931650097271953
+val_04,val_01,False,Cycle,136.51168808292402
+val_04,val_02,False,SoC (%),15.68420269546532
+val_04,val_02,False,Cycle,145.9491878696841
+val_04,val_03,False,SoC (%),18.045636407272838
+val_04,val_03,False,Cycle,124.50404810097363
+val_04,val_04,True,SoC (%),1.1175736335752837
+val_04,val_04,True,Cycle,6.643098898399953
+val_04,val_05,False,SoC (%),6.475586430659371
+val_04,val_05,False,Cycle,98.96083489356091
+val_05,val_01,False,SoC (%),6.531608152606852
+val_05,val_01,False,Cycle,36.33031087535416
+val_05,val_02,False,SoC (%),11.649361163576012
+val_05,val_02,False,Cycle,71.53284334236237
+val_05,val_03,False,SoC (%),17.96096522584118
+val_05,val_03,False,Cycle,60.29898709204175
+val_05,val_04,False,SoC (%),5.95898900107603
+val_05,val_04,False,Cycle,52.37304832724386
+val_05,val_05,True,SoC (%),3.044576170164761
+val_05,val_05,True,Cycle,5.876256149990767

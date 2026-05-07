@@ -27,7 +27,7 @@ Five evaluation tests:
 
 Usage:
     python evaluate_anp.py \
-        --anp_run ../train/runs/20260501_100000 \
+        --anp_run ../train/runs/20260505_114753 \
         --data_dir ../csic_real_synth_load/prepared_data
 
     # Run only specific tests
@@ -904,9 +904,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args    = parse_args()
     out_dir = Path(args.out_dir) if args.out_dir else (
-        Path(__file__).resolve().parent / "anp_eval" /
-        __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")
-    )
+        Path(__file__).resolve().parent / "anp_eval")
     run(
         anp_run_dir    = Path(args.anp_run),
         data_dir       = args.data_dir,
