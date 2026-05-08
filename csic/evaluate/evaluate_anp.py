@@ -289,7 +289,7 @@ def test_context_impact(
     if len(target_cols) == 1:
         axes = [axes]
 
-    colors = plt.cm.get_cmap("tab10", len(task_labels))
+    colors = plt.get_cmap("tab10", len(task_labels))
 
     for ax, col in zip(axes, target_cols):
         col_df = df[df["target"] == col]
@@ -423,7 +423,7 @@ def test_prediction_horizon(
     if len(target_cols) == 1:
         axes = [axes]
 
-    colors = plt.cm.get_cmap("tab10", len(task_labels))
+    colors = plt.get_cmap("tab10", len(task_labels))
 
     for ax, col in zip(axes, target_cols):
         col_df = df[df["target"] == col]
@@ -643,7 +643,7 @@ def test_prior_posterior_kl(
 
     # ── Plot ─────────────────────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(8, 4))
-    colors  = plt.cm.get_cmap("tab10", len(task_labels))
+    colors  = plt.get_cmap("tab10", len(task_labels))
 
     for ti, t_label in enumerate(task_labels):
         t_df = df[df["task"] == t_label]
@@ -757,7 +757,7 @@ def test_cross_task_robustness(
 
         ax.boxplot(
             [matched_mae.values, mismatch_mae.values],
-            labels=["Own context\n(matched)", "Cross context\n(mismatched)"],
+            tick_labels=["Own context\n(matched)", "Cross context\n(mismatched)"],
             patch_artist=True,
             medianprops=dict(color="black", linewidth=2),
         )
