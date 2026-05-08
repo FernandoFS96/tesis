@@ -35,6 +35,11 @@ Usage:
         --anp_run  ../train/runs/20260505_114753 \
         --data_dir ../csic_real_synth_load/prepared_data
 
+    python test_physical_coherence.py \
+        --mlp_run  ../train/runs_mlp/20260505_161625 \
+        --anp_run ../train/optuna_results/trial_019 \
+        --data_dir ../csic_real_synth_load/prepared_data
+
     # Test all 25 tasks (train + val + test)
     python test_physical_coherence.py \\
         --anp_run ../train/runs/20260501_100000 \\
@@ -160,7 +165,6 @@ def extract_window(
 # ==============================================================================
 # MODEL LOADING
 # ==============================================================================
-
 def load_anp(run_dir: Path, input_dim: int, output_dim: int,
              device: torch.device) -> Optional[nn.Module]:
     ckpt_path = run_dir / "best.pt"
@@ -171,13 +175,20 @@ def load_anp(run_dir: Path, input_dim: int, output_dim: int,
     num_hidden = 128
     if cfg_path.exists():
         with cfg_path.open() as f:
-            num_hidden = json.load(f).get("num_hidden", 128)
+            cfg = json.load(f)
+        # train_anp.py stores num_hidden at top level
+        # optuna_anp.py stores it inside params{}
+        num_hidden = (cfg.get("num_hidden")
+                      or cfg.get("params", {}).get("num_hidden")
+                      or 128)
     model = LatentModel(num_hidden=num_hidden,
                         input_dim=input_dim, output_dim=output_dim)
-    ckpt  = torch.load(ckpt_path, map_location=device)
+    ckpt = torch.load(ckpt_path, map_location=device)
     model.load_state_dict(ckpt["model"])
     model.eval().to(device)
-    print(f"  ✓  ANP loaded from {ckpt_path}")
+    print(f"  ✓  ANP loaded  (num_hidden={num_hidden}  "
+          f"epoch={ckpt.get('epoch','?')}  "
+          f"val_MAE={ckpt.get('val_MAE', ckpt.get('val_loss','?'))})")
     return model
 
 
@@ -429,6 +440,117 @@ def plot_violation_example(
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
+def plot_comparison_coherence(
+    preds_dn:    Dict[str, np.ndarray],    # {model_label: (Nt, O)}
+    true_dn:     np.ndarray,               # (Nt, O)
+    reports:     Dict[str, ViolationReport],
+    target_cols: List[str],
+    cfg:         CoherenceConfig,
+    out_path:    Path,
+) -> None:
+    """
+    Plot ANP and DR-MLP predictions side by side on the same axes for
+    direct comparison of physical coherence.
+
+    Args:
+        preds_dn: Dict mapping model label to denormalized predictions (Nt, O).
+        true_dn:  Denormalized ground truth (Nt, O).
+        reports:  Dict mapping model label to its ViolationReport.
+        target_cols: Target column names.
+        cfg:      CoherenceConfig with physical thresholds.
+        out_path: Output PNG path.
+    """
+    # Color palette — one per model, consistent across subplots
+    MODEL_COLORS = {
+        "ANP":    "#1C7293",
+        "DR-MLP": "#D4860A",
+        "Specialist_01": "#237A3D",
+    }
+    DEFAULT_COLORS = ["#8E44AD", "#E74C3C", "#16A085"]
+    model_labels   = list(preds_dn.keys())
+
+    def model_color(label: str) -> str:
+        if label in MODEL_COLORS:
+            return MODEL_COLORS[label]
+        idx = model_labels.index(label) % len(DEFAULT_COLORS)
+        return DEFAULT_COLORS[idx]
+
+    n_targets  = len(target_cols)
+    task_label = next(iter(reports.values())).task_label
+
+    fig = plt.figure(figsize=(14, 4 * n_targets))
+    gs  = gridspec.GridSpec(n_targets, 1, figure=fig, hspace=0.50)
+
+    x = np.arange(len(true_dn))
+
+    for i, col in enumerate(target_cols):
+        ax = fig.add_subplot(gs[i])
+
+        # Ground truth
+        ax.plot(x, true_dn[:, i], color="#9AB8C8", linewidth=1.5,
+                alpha=0.8, label="Ground truth", zorder=2)
+
+        if "SoC" in col:
+            ax.axhline(cfg.soc_min, color="#C0392B", linestyle="--",
+                       linewidth=1.0, alpha=0.5,
+                       label=f"Bounds [{cfg.soc_min}, {cfg.soc_max}%]")
+            ax.axhline(cfg.soc_max, color="#C0392B", linestyle="--",
+                       linewidth=1.0, alpha=0.5)
+
+        # One line per model
+        for m_label, pred_dn in preds_dn.items():
+            color  = model_color(m_label)
+            report = reports.get(m_label)
+            p      = pred_dn[:, i]
+
+            # Violation summary for legend
+            if report and "SoC" in col:
+                n_viol = report.soc_below_min + report.soc_above_max
+                viol_str = f" [⚠ {n_viol} range viol.]" if n_viol > 0 else " [✓ clean]"
+            elif report and "Cycle" in col:
+                viol_str = f" [⚠ {report.cycle_negative} neg.]" \
+                    if report.cycle_negative > 0 else " [✓ clean]"
+            else:
+                viol_str = ""
+
+            ax.plot(x, p, color=color, linewidth=1.6,
+                    label=f"{m_label}{viol_str}", zorder=3)
+
+            # Mark out-of-range points for this model
+            if "SoC" in col:
+                below = p < cfg.soc_min
+                above = p > cfg.soc_max
+                if below.any():
+                    ax.scatter(x[below], p[below], color=color, marker="v",
+                               s=30, zorder=5, edgecolors="black",
+                               linewidths=0.4)
+                if above.any():
+                    ax.scatter(x[above], p[above], color=color, marker="^",
+                               s=30, zorder=5, edgecolors="black",
+                               linewidths=0.4)
+
+        ax.set_ylabel(col)
+        ax.set_xlabel("Target row index")
+        ax.set_title(f"{task_label} — {col}")
+        ax.legend(fontsize=8, loc="upper right")
+        ax.grid(True, alpha=0.25)
+
+    # Build violation summary for suptitle
+    summary_parts = []
+    for m_label, rep in reports.items():
+        if rep.has_any_violation():
+            summary_parts.append(f"{m_label}: ⚠")
+        else:
+            summary_parts.append(f"{m_label}: ✓")
+
+    fig.suptitle(
+        f"Physical coherence comparison — {task_label}\n"
+        + "  |  ".join(summary_parts),
+        fontsize=12, fontweight="bold",
+    )
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
 
 # ==============================================================================
 # MAIN EVALUATION
@@ -544,6 +666,13 @@ def run(
 
     all_reports: List[ViolationReport] = []
 
+    # Collect predictions and reports keyed by task for comparison plots
+    # Structure: task_predictions[t_label] = {m_label: pred_dn}
+    #            task_reports[t_label]     = {m_label: report}
+    task_predictions: Dict[str, Dict[str, np.ndarray]] = {}
+    task_reports:     Dict[str, Dict[str, ViolationReport]] = {}
+    task_true_dn:     Dict[str, np.ndarray] = {}
+
     for m_label, model, m_type in models_to_test:
         print(f"  ── {m_label} ─────────────────────────────────────")
         for t_label, X_ctx, y_ctx, X_tgt, y_tgt in tasks_data:
@@ -554,7 +683,7 @@ def run(
             else:
                 pred_norm = predict_mlp(model, X_tgt, device)
 
-            # Denormalize predictions and ground truth
+            # Denormalize
             pred_dn = np.stack([
                 denormalize(pred_norm[:, i], col, denorm_values)
                 for i, col in enumerate(target_cols)
@@ -569,6 +698,14 @@ def run(
                 pred_dn, target_cols, cfg, m_label, t_label
             )
             all_reports.append(report)
+
+            # Accumulate for comparison plot
+            if t_label not in task_predictions:
+                task_predictions[t_label] = {}
+                task_reports[t_label]     = {}
+                task_true_dn[t_label]     = true_dn
+            task_predictions[t_label][m_label] = pred_dn
+            task_reports[t_label][m_label]     = report
 
             # Console output
             viol_str = ""
@@ -591,13 +728,37 @@ def run(
                   f"Cyc∈[{report.cycle_pred_min:6.0f},{report.cycle_pred_max:6.0f}]  "
                   f"{status}")
 
-            # Save plot if requested
+            # Individual model plot (existing behaviour)
             should_plot = (plot_violations and report.has_any_violation()) or plot_clean
             if should_plot:
                 plot_path = plots_dir / f"{m_label}_{t_label}.png"
                 plot_violation_example(
                     pred_dn, true_dn, target_cols, report, cfg, plot_path
                 )
+
+    # ── Comparison plots (all models on the same axes, per task) ─────────────
+    print(f"\n  Generating comparison plots...")
+    comp_dir = out_dir / "comparison_plots"
+    comp_dir.mkdir(parents=True, exist_ok=True)
+
+    for t_label in task_predictions:
+        # Only plot if more than one model is available for this task
+        if len(task_predictions[t_label]) < 2:
+            continue
+        any_violation = any(
+            r.has_any_violation()
+            for r in task_reports[t_label].values()
+        )
+        if (plot_violations and any_violation) or plot_clean:
+            plot_comparison_coherence(
+                preds_dn    = task_predictions[t_label],
+                true_dn     = task_true_dn[t_label],
+                reports     = task_reports[t_label],
+                target_cols = target_cols,
+                cfg         = cfg,
+                out_path    = comp_dir / f"comparison_{t_label}.png",
+            )
+    print(f"  ✓  Comparison plots → {comp_dir}")
 
     # ── Build summary CSV ─────────────────────────────────────────────────────
     summary_rows = []

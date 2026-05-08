@@ -30,6 +30,11 @@ Usage:
         --anp_run ../train/runs/20260505_114753 \
         --data_dir ../csic_real_synth_load/prepared_data
 
+With Optuna run:
+    python evaluate_anp.py \
+        --anp_run ../train/optuna_results/trial_019 \
+        --data_dir ../csic_real_synth_load/prepared_data
+
     # Run only specific tests
     python evaluate_anp.py --anp_run ... --tests 1 2 3
 
@@ -78,7 +83,7 @@ from models.anp import LatentModel
 
 MEAS_PER_CYCLE  = 30
 TRAIN_CTX_CYC   = 60   # context used during training
-CONTEXT_SIZES   = [5, 10, 20, 30, 40, 50, 60]   # test 1 context sweep
+CONTEXT_SIZES   = [2, 5, 10, 20, 30, 40, 50, 60]   # test 1 context sweep
 HORIZON_CTX_CYC = 60   # fixed context for horizon test (test 2)
 HORIZON_STEP    = 60   # report MAE every N cycles in the future
 DPI             = 150
@@ -102,7 +107,12 @@ def load_anp(run_dir: Path, input_dim: int, output_dim: int,
     num_hidden = 128
     if cfg_path.exists():
         with cfg_path.open() as f:
-            num_hidden = json.load(f).get("num_hidden", 128)
+            cfg = json.load(f)
+        # train_anp.py stores num_hidden at top level
+        # optuna_anp.py stores it inside params{}
+        num_hidden = (cfg.get("num_hidden")
+                      or cfg.get("params", {}).get("num_hidden")
+                      or 128)
     model = LatentModel(num_hidden=num_hidden,
                         input_dim=input_dim, output_dim=output_dim)
     ckpt = torch.load(ckpt_path, map_location=device)
@@ -130,25 +140,43 @@ def compute_mae_dn(pred: np.ndarray, true: np.ndarray,
 
 @torch.no_grad()
 def anp_predict(
-    model:   nn.Module,
-    X_ctx:   np.ndarray,
-    y_ctx:   np.ndarray,
-    X_tgt:   np.ndarray,
-    device:  torch.device,
+    model:    nn.Module,
+    X_ctx:    np.ndarray,
+    y_ctx:    np.ndarray,
+    X_tgt:    np.ndarray,
+    device:   torch.device,
+    n_passes: int = 5,          # ← único parámetro nuevo
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Run ANP inference (prior path — no target_y provided).
+    Run N stochastic forward passes and average predictions.
 
-    Returns:
-        mean (Nt, O) and std (Nt, O) in normalized space.
+    The ANP samples z from the prior at each forward pass, so repeated
+    calls with the same inputs give different outputs. Averaging N passes
+    reduces this stochastic variance without retraining.
+
+    Combination via law of total variance:
+        ensemble_mean = mean(mean_i)
+        ensemble_var  = mean(var_i + mean_i²) - ensemble_mean²
     """
     ctx_x = torch.tensor(X_ctx).unsqueeze(0).to(device)
     ctx_y = torch.tensor(y_ctx).unsqueeze(0).to(device)
     tgt_x = torch.tensor(X_tgt).unsqueeze(0).to(device)
-    mean, var, _, _, _ = model(ctx_x, ctx_y, tgt_x, target_y=None)
-    mean = mean.squeeze(0).cpu().numpy()
-    std  = var.squeeze(0).cpu().numpy() ** 0.5
-    return mean, std
+
+    all_means, all_vars = [], []
+
+    for i in range(n_passes):
+        mean, var, _, _, _ = model(ctx_x, ctx_y, tgt_x, target_y=None)
+        all_means.append(mean.squeeze(0).cpu().numpy())
+        all_vars.append(var.squeeze(0).cpu().numpy())
+
+    all_means = np.stack(all_means)   # (n_passes, Nt, O)
+    all_vars  = np.stack(all_vars)    # (n_passes, Nt, O)
+
+    ensemble_mean = all_means.mean(axis=0)
+    ensemble_var  = (all_vars + all_means**2).mean(axis=0) - ensemble_mean**2
+    ensemble_std  = np.sqrt(np.maximum(ensemble_var, 1e-8))
+
+    return ensemble_mean, ensemble_std
 
 
 @torch.no_grad()
@@ -159,6 +187,7 @@ def anp_prior_posterior_kl(
     X_tgt:   np.ndarray,
     y_tgt:   np.ndarray,
     device:  torch.device,
+    n_passes: int = 5,
 ) -> float:
     """
     Compute KL(posterior || prior) for a given context/target pair.
@@ -168,8 +197,13 @@ def anp_prior_posterior_kl(
     ctx_y = torch.tensor(y_ctx).unsqueeze(0).to(device)
     tgt_x = torch.tensor(X_tgt).unsqueeze(0).to(device)
     tgt_y = torch.tensor(y_tgt).unsqueeze(0).to(device)
-    _, _, _, kl, _ = model(ctx_x, ctx_y, tgt_x, target_y=tgt_y, beta=1.0)
-    return float(kl.item())
+
+    kl_values = []
+    for _ in range(n_passes):
+        _, _, _, kl, _ = model(ctx_x, ctx_y, tgt_x, target_y=tgt_y, beta=1.0)
+        kl_values.append(float(kl.item()))
+
+    return float(np.mean(kl_values))
 
 
 def save(fig: Figure, path: Path) -> None:
@@ -193,6 +227,7 @@ def test_context_impact(
     out_dir:      Path,
     ctx_sizes:    List[int] = CONTEXT_SIZES,
     tgt_cycles:   int       = 60,
+    n_passes:     int       = 5,
 ) -> pd.DataFrame:
     """
     TEST 1: How does MAE change as we give the model more context?
@@ -232,7 +267,7 @@ def test_context_impact(
             X_tgt = X[ctx_end:tgt_end]
             y_tgt = y[ctx_end:tgt_end]
 
-            mean, std = anp_predict(model, X_ctx, y_ctx, X_tgt, device)
+            mean, std = anp_predict(model, X_ctx, y_ctx, X_tgt, device, n_passes=n_passes)
             mae       = compute_mae_dn(mean, y_tgt, target_cols, dv)
 
             for col, val in mae.items():
@@ -306,6 +341,7 @@ def test_prediction_horizon(
     out_dir:     Path,
     ctx_cycles:  int = HORIZON_CTX_CYC,
     step_cycles: int = HORIZON_STEP,
+    n_passes:    int = 5,
 ) -> pd.DataFrame:
     """
     TEST 2: How does MAE grow as we predict further into the future?
@@ -348,7 +384,7 @@ def test_prediction_horizon(
 
         # Predict entire remaining trajectory at once
         mean_full, std_full = anp_predict(
-            model, X_ctx, y_ctx, X_rest, device
+            model, X_ctx, y_ctx, X_rest, device, n_passes=n_passes
         )
 
         # Split into horizon blocks and compute MAE per block
@@ -440,6 +476,7 @@ def test_uncertainty_calibration(
     ctx_cycles:  int = HORIZON_CTX_CYC,
     tgt_cycles:  int = 60,
     n_bins:      int = 10,
+    n_passes:    int = 5,
 ) -> pd.DataFrame:
     """
     TEST 3: Is the ANP's predicted uncertainty informative?
@@ -472,7 +509,7 @@ def test_uncertainty_calibration(
         X_ctx  = X[:ctx_end];   y_ctx = y[:ctx_end]
         X_tgt  = X[ctx_end:tgt_end]; y_tgt = y[ctx_end:tgt_end]
 
-        mean, std = anp_predict(model, X_ctx, y_ctx, X_tgt, device)
+        mean, std = anp_predict(model, X_ctx, y_ctx, X_tgt, device, n_passes=n_passes)
 
         for i, col in enumerate(target_cols):
             pred_dn = denormalize(mean[:, i], col, dv)
@@ -566,6 +603,7 @@ def test_prior_posterior_kl(
     out_dir:     Path,
     ctx_sizes:   List[int] = CONTEXT_SIZES,
     tgt_cycles:  int       = 60,
+    n_passes:    int       = 5,
 ) -> pd.DataFrame:
     """
     TEST 4: Does providing more context reduce posterior uncertainty?
@@ -595,6 +633,7 @@ def test_prior_posterior_kl(
                 X[:ctx_end], y[:ctx_end],
                 X[ctx_end:tgt_end], y[ctx_end:tgt_end],
                 device,
+                n_passes=n_passes,
             )
             rows.append({"ctx_cycles": ctx_cyc, "task": t_label, "kl": kl})
 
@@ -648,6 +687,7 @@ def test_cross_task_robustness(
     out_dir:     Path,
     ctx_cycles:  int = HORIZON_CTX_CYC,
     tgt_cycles:  int = 60,
+    n_passes:    int = 5,
 ) -> pd.DataFrame:
     """
     TEST 5: Does the model generalize when given context from a different task?
@@ -686,7 +726,7 @@ def test_cross_task_robustness(
             X_ctx     = X_ctx_src[:ctx_end_c]
             y_ctx     = y_ctx_src[:ctx_end_c]
 
-            mean, _ = anp_predict(model, X_ctx, y_ctx, X_tgt, device)
+            mean, _ = anp_predict(model, X_ctx, y_ctx, X_tgt, device, n_passes=n_passes)
             mae     = compute_mae_dn(mean, y_tgt, target_cols, dv)
             matched = (pi == ci)
 
@@ -752,6 +792,7 @@ def run(
     val_task_ids:   List[int],
     test_task_ids:  List[int],
     eval_split:     str = "val",
+    n_passes:       int = 5,
 ) -> None:
     """
     Run selected evaluation tests.
@@ -800,14 +841,7 @@ def run(
         if i in test_task_ids:  return f"test_{test_task_ids.index(i)+1:02d}"
         return f"task_{i:02d}"
 
-    tasks_sorted = [
-        (np.array(sort_task_by_cycle(*data["normalized_synth_datasets"][i])[0],
-                  dtype=np.float32),
-         np.array(sort_task_by_cycle(*data["normalized_synth_datasets"][i])[1],
-                  dtype=np.float32))
-        for i in eval_ids
-    ]
-    # Re-sort (sort_task_by_cycle returns DataFrames, we need numpy)
+    # Re-sort (sort_task_by_cycle returns DataFrames)
     tasks_sorted_clean = []
     for i in eval_ids:
         X_df, y_df = sort_task_by_cycle(*data["normalized_synth_datasets"][i])
@@ -828,7 +862,7 @@ def run(
         print(f"{'='*55}")
         test_context_impact(
             model, tasks_sorted_clean, task_labels,
-            target_cols, dv, device, out_dir,
+            target_cols, dv, device, out_dir, n_passes=n_passes
         )
 
     if 2 in tests:
@@ -837,7 +871,7 @@ def run(
         print(f"{'='*55}")
         test_prediction_horizon(
             model, tasks_sorted_clean, task_labels,
-            target_cols, dv, device, out_dir,
+            target_cols, dv, device, out_dir, n_passes=n_passes
         )
 
     if 3 in tests:
@@ -847,7 +881,7 @@ def run(
         try:
             test_uncertainty_calibration(
                 model, tasks_sorted_clean, task_labels,
-                target_cols, dv, device, out_dir,
+                target_cols, dv, device, out_dir, n_passes=n_passes
             )
         except ImportError:
             print("  ⚠  scipy not available — skipping Test 3. "
@@ -859,7 +893,7 @@ def run(
         print(f"{'='*55}")
         test_prior_posterior_kl(
             model, tasks_sorted_clean, task_labels,
-            target_cols, dv, device, out_dir,
+            target_cols, dv, device, out_dir, n_passes=n_passes
         )
 
     if 5 in tests:
@@ -868,7 +902,7 @@ def run(
         print(f"{'='*55}")
         test_cross_task_robustness(
             model, tasks_sorted_clean, task_labels,
-            target_cols, dv, device, out_dir,
+            target_cols, dv, device, out_dir, n_passes=n_passes
         )
 
     print(f"\n✅  All tests complete. Results in: {out_dir}\n")
@@ -879,26 +913,19 @@ def run(
 # ==============================================================================
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="ANP inference evaluation — context impact, horizon, "
-                    "calibration, KL collapse, cross-task robustness",
+    p = argparse.ArgumentParser(description="ANP inference evaluation — context impact, horizon, calibration, KL collapse, cross-task robustness",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("--anp_run",   type=str, required=True,
-                   help="Path to the ANP run directory (contains best.pt)")
-    p.add_argument("--data_dir",  type=str,
-                   default="../csic_real_synth_load/prepared_data")
-    p.add_argument("--out_dir",   type=str, default="",
-                   help="Output directory (default: ./anp_eval/<timestamp>/)")
-    p.add_argument("--tests",     type=int, nargs="+", default=[1, 2, 3, 4, 5],
-                   help="Which tests to run (1-5, default: all)")
-    p.add_argument("--split",     type=str, default="val",
-                   choices=["train", "val", "test", "all"],
-                   help="Which task split to evaluate")
+    p.add_argument("--anp_run",   type=str, required=True, help="Path to the ANP run directory (contains best.pt)")
+    p.add_argument("--data_dir",  type=str, default="../csic_real_synth_load/prepared_data")
+    p.add_argument("--out_dir",   type=str, default="", help="Output directory (default: ./anp_eval/<timestamp>/)")
+    p.add_argument("--tests",     type=int, nargs="+", default=[1, 2, 3, 4, 5], help="Which tests to run (1-5, default: all)")
+    p.add_argument("--split",     type=str, default="all", choices=["train", "val", "test", "all"], help="Which task split to evaluate")
     p.add_argument("--train_ids", type=int, nargs="+", default=list(range(17)))
     p.add_argument("--val_ids",   type=int, nargs="+", default=list(range(17, 22)))
     p.add_argument("--test_ids",  type=int, nargs="+", default=list(range(22, 25)))
-    return p.parse_args()
+    p.add_argument("--n_passes", type=int, default=5, help="Number of stochastic forward passes to average (default: 5)")
+    return p.parse_args() 
 
 
 def main() -> None:
@@ -914,8 +941,8 @@ def main() -> None:
         val_task_ids   = args.val_ids,
         test_task_ids  = args.test_ids,
         eval_split     = args.split,
+        n_passes       = args.n_passes,
     )
-
 
 if __name__ == "__main__":
     main()
