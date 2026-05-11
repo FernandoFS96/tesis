@@ -462,8 +462,7 @@ def eval_only(cfg: Config) -> None:
 # ==============================================================================
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="ANP training — battery SoC and Cycle prediction",
+    p = argparse.ArgumentParser(description="ANP training — battery SoC and Cycle prediction",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--data_dir",       type=str,   default=None)

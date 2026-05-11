@@ -32,7 +32,7 @@ Usage:
 
 With Optuna run:
     python evaluate_anp.py \
-        --anp_run ../train/optuna_results/trial_019 \
+        --anp_run ../train/optuna_results/trial_101 \
         --data_dir ../csic_real_synth_load/prepared_data
 
     # Run only specific tests
