@@ -24,8 +24,8 @@ Outputs (saved to --out_dir, default ./validation/<timestamp>/):
 
 Usage:
     python evaluate.py \
-        --mlp_run  ../train/runs_mlp/20260505_161625 \
-        --anp_run  ../train/runs/20260505_114753 \
+        --mlp_run  ../train/runs_mlp/20260511_121741 \
+        --anp_run  ../train/runs/20260511_113746 \
         --data_dir ../csic_real_synth_load/prepared_data
 
     # Override context/target window if different from defaults
@@ -198,8 +198,7 @@ def load_mlp_specialists(
         model.load_state_dict(ckpt["model"])
         model.eval().to(device)
         models.append((label, model))
-        print(f"  ✓  {label} loaded  (val_loss={ckpt.get('val_loss', '?'):.4f}  "
-              f"epoch={ckpt.get('epoch', '?')})")
+        print(f"  ✓  {label} loaded")
     return models
 
 
@@ -232,8 +231,7 @@ def load_dr_mlp(
     ckpt  = torch.load(ckpt_path, map_location=device)
     model.load_state_dict(ckpt["model"])
     model.eval().to(device)
-    print(f"  ✓  DR-MLP loaded  (val_loss={ckpt.get('val_loss', '?'):.4f}  "
-          f"epoch={ckpt.get('epoch', '?')})")
+    print(f"  ✓  DR-MLP loaded")
     return ("dr_mlp", model)
 
 
@@ -267,8 +265,7 @@ def load_anp(
     ckpt  = torch.load(ckpt_path, map_location=device)
     model.load_state_dict(ckpt["model"])
     model.eval().to(device)
-    print(f"  ✓  ANP loaded  (val_loss={ckpt.get('val_loss', '?'):.4f}  "
-          f"epoch={ckpt.get('epoch', '?')})")
+    print(f"  ✓  ANP loaded ")
     return ("anp", model)
 
 

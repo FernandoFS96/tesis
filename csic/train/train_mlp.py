@@ -22,8 +22,8 @@ Final output — comparison table (comparison/mae_comparison.csv):
 
 Usage:
     python train_mlp.py
-    python train_mlp.py --data_dir ../csic_real_synth_load/prepared_data \\
-                        --neurons 128 --epochs 500 --ctx_cycles 50
+    python train_mlp.py --data_dir ../csic_real_synth_load/prepared_data \
+                        --neurons 128 --epochs 1000 --ctx_cycles 50
 
 Output structure:
     runs_mlp/<timestamp>/
