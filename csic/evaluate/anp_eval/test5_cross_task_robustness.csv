@@ -1,1251 +1,1251 @@
 pred_task,ctx_task,matched,target,mae
-train_01,train_01,True,SoC (%),0.8751041880756121
-train_01,train_01,True,Cycle,9.173083897303247
-train_01,train_02,False,SoC (%),9.080447022306732
-train_01,train_02,False,Cycle,26.5853405253938
-train_01,train_03,False,SoC (%),13.643901550494338
-train_01,train_03,False,Cycle,47.63470707173281
-train_01,train_04,False,SoC (%),14.274432536320674
-train_01,train_04,False,Cycle,52.1627844229743
-train_01,train_05,False,SoC (%),15.245529150547
-train_01,train_05,False,Cycle,56.66134901725609
-train_01,train_06,False,SoC (%),1.3342049502766404
-train_01,train_06,False,Cycle,7.926032359253948
-train_01,train_07,False,SoC (%),10.612058077028362
-train_01,train_07,False,Cycle,32.738246511532594
-train_01,train_08,False,SoC (%),13.144663639653546
-train_01,train_08,False,Cycle,45.7451097609196
-train_01,train_09,False,SoC (%),14.519734334286817
-train_01,train_09,False,Cycle,48.353372561556576
-train_01,train_10,False,SoC (%),14.72883482714937
-train_01,train_10,False,Cycle,54.44469685711251
-train_01,train_11,False,SoC (%),1.7571502272249775
-train_01,train_11,False,Cycle,6.106875873112221
-train_01,train_12,False,SoC (%),11.92024319676732
-train_01,train_12,False,Cycle,37.62229375734986
-train_01,train_13,False,SoC (%),14.034432740797401
-train_01,train_13,False,Cycle,51.52468746588976
-train_01,train_14,False,SoC (%),14.77250507246623
-train_01,train_14,False,Cycle,56.77291714687749
-train_01,train_15,False,SoC (%),15.2056587454459
-train_01,train_15,False,Cycle,59.43750902695656
-train_01,train_16,False,SoC (%),2.408433403478631
-train_01,train_16,False,Cycle,3.2991228386645512
-train_01,train_17,False,SoC (%),13.359063979283823
-train_01,train_17,False,Cycle,46.00600962374364
-train_01,val_01,False,SoC (%),14.989064936094277
-train_01,val_01,False,Cycle,59.47544865084299
-train_01,val_02,False,SoC (%),15.13396475958557
-train_01,val_02,False,Cycle,62.12505201179962
-train_01,val_03,False,SoC (%),15.14150197078437
-train_01,val_03,False,Cycle,57.82403050798082
-train_01,val_04,False,SoC (%),4.126351964050436
-train_01,val_04,False,Cycle,6.266177653431275
-train_01,val_05,False,SoC (%),15.01222058413295
-train_01,val_05,False,Cycle,58.37749946881899
-train_01,test_01,False,SoC (%),15.623270690288757
-train_01,test_01,False,Cycle,66.35555837381241
-train_01,test_02,False,SoC (%),15.757854901674438
-train_01,test_02,False,Cycle,60.40631514801233
-train_01,test_03,False,SoC (%),11.585572532869659
-train_01,test_03,False,Cycle,39.29930231508873
-train_02,train_01,False,SoC (%),1.5681102795828616
-train_02,train_01,False,Cycle,45.42292528480742
-train_02,train_02,True,SoC (%),0.6758907949478586
-train_02,train_02,True,Cycle,11.032986980418427
-train_02,train_03,False,SoC (%),1.9912788932743923
-train_02,train_03,False,Cycle,20.185134463428117
-train_02,train_04,False,SoC (%),4.051609108090688
-train_02,train_04,False,Cycle,28.878415637925226
-train_02,train_05,False,SoC (%),5.087799347020324
-train_02,train_05,False,Cycle,33.53030414953464
-train_02,train_06,False,SoC (%),1.4231286121958213
-train_02,train_06,False,Cycle,39.27673084733888
-train_02,train_07,False,SoC (%),1.1845139413044645
-train_02,train_07,False,Cycle,9.37441178768986
-train_02,train_08,False,SoC (%),2.1880509754880593
-train_02,train_08,False,Cycle,15.920252314978999
-train_02,train_09,False,SoC (%),3.6189880676890573
-train_02,train_09,False,Cycle,24.310707249949516
-train_02,train_10,False,SoC (%),4.368791179761584
-train_02,train_10,False,Cycle,29.71350064013191
-train_02,train_11,False,SoC (%),1.435555216306145
-train_02,train_11,False,Cycle,38.24922027156446
-train_02,train_12,False,SoC (%),1.459857946043235
-train_02,train_12,False,Cycle,7.804062374338102
-train_02,train_13,False,SoC (%),3.177075891012828
-train_02,train_13,False,Cycle,13.067582738813972
-train_02,train_14,False,SoC (%),4.582174902429174
-train_02,train_14,False,Cycle,13.26956978737732
-train_02,train_15,False,SoC (%),5.495366362106092
-train_02,train_15,False,Cycle,15.673978756525097
-train_02,train_16,False,SoC (%),1.3919072973785085
-train_02,train_16,False,Cycle,33.80247719111298
-train_02,train_17,False,SoC (%),2.20180230057242
-train_02,train_17,False,Cycle,9.125910398141743
-train_02,val_01,False,SoC (%),3.965385554351855
-train_02,val_01,False,Cycle,13.383725514931381
-train_02,val_02,False,SoC (%),4.807944943853385
-train_02,val_02,False,Cycle,14.147082261901113
-train_02,val_03,False,SoC (%),5.259939442760314
-train_02,val_03,False,Cycle,15.156345284625813
-train_02,val_04,False,SoC (%),1.304887670906182
-train_02,val_04,False,Cycle,18.90651541248375
-train_02,val_05,False,SoC (%),3.3573713674783288
-train_02,val_05,False,Cycle,12.015341730896795
-train_02,test_01,False,SoC (%),4.532197883341437
-train_02,test_01,False,Cycle,15.431058400184355
-train_02,test_02,False,SoC (%),4.632235538574563
-train_02,test_02,False,Cycle,16.28190427658139
-train_02,test_03,False,SoC (%),3.2720456506937197
-train_02,test_03,False,Cycle,14.882807244211945
-train_03,train_01,False,SoC (%),3.194354560315577
-train_03,train_01,False,Cycle,69.42314734652764
-train_03,train_02,False,SoC (%),2.75084937893859
-train_03,train_02,False,Cycle,52.91265685563296
-train_03,train_03,True,SoC (%),0.6330810368280265
-train_03,train_03,True,Cycle,11.652877291388565
-train_03,train_04,False,SoC (%),2.0804004234651186
-train_03,train_04,False,Cycle,7.793996648213997
-train_03,train_05,False,SoC (%),3.216113549302678
-train_03,train_05,False,Cycle,15.805734066683414
-train_03,train_06,False,SoC (%),3.231642714348629
-train_03,train_06,False,Cycle,68.25749007228198
-train_03,train_07,False,SoC (%),2.8987887640675316
-train_03,train_07,False,Cycle,48.88039892750947
-train_03,train_08,False,SoC (%),0.8384063505294279
-train_03,train_08,False,Cycle,12.443789363082415
-train_03,train_09,False,SoC (%),1.5585045544809177
-train_03,train_09,False,Cycle,5.210528728701554
-train_03,train_10,False,SoC (%),2.816496338925486
-train_03,train_10,False,Cycle,11.517820663416083
-train_03,train_11,False,SoC (%),2.9915812217497786
-train_03,train_11,False,Cycle,65.99178772364967
-train_03,train_12,False,SoC (%),2.7767704688989316
-train_03,train_12,False,Cycle,42.91325890794012
-train_03,train_13,False,SoC (%),1.525708324745742
-train_03,train_13,False,Cycle,13.421972830113994
-train_03,train_14,False,SoC (%),1.3174064200696285
-train_03,train_14,False,Cycle,5.227592906648724
-train_03,train_15,False,SoC (%),2.066974773610967
-train_03,train_15,False,Cycle,7.675420447233084
-train_03,train_16,False,SoC (%),2.915979363817974
-train_03,train_16,False,Cycle,63.41645632553233
-train_03,train_17,False,SoC (%),2.4422681211314865
-train_03,train_17,False,Cycle,29.291930402779812
-train_03,val_01,False,SoC (%),1.857531149561777
-train_03,val_01,False,Cycle,11.46714177074761
-train_03,val_02,False,SoC (%),1.6900448097228875
-train_03,val_02,False,Cycle,6.573865507234314
-train_03,val_03,False,SoC (%),2.9003260489401996
-train_03,val_03,False,Cycle,8.520574828310323
-train_03,val_04,False,SoC (%),2.557577029941339
-train_03,val_04,False,Cycle,49.06067919564135
-train_03,val_05,False,SoC (%),2.2026403343225853
-train_03,val_05,False,Cycle,16.722009562990156
-train_03,test_01,False,SoC (%),2.5791670074046293
-train_03,test_01,False,Cycle,12.462113164823664
-train_03,test_02,False,SoC (%),3.1735066664892115
-train_03,test_02,False,Cycle,12.259266936748087
-train_03,test_03,False,SoC (%),3.020276676467648
-train_03,test_03,False,Cycle,17.82988220527014
-train_04,train_01,False,SoC (%),6.064719799239188
-train_04,train_01,False,Cycle,72.53540667349951
-train_04,train_02,False,SoC (%),4.979136869557307
-train_04,train_02,False,Cycle,59.20241247101676
-train_04,train_03,False,SoC (%),2.7516737970050165
-train_04,train_03,False,Cycle,28.33968411292107
-train_04,train_04,True,SoC (%),0.6754411563344941
-train_04,train_04,True,Cycle,12.375520889832671
-train_04,train_05,False,SoC (%),1.3649569249324451
-train_04,train_05,False,Cycle,9.1339913824914
-train_04,train_06,False,SoC (%),5.788405102535674
-train_04,train_06,False,Cycle,70.47824591137662
-train_04,train_07,False,SoC (%),4.953202076395808
-train_04,train_07,False,Cycle,56.07842574340138
-train_04,train_08,False,SoC (%),3.0215516845341317
-train_04,train_08,False,Cycle,28.430237265513828
-train_04,train_09,False,SoC (%),1.0995808020629259
-train_04,train_09,False,Cycle,15.007726429834284
-train_04,train_10,False,SoC (%),1.1027743127683707
-train_04,train_10,False,Cycle,8.340320970873947
-train_04,train_11,False,SoC (%),5.875014158387878
-train_04,train_11,False,Cycle,68.62154890692743
-train_04,train_12,False,SoC (%),4.57878387466632
-train_04,train_12,False,Cycle,51.35534306163355
-train_04,train_13,False,SoC (%),3.479881289633319
-train_04,train_13,False,Cycle,29.269908300445717
-train_04,train_14,False,SoC (%),2.336040536498796
-train_04,train_14,False,Cycle,17.168086152746216
-train_04,train_15,False,SoC (%),1.8176395961890162
-train_04,train_15,False,Cycle,10.80718092688577
-train_04,train_16,False,SoC (%),5.465922829537044
-train_04,train_16,False,Cycle,63.66830370732235
-train_04,train_17,False,SoC (%),4.09873030752146
-train_04,train_17,False,Cycle,41.25945079793992
-train_04,val_01,False,SoC (%),3.6117924525326996
-train_04,val_01,False,Cycle,25.289576744837184
-train_04,val_02,False,SoC (%),2.6468207235707832
-train_04,val_02,False,Cycle,16.021498987976415
-train_04,val_03,False,SoC (%),2.3104035837491175
-train_04,val_03,False,Cycle,12.022048211620422
-train_04,val_04,False,SoC (%),4.6669046283660505
-train_04,val_04,False,Cycle,53.91126152759025
-train_04,val_05,False,SoC (%),3.807777861900051
-train_04,val_05,False,Cycle,29.253395821082194
-train_04,test_01,False,SoC (%),3.7160355955010984
-train_04,test_01,False,Cycle,23.226064889358238
-train_04,test_02,False,SoC (%),3.858638581379431
-train_04,test_02,False,Cycle,22.383336448278012
-train_04,test_03,False,SoC (%),4.396807477482314
-train_04,test_03,False,Cycle,32.731487285915264
-train_05,train_01,False,SoC (%),6.9193169946787325
-train_05,train_01,False,Cycle,65.05665053478208
-train_05,train_02,False,SoC (%),5.899210618424572
-train_05,train_02,False,Cycle,52.67943482797142
-train_05,train_03,False,SoC (%),4.062424947154897
-train_05,train_03,False,Cycle,33.409721175554644
-train_05,train_04,False,SoC (%),1.8547218805526924
-train_05,train_04,False,Cycle,18.65271822906461
-train_05,train_05,True,SoC (%),0.7628480140040076
-train_05,train_05,True,Cycle,11.142605174540414
-train_05,train_06,False,SoC (%),6.52295479883345
-train_05,train_06,False,Cycle,61.98119088794058
-train_05,train_07,False,SoC (%),5.89343191914237
-train_05,train_07,False,Cycle,51.24454677072323
-train_05,train_08,False,SoC (%),4.168083231503807
-train_05,train_08,False,Cycle,34.283575032464
-train_05,train_09,False,SoC (%),2.3201087214591167
-train_05,train_09,False,Cycle,21.4055606736482
-train_05,train_10,False,SoC (%),0.9382032359908228
-train_05,train_10,False,Cycle,11.890281044379401
-train_05,train_11,False,SoC (%),6.485147867583691
-train_05,train_11,False,Cycle,59.975880173143814
-train_05,train_12,False,SoC (%),5.6379512715346864
-train_05,train_12,False,Cycle,47.76348843430557
-train_05,train_13,False,SoC (%),4.580899430077532
-train_05,train_13,False,Cycle,33.19066084586451
-train_05,train_14,False,SoC (%),3.4034083016219605
-train_05,train_14,False,Cycle,23.029530033411657
-train_05,train_15,False,SoC (%),2.1490150847230716
-train_05,train_15,False,Cycle,14.868673027898367
-train_05,train_16,False,SoC (%),6.187434081883633
-train_05,train_16,False,Cycle,56.90739935656593
-train_05,train_17,False,SoC (%),4.899262480960951
-train_05,train_17,False,Cycle,40.03852724047336
-train_05,val_01,False,SoC (%),4.506747571257617
-train_05,val_01,False,Cycle,29.888746983801603
-train_05,val_02,False,SoC (%),3.540097566495761
-train_05,val_02,False,Cycle,23.251530212012412
-train_05,val_03,False,SoC (%),2.398238825409942
-train_05,val_03,False,Cycle,15.845987562010972
-train_05,val_04,False,SoC (%),5.546972525876865
-train_05,val_04,False,Cycle,48.1759146615949
-train_05,val_05,False,SoC (%),4.418342241256531
-train_05,val_05,False,Cycle,30.525363832726736
-train_05,test_01,False,SoC (%),4.228050841271032
-train_05,test_01,False,Cycle,28.09158226881144
-train_05,test_02,False,SoC (%),4.320493440873606
-train_05,test_02,False,Cycle,26.335545356003678
-train_05,test_03,False,SoC (%),5.302923157997143
-train_05,test_03,False,Cycle,35.595652475881245
-train_06,train_01,False,SoC (%),0.4007788506081364
-train_06,train_01,False,Cycle,11.330582926893772
-train_06,train_02,False,SoC (%),6.526493791620166
-train_06,train_02,False,Cycle,38.568976283268455
-train_06,train_03,False,SoC (%),11.336503445759126
-train_06,train_03,False,Cycle,63.823382262522635
-train_06,train_04,False,SoC (%),13.376039020896846
-train_06,train_04,False,Cycle,68.12264126837039
-train_06,train_05,False,SoC (%),13.204183798697798
-train_06,train_05,False,Cycle,74.256719526753
-train_06,train_06,True,SoC (%),0.6546454802247189
-train_06,train_06,True,Cycle,10.393414390266981
-train_06,train_07,False,SoC (%),8.443993927088329
-train_06,train_07,False,Cycle,49.0204638915947
-train_06,train_08,False,SoC (%),10.932062017967212
-train_06,train_08,False,Cycle,66.24476411008075
-train_06,train_09,False,SoC (%),13.42010961575067
-train_06,train_09,False,Cycle,66.12318999873263
-train_06,train_10,False,SoC (%),13.30700859870224
-train_06,train_10,False,Cycle,73.64718345150322
-train_06,train_11,False,SoC (%),0.8161608954920969
-train_06,train_11,False,Cycle,8.43996858239837
-train_06,train_12,False,SoC (%),9.542498189942005
-train_06,train_12,False,Cycle,51.390408012315575
-train_06,train_13,False,SoC (%),12.13194148983899
-train_06,train_13,False,Cycle,72.46572623206725
-train_06,train_14,False,SoC (%),14.132739884285135
-train_06,train_14,False,Cycle,80.93158453462115
-train_06,train_15,False,SoC (%),14.375615539121766
-train_06,train_15,False,Cycle,83.85183429950924
-train_06,train_16,False,SoC (%),1.1262974155706065
-train_06,train_16,False,Cycle,6.082390786959825
-train_06,train_17,False,SoC (%),11.572245826241327
-train_06,train_17,False,Cycle,65.76509824095821
-train_06,val_01,False,SoC (%),13.807237609152617
-train_06,val_01,False,Cycle,84.353537369622
-train_06,val_02,False,SoC (%),14.461551889605808
-train_06,val_02,False,Cycle,83.22159231547855
-train_06,val_03,False,SoC (%),13.687283774109185
-train_06,val_03,False,Cycle,82.80977962528404
-train_06,val_04,False,SoC (%),2.0472359461311176
-train_06,val_04,False,Cycle,4.667687118096823
-train_06,val_05,False,SoC (%),13.942571932001037
-train_06,val_05,False,Cycle,81.99615009072846
-train_06,test_01,False,SoC (%),15.025193446716722
-train_06,test_01,False,Cycle,89.70216442180978
-train_06,test_02,False,SoC (%),14.462713899331867
-train_06,test_02,False,Cycle,85.1679252793625
-train_06,test_03,False,SoC (%),10.89437949613526
-train_06,test_03,False,Cycle,49.365450857326195
-train_07,train_01,False,SoC (%),1.1793853142952275
-train_07,train_01,False,Cycle,47.71748215019037
-train_07,train_02,False,SoC (%),0.5856007395539026
-train_07,train_02,False,Cycle,14.875345161330806
-train_07,train_03,False,SoC (%),1.487889659941494
-train_07,train_03,False,Cycle,19.156221940618494
-train_07,train_04,False,SoC (%),4.153363143892517
-train_07,train_04,False,Cycle,31.058746704220198
-train_07,train_05,False,SoC (%),5.082823719832195
-train_07,train_05,False,Cycle,35.26870156726782
-train_07,train_06,False,SoC (%),1.0811517397225812
-train_07,train_06,False,Cycle,45.81119169249699
-train_07,train_07,True,SoC (%),0.6275847810704539
-train_07,train_07,True,Cycle,9.205935819120116
-train_07,train_08,False,SoC (%),1.6338665650547985
-train_07,train_08,False,Cycle,16.307605077073212
-train_07,train_09,False,SoC (%),3.597910966043304
-train_07,train_09,False,Cycle,23.102989307977502
-train_07,train_10,False,SoC (%),3.6206953876465904
-train_07,train_10,False,Cycle,25.80904896339903
-train_07,train_11,False,SoC (%),1.0063515885286471
-train_07,train_11,False,Cycle,42.29507639936597
-train_07,train_12,False,SoC (%),0.7747038873960502
-train_07,train_12,False,Cycle,5.628189743258962
-train_07,train_13,False,SoC (%),2.9219422794977543
-train_07,train_13,False,Cycle,13.187167977533038
-train_07,train_14,False,SoC (%),4.320192445446512
-train_07,train_14,False,Cycle,13.468047885308884
-train_07,train_15,False,SoC (%),5.143480115998836
-train_07,train_15,False,Cycle,15.306717457711452
-train_07,train_16,False,SoC (%),1.0954792845407133
-train_07,train_16,False,Cycle,37.33088420552693
-train_07,train_17,False,SoC (%),1.9649576710887882
-train_07,train_17,False,Cycle,9.706308935726451
-train_07,val_01,False,SoC (%),3.764140932920703
-train_07,val_01,False,Cycle,15.208933377977313
-train_07,val_02,False,SoC (%),4.243924023421581
-train_07,val_02,False,Cycle,15.293811424798465
-train_07,val_03,False,SoC (%),4.292978926133418
-train_07,val_03,False,Cycle,16.41096418497607
-train_07,val_04,False,SoC (%),0.9952331259205597
-train_07,val_04,False,Cycle,21.580143154556726
-train_07,val_05,False,SoC (%),3.2546166375413597
-train_07,val_05,False,Cycle,14.500496763910803
-train_07,test_01,False,SoC (%),4.0593851267535275
-train_07,test_01,False,Cycle,17.85361786642263
-train_07,test_02,False,SoC (%),3.7429673874922957
-train_07,test_02,False,Cycle,21.77010878507415
-train_07,test_03,False,SoC (%),3.1544844747579575
-train_07,test_03,False,Cycle,15.629773735391645
-train_08,train_01,False,SoC (%),2.3252227793197937
-train_08,train_01,False,Cycle,64.81359058997899
-train_08,train_02,False,SoC (%),1.6905798692480392
-train_08,train_02,False,Cycle,47.414948589363306
-train_08,train_03,False,SoC (%),0.4288769789982723
-train_08,train_03,False,Cycle,10.269303819436436
-train_08,train_04,False,SoC (%),2.131682176502724
-train_08,train_04,False,Cycle,11.082142792564854
-train_08,train_05,False,SoC (%),3.12823341687505
-train_08,train_05,False,Cycle,20.77020145958715
-train_08,train_06,False,SoC (%),2.1606942191530902
-train_08,train_06,False,Cycle,61.96964692784111
-train_08,train_07,False,SoC (%),1.5617802690336626
-train_08,train_07,False,Cycle,41.698386842123725
-train_08,train_08,True,SoC (%),0.6364632155842642
-train_08,train_08,True,Cycle,11.03037333515247
-train_08,train_09,False,SoC (%),1.679814854067514
-train_08,train_09,False,Cycle,8.279666523282902
-train_08,train_10,False,SoC (%),2.4215517323837474
-train_08,train_10,False,Cycle,16.733488768118598
-train_08,train_11,False,SoC (%),2.1120569935023292
-train_08,train_11,False,Cycle,60.502304696527816
-train_08,train_12,False,SoC (%),1.4271927934471482
-train_08,train_12,False,Cycle,36.57376847228737
-train_08,train_13,False,SoC (%),1.0217554748081041
-train_08,train_13,False,Cycle,10.100756172889309
-train_08,train_14,False,SoC (%),1.1063987628893113
-train_08,train_14,False,Cycle,6.516629513959958
-train_08,train_15,False,SoC (%),1.923307964766144
-train_08,train_15,False,Cycle,12.150737930418472
-train_08,train_16,False,SoC (%),2.0109817779785346
-train_08,train_16,False,Cycle,55.89428083128092
-train_08,train_17,False,SoC (%),1.250136729169919
-train_08,train_17,False,Cycle,23.23249410558985
-train_08,val_01,False,SoC (%),1.3483302401471473
-train_08,val_01,False,Cycle,8.493987768259322
-train_08,val_02,False,SoC (%),1.4153319637717725
-train_08,val_02,False,Cycle,6.566968089230488
-train_08,val_03,False,SoC (%),2.119192607222049
-train_08,val_03,False,Cycle,11.465186403939345
-train_08,val_04,False,SoC (%),1.4593787244850063
-train_08,val_04,False,Cycle,41.87859956313285
-train_08,val_05,False,SoC (%),1.514425370353506
-train_08,val_05,False,Cycle,12.021238009509492
-train_08,test_01,False,SoC (%),1.6215218913513971
-train_08,test_01,False,Cycle,9.722507948247056
-train_08,test_02,False,SoC (%),1.9617810828768663
-train_08,test_02,False,Cycle,9.673136069454829
-train_08,test_03,False,SoC (%),2.09858850118153
-train_08,test_03,False,Cycle,16.444154358763576
-train_09,train_01,False,SoC (%),3.5022277877961763
-train_09,train_01,False,Cycle,68.81724139364516
-train_09,train_02,False,SoC (%),2.9818616255315624
-train_09,train_02,False,Cycle,56.11917073393138
-train_09,train_03,False,SoC (%),1.7879819021245633
-train_09,train_03,False,Cycle,26.880035005482704
-train_09,train_04,False,SoC (%),0.5950760270339082
-train_09,train_04,False,Cycle,8.47778609745727
-train_09,train_05,False,SoC (%),1.6735555743085406
-train_09,train_05,False,Cycle,10.928147955599432
-train_09,train_06,False,SoC (%),3.248663225980848
-train_09,train_06,False,Cycle,66.88995525536903
-train_09,train_07,False,SoC (%),3.1241443326077145
-train_09,train_07,False,Cycle,53.81109463321635
-train_09,train_08,False,SoC (%),2.036517156692218
-train_09,train_08,False,Cycle,28.25348187857807
-train_09,train_09,True,SoC (%),0.678103678922869
-train_09,train_09,True,Cycle,11.288389440716815
-train_09,train_10,False,SoC (%),1.3201259324239605
-train_09,train_10,False,Cycle,9.046736545193474
-train_09,train_11,False,SoC (%),3.0435560281846823
-train_09,train_11,False,Cycle,63.46928261237589
-train_09,train_12,False,SoC (%),2.945573035037042
-train_09,train_12,False,Cycle,47.39552875332064
-train_09,train_13,False,SoC (%),2.4114711875620256
-train_09,train_13,False,Cycle,25.406010485719353
-train_09,train_14,False,SoC (%),1.5731695632681697
-train_09,train_14,False,Cycle,12.11736269051914
-train_09,train_15,False,SoC (%),1.3221441222522918
-train_09,train_15,False,Cycle,8.201645599508703
-train_09,train_16,False,SoC (%),3.0545965579693912
-train_09,train_16,False,Cycle,60.722746223358406
-train_09,train_17,False,SoC (%),2.667480984165377
-train_09,train_17,False,Cycle,37.26546357405089
-train_09,val_01,False,SoC (%),2.5385014091450935
-train_09,val_01,False,Cycle,20.584572882182457
-train_09,val_02,False,SoC (%),1.7540645538055741
-train_09,val_02,False,Cycle,12.237771461005016
-train_09,val_03,False,SoC (%),1.652197500348689
-train_09,val_03,False,Cycle,8.784547740982143
-train_09,val_04,False,SoC (%),2.558007185928561
-train_09,val_04,False,Cycle,49.67723095373277
-train_09,val_05,False,SoC (%),2.6562247884031898
-train_09,val_05,False,Cycle,24.77185811231002
-train_09,test_01,False,SoC (%),2.545375538374417
-train_09,test_01,False,Cycle,18.43158851332898
-train_09,test_02,False,SoC (%),2.688980553378532
-train_09,test_02,False,Cycle,17.497443207678273
-train_09,test_03,False,SoC (%),2.6698675857141874
-train_09,test_03,False,Cycle,32.92566931416673
-train_10,train_01,False,SoC (%),5.6627962172889745
-train_10,train_01,False,Cycle,66.12346231002397
-train_10,train_02,False,SoC (%),5.027283932250686
-train_10,train_02,False,Cycle,54.90149135079008
-train_10,train_03,False,SoC (%),3.3156598953985466
-train_10,train_03,False,Cycle,35.71136631972431
-train_10,train_04,False,SoC (%),1.3122341211191257
-train_10,train_04,False,Cycle,20.096112786936928
-train_10,train_05,False,SoC (%),0.5341614721408521
-train_10,train_05,False,Cycle,11.44424905255377
-train_10,train_06,False,SoC (%),5.417543714200019
-train_10,train_06,False,Cycle,63.66346314892988
-train_10,train_07,False,SoC (%),4.979950584630958
-train_10,train_07,False,Cycle,51.74760303039964
-train_10,train_08,False,SoC (%),3.4491289628237154
-train_10,train_08,False,Cycle,36.25375585036444
-train_10,train_09,False,SoC (%),1.8168876890722039
-train_10,train_09,False,Cycle,21.902071326439213
-train_10,train_10,True,SoC (%),0.7350628144619744
-train_10,train_10,True,Cycle,12.475869675680123
-train_10,train_11,False,SoC (%),5.02452970475859
-train_10,train_11,False,Cycle,60.55246627615249
-train_10,train_12,False,SoC (%),4.6057148467174045
-train_10,train_12,False,Cycle,48.89312997283092
-train_10,train_13,False,SoC (%),3.698690551526665
-train_10,train_13,False,Cycle,34.37067628229225
-train_10,train_14,False,SoC (%),2.856245422573436
-train_10,train_14,False,Cycle,22.89679226832963
-train_10,train_15,False,SoC (%),1.9239705996326153
-train_10,train_15,False,Cycle,15.117112378129882
-train_10,train_16,False,SoC (%),4.886121725174474
-train_10,train_16,False,Cycle,58.635611310764006
-train_10,train_17,False,SoC (%),4.0049168235494665
-train_10,train_17,False,Cycle,41.011700822321714
-train_10,val_01,False,SoC (%),3.8248078106356833
-train_10,val_01,False,Cycle,30.174223901666313
-train_10,val_02,False,SoC (%),2.9936254478970827
-train_10,val_02,False,Cycle,21.801666965297667
-train_10,val_03,False,SoC (%),2.23149553110566
-train_10,val_03,False,Cycle,14.485245973768672
-train_10,val_04,False,SoC (%),4.405885408488151
-train_10,val_04,False,Cycle,48.684452029870414
-train_10,val_05,False,SoC (%),3.756126923603923
-train_10,val_05,False,Cycle,32.48609184005726
-train_10,test_01,False,SoC (%),3.751980566868955
-train_10,test_01,False,Cycle,27.488834469031627
-train_10,test_02,False,SoC (%),3.745319688893097
-train_10,test_02,False,Cycle,27.503756550242258
-train_10,test_03,False,SoC (%),3.39079399071683
-train_10,test_03,False,Cycle,35.140919355156186
-train_11,train_01,False,SoC (%),0.35571297414053127
-train_11,train_01,False,Cycle,11.107305816983045
-train_11,train_02,False,SoC (%),4.853072476573662
-train_11,train_02,False,Cycle,43.71248935425396
-train_11,train_03,False,SoC (%),9.353859393625157
-train_11,train_03,False,Cycle,77.23196660076569
-train_11,train_04,False,SoC (%),10.53090544751238
-train_11,train_04,False,Cycle,82.54915645322221
-train_11,train_05,False,SoC (%),10.267843131574663
-train_11,train_05,False,Cycle,93.02032070861547
-train_11,train_06,False,SoC (%),0.2840616992184543
-train_11,train_06,False,Cycle,9.222036226611005
-train_11,train_07,False,SoC (%),6.652109193414513
-train_11,train_07,False,Cycle,57.367521502255855
-train_11,train_08,False,SoC (%),9.251203328600601
-train_11,train_08,False,Cycle,76.89644050650793
-train_11,train_09,False,SoC (%),10.997429954872167
-train_11,train_09,False,Cycle,78.70571316756124
-train_11,train_10,False,SoC (%),10.447679766557036
-train_11,train_10,False,Cycle,94.25332259812492
-train_11,train_11,True,SoC (%),0.354529041556474
-train_11,train_11,True,Cycle,8.83487887688949
-train_11,train_12,False,SoC (%),7.796966585213392
-train_11,train_12,False,Cycle,64.80307461982567
-train_11,train_13,False,SoC (%),9.898847900603913
-train_11,train_13,False,Cycle,89.53286421387314
-train_11,train_14,False,SoC (%),11.557781635272036
-train_11,train_14,False,Cycle,96.90309746604557
-train_11,train_15,False,SoC (%),10.670605971418539
-train_11,train_15,False,Cycle,98.92287708243957
-train_11,train_16,False,SoC (%),0.570946764262259
-train_11,train_16,False,Cycle,5.46229575006976
-train_11,train_17,False,SoC (%),9.727549829360958
-train_11,train_17,False,Cycle,80.18328669385916
-train_11,val_01,False,SoC (%),11.359407490419036
-train_11,val_01,False,Cycle,97.57291611634898
-train_11,val_02,False,SoC (%),11.270047470029528
-train_11,val_02,False,Cycle,98.95557084607265
-train_11,val_03,False,SoC (%),10.448069171074533
-train_11,val_03,False,Cycle,99.97002238475636
-train_11,val_04,False,SoC (%),1.1567317099239043
-train_11,val_04,False,Cycle,4.930188643302323
-train_11,val_05,False,SoC (%),11.63906834051719
-train_11,val_05,False,Cycle,96.59403985144958
-train_11,test_01,False,SoC (%),11.789893664300472
-train_11,test_01,False,Cycle,105.90986280053932
-train_11,test_02,False,SoC (%),12.353005859628231
-train_11,test_02,False,Cycle,87.33518995526306
-train_11,test_03,False,SoC (%),11.563171511522896
-train_11,test_03,False,Cycle,59.21348365862987
-train_12,train_01,False,SoC (%),2.143927092983343
-train_12,train_01,False,Cycle,51.15428208947807
-train_12,train_02,False,SoC (%),0.8051221751590383
-train_12,train_02,False,Cycle,22.77296072142918
-train_12,train_03,False,SoC (%),1.0864201838351257
-train_12,train_03,False,Cycle,15.064753222096217
-train_12,train_04,False,SoC (%),3.4287427827549606
-train_12,train_04,False,Cycle,27.999784505021246
-train_12,train_05,False,SoC (%),4.295408079470469
-train_12,train_05,False,Cycle,36.36027068258045
-train_12,train_06,False,SoC (%),1.5813591325916805
-train_12,train_06,False,Cycle,46.18404171249743
-train_12,train_07,False,SoC (%),0.5482042718195406
-train_12,train_07,False,Cycle,16.808979562562595
-train_12,train_08,False,SoC (%),0.9880543000506288
-train_12,train_08,False,Cycle,11.400549449132763
-train_12,train_09,False,SoC (%),2.5269293610377077
-train_12,train_09,False,Cycle,21.731479805698743
-train_12,train_10,False,SoC (%),2.418618756542759
-train_12,train_10,False,Cycle,26.13343380807193
-train_12,train_11,False,SoC (%),1.3536834662161497
-train_12,train_11,False,Cycle,44.988734559867915
-train_12,train_12,True,SoC (%),0.5096181193550859
-train_12,train_12,True,Cycle,8.325748482359822
-train_12,train_13,False,SoC (%),1.597587986543083
-train_12,train_13,False,Cycle,9.236072430749001
-train_12,train_14,False,SoC (%),3.0404726126210897
-train_12,train_14,False,Cycle,12.21995217813284
-train_12,train_15,False,SoC (%),3.643789268332061
-train_12,train_15,False,Cycle,14.316721219040897
-train_12,train_16,False,SoC (%),1.2291881949442762
-train_12,train_16,False,Cycle,40.70809956944576
-train_12,train_17,False,SoC (%),1.1231743827175127
-train_12,train_17,False,Cycle,5.506072730517579
-train_12,val_01,False,SoC (%),2.582760413466676
-train_12,val_01,False,Cycle,13.02093360957291
-train_12,val_02,False,SoC (%),3.290756638809927
-train_12,val_02,False,Cycle,13.19859596771393
-train_12,val_03,False,SoC (%),3.005592510811244
-train_12,val_03,False,Cycle,13.21553090345962
-train_12,val_04,False,SoC (%),1.040394857837813
-train_12,val_04,False,Cycle,25.053605709923595
-train_12,val_05,False,SoC (%),2.2742020771890656
-train_12,val_05,False,Cycle,15.04396375913089
-train_12,test_01,False,SoC (%),2.891823311323616
-train_12,test_01,False,Cycle,17.664651156874402
-train_12,test_02,False,SoC (%),2.8438573779321836
-train_12,test_02,False,Cycle,19.986384015956556
-train_12,test_03,False,SoC (%),1.812216832659772
-train_12,test_03,False,Cycle,8.645274084172824
-train_13,train_01,False,SoC (%),1.9058534826408955
-train_13,train_01,False,Cycle,63.020268430379794
-train_13,train_02,False,SoC (%),1.5900687241324472
-train_13,train_02,False,Cycle,47.769337418457745
-train_13,train_03,False,SoC (%),0.5724685902438715
-train_13,train_03,False,Cycle,13.492934352835158
-train_13,train_04,False,SoC (%),1.7794613224114066
-train_13,train_04,False,Cycle,10.530060096813791
-train_13,train_05,False,SoC (%),3.324729126174247
-train_13,train_05,False,Cycle,19.15932763569236
-train_13,train_06,False,SoC (%),1.6517559698399225
-train_13,train_06,False,Cycle,59.27375781897966
-train_13,train_07,False,SoC (%),1.3129010049331846
-train_13,train_07,False,Cycle,42.03964544382043
-train_13,train_08,False,SoC (%),0.4830420705447192
-train_13,train_08,False,Cycle,14.156797266993415
-train_13,train_09,False,SoC (%),1.3800387980808226
-train_13,train_09,False,Cycle,8.595001506954572
-train_13,train_10,False,SoC (%),2.354031027828308
-train_13,train_10,False,Cycle,16.66746807263607
-train_13,train_11,False,SoC (%),1.4822544861164038
-train_13,train_11,False,Cycle,57.61657288832253
-train_13,train_12,False,SoC (%),1.0216663186243469
-train_13,train_12,False,Cycle,34.62495182250121
-train_13,train_13,True,SoC (%),0.5348538434933334
-train_13,train_13,True,Cycle,10.422131479604213
-train_13,train_14,False,SoC (%),0.8414023345483805
-train_13,train_14,False,Cycle,6.711901131614667
-train_13,train_15,False,SoC (%),1.5107881892299815
-train_13,train_15,False,Cycle,12.369514435972455
-train_13,train_16,False,SoC (%),1.3715811238197289
-train_13,train_16,False,Cycle,54.24996699339143
-train_13,train_17,False,SoC (%),0.6305142135489056
-train_13,train_17,False,Cycle,23.336295846039793
-train_13,val_01,False,SoC (%),0.7799357269710688
-train_13,val_01,False,Cycle,6.911732925904548
-train_13,val_02,False,SoC (%),0.9327512757462634
-train_13,val_02,False,Cycle,7.218819529992831
-train_13,val_03,False,SoC (%),1.5410506915088913
-train_13,val_03,False,Cycle,12.242694024511426
-train_13,val_04,False,SoC (%),1.0104208368768097
-train_13,val_04,False,Cycle,40.23232873286732
-train_13,val_05,False,SoC (%),0.7281615772393831
-train_13,val_05,False,Cycle,10.4230721861222
-train_13,test_01,False,SoC (%),0.9497694933944357
-train_13,test_01,False,Cycle,7.602093532134003
-train_13,test_02,False,SoC (%),1.0741058998952895
-train_13,test_02,False,Cycle,9.388379985721246
-train_13,test_03,False,SoC (%),1.039798898357062
-train_13,test_03,False,Cycle,10.034417133860494
-train_14,train_01,False,SoC (%),1.9839754799053233
-train_14,train_01,False,Cycle,64.62556278926202
-train_14,train_02,False,SoC (%),1.774409131143619
-train_14,train_02,False,Cycle,51.50589408542476
-train_14,train_03,False,SoC (%),0.8444977707397253
-train_14,train_03,False,Cycle,25.09268105108984
-train_14,train_04,False,SoC (%),1.0440371218042441
-train_14,train_04,False,Cycle,10.470669595114721
-train_14,train_05,False,SoC (%),2.5674747754989435
-train_14,train_05,False,Cycle,11.380855198122795
-train_14,train_06,False,SoC (%),1.8770281625934642
-train_14,train_06,False,Cycle,61.93850219644177
-train_14,train_07,False,SoC (%),1.711731630954551
-train_14,train_07,False,Cycle,48.484271369608436
-train_14,train_08,False,SoC (%),0.9762604347661495
-train_14,train_08,False,Cycle,27.197254232590737
-train_14,train_09,False,SoC (%),0.7347648736468265
-train_14,train_09,False,Cycle,13.29255131894548
-train_14,train_10,False,SoC (%),1.865867540324405
-train_14,train_10,False,Cycle,10.188673572494167
-train_14,train_11,False,SoC (%),1.7031096935619103
-train_14,train_11,False,Cycle,59.22619137227246
-train_14,train_12,False,SoC (%),1.594069995463251
-train_14,train_12,False,Cycle,43.06828318830055
-train_14,train_13,False,SoC (%),1.2436134938176564
-train_14,train_13,False,Cycle,24.756164173263976
-train_14,train_14,True,SoC (%),0.6068092362810442
-train_14,train_14,True,Cycle,12.265073350148482
-train_14,train_15,False,SoC (%),1.052231837945551
-train_14,train_15,False,Cycle,9.231295804981492
-train_14,train_16,False,SoC (%),1.574589089397204
-train_14,train_16,False,Cycle,54.70342014203855
-train_14,train_17,False,SoC (%),1.318473689207691
-train_14,train_17,False,Cycle,32.86583820709923
-train_14,val_01,False,SoC (%),1.198259911560091
-train_14,val_01,False,Cycle,19.302823255414864
-train_14,val_02,False,SoC (%),0.720675305840101
-train_14,val_02,False,Cycle,11.29169662969935
-train_14,val_03,False,SoC (%),1.0428476922335532
-train_14,val_03,False,Cycle,9.588206138334678
-train_14,val_04,False,SoC (%),1.1947542204552826
-train_14,val_04,False,Cycle,42.44645026644821
-train_14,val_05,False,SoC (%),1.2511025023644748
-train_14,val_05,False,Cycle,22.172416866459226
-train_14,test_01,False,SoC (%),1.157873825719318
-train_14,test_01,False,Cycle,16.630894289055565
-train_14,test_02,False,SoC (%),1.4873008916443562
-train_14,test_02,False,Cycle,14.612148505089593
-train_14,test_03,False,SoC (%),1.8215794795585494
-train_14,test_03,False,Cycle,24.426915916627898
-train_15,train_01,False,SoC (%),3.0074816914222415
-train_15,train_01,False,Cycle,59.70370877625759
-train_15,train_02,False,SoC (%),2.7552835440040284
-train_15,train_02,False,Cycle,50.83224886766768
-train_15,train_03,False,SoC (%),1.7603736554138047
-train_15,train_03,False,Cycle,32.1397099076699
-train_15,train_04,False,SoC (%),1.0610769084058649
-train_15,train_04,False,Cycle,18.625304137494968
-train_15,train_05,False,SoC (%),1.5727983447267586
-train_15,train_05,False,Cycle,11.82430498507596
-train_15,train_06,False,SoC (%),2.9731326685667625
-train_15,train_06,False,Cycle,57.87513594963743
-train_15,train_07,False,SoC (%),2.7313126996504287
-train_15,train_07,False,Cycle,47.33690641846188
-train_15,train_08,False,SoC (%),1.8061006335197203
-train_15,train_08,False,Cycle,32.63386235882994
-train_15,train_09,False,SoC (%),1.0766080653064505
-train_15,train_09,False,Cycle,20.869920290105107
-train_15,train_10,False,SoC (%),0.9042880974446961
-train_15,train_10,False,Cycle,12.951039740651977
-train_15,train_11,False,SoC (%),2.8500948040737146
-train_15,train_11,False,Cycle,54.496890243480244
-train_15,train_12,False,SoC (%),2.5383969964908797
-train_15,train_12,False,Cycle,42.915716498698224
-train_15,train_13,False,SoC (%),2.070333982491378
-train_15,train_13,False,Cycle,30.921112442089395
-train_15,train_14,False,SoC (%),1.5052437183800575
-train_15,train_14,False,Cycle,20.53284174992126
-train_15,train_15,True,SoC (%),0.6591471446597919
-train_15,train_15,True,Cycle,10.95634367753555
-train_15,train_16,False,SoC (%),2.4852668094678187
-train_15,train_16,False,Cycle,50.82341985439398
-train_15,train_17,False,SoC (%),2.2024365525090577
-train_15,train_17,False,Cycle,35.616004680235356
-train_15,val_01,False,SoC (%),2.100253901038229
-train_15,val_01,False,Cycle,25.719783509112304
-train_15,val_02,False,SoC (%),1.5779876173836338
-train_15,val_02,False,Cycle,18.7337528025271
-train_15,val_03,False,SoC (%),0.8916227353247842
-train_15,val_03,False,Cycle,11.93139423557602
-train_15,val_04,False,SoC (%),2.181512257044047
-train_15,val_04,False,Cycle,42.85050983019202
-train_15,val_05,False,SoC (%),2.1514270227150165
-train_15,val_05,False,Cycle,25.810087701216922
-train_15,test_01,False,SoC (%),2.107466556475215
-train_15,test_01,False,Cycle,22.27224543236518
-train_15,test_02,False,SoC (%),2.091139073578003
-train_15,test_02,False,Cycle,24.43118375880142
-train_15,test_03,False,SoC (%),2.0596352866059022
-train_15,test_03,False,Cycle,31.132740121237564
-train_16,train_01,False,SoC (%),0.6644672315647157
-train_16,train_01,False,Cycle,10.803246077492972
-train_16,train_02,False,SoC (%),3.5759302521298992
-train_16,train_02,False,Cycle,36.29647475829984
-train_16,train_03,False,SoC (%),7.399968583263445
-train_16,train_03,False,Cycle,74.5316841654595
-train_16,train_04,False,SoC (%),7.796663908077389
-train_16,train_04,False,Cycle,96.41250654785425
-train_16,train_05,False,SoC (%),7.975656504620821
-train_16,train_05,False,Cycle,104.19890751063907
-train_16,train_06,False,SoC (%),0.37022867436314033
-train_16,train_06,False,Cycle,10.877465142443931
-train_16,train_07,False,SoC (%),4.995978751827844
-train_16,train_07,False,Cycle,49.75352089642672
-train_16,train_08,False,SoC (%),7.285227158068145
-train_16,train_08,False,Cycle,76.77697842845436
-train_16,train_09,False,SoC (%),8.418796934155989
-train_16,train_09,False,Cycle,83.50463771860494
-train_16,train_10,False,SoC (%),7.955318774856964
-train_16,train_10,False,Cycle,97.2908148716816
-train_16,train_11,False,SoC (%),0.2627636334658065
-train_16,train_11,False,Cycle,10.482986426638927
-train_16,train_12,False,SoC (%),5.812054447553034
-train_16,train_12,False,Cycle,56.46122460163967
-train_16,train_13,False,SoC (%),7.952271802625754
-train_16,train_13,False,Cycle,88.75197637807611
-train_16,train_14,False,SoC (%),8.861824199734647
-train_16,train_14,False,Cycle,95.19830796433548
-train_16,train_15,False,SoC (%),8.493051221196803
-train_16,train_15,False,Cycle,97.06034260668304
-train_16,train_16,True,SoC (%),0.3863021745364229
-train_16,train_16,True,Cycle,8.33023942893146
-train_16,train_17,False,SoC (%),7.562607135276091
-train_16,train_17,False,Cycle,77.21306567464813
-train_16,val_01,False,SoC (%),8.7467203390994
-train_16,val_01,False,Cycle,96.37978050235732
-train_16,val_02,False,SoC (%),9.055714462823474
-train_16,val_02,False,Cycle,98.97351584270797
-train_16,val_03,False,SoC (%),8.58979895811112
-train_16,val_03,False,Cycle,98.89111865138865
-train_16,val_04,False,SoC (%),0.6252606712644623
-train_16,val_04,False,Cycle,2.728766140919594
-train_16,val_05,False,SoC (%),8.828487422544596
-train_16,val_05,False,Cycle,98.88735159884045
-train_16,test_01,False,SoC (%),9.719831999503212
-train_16,test_01,False,Cycle,105.75958430796919
-train_16,test_02,False,SoC (%),9.836398170506985
-train_16,test_02,False,Cycle,96.6031718323107
-train_16,test_03,False,SoC (%),7.0763288310833765
-train_16,test_03,False,Cycle,22.899469980090846
-train_17,train_01,False,SoC (%),2.993058931713146
-train_17,train_01,False,Cycle,57.26026036230524
-train_17,train_02,False,SoC (%),1.5747262404510398
-train_17,train_02,False,Cycle,37.20865162447784
-train_17,train_03,False,SoC (%),0.9610950557175841
-train_17,train_03,False,Cycle,11.95712511863412
-train_17,train_04,False,SoC (%),2.159861341476315
-train_17,train_04,False,Cycle,19.326456563169558
-train_17,train_05,False,SoC (%),3.724801004574631
-train_17,train_05,False,Cycle,25.3927291952631
-train_17,train_06,False,SoC (%),2.7245935817286218
-train_17,train_06,False,Cycle,54.5070795892537
-train_17,train_07,False,SoC (%),1.0327433512078703
-train_17,train_07,False,Cycle,31.49639126348124
-train_17,train_08,False,SoC (%),0.6864570968409479
-train_17,train_08,False,Cycle,10.356964035092565
-train_17,train_09,False,SoC (%),1.60930166988967
-train_17,train_09,False,Cycle,15.628098214859536
-train_17,train_10,False,SoC (%),2.6432469967193986
-train_17,train_10,False,Cycle,20.292822859966964
-train_17,train_11,False,SoC (%),2.4121921384312137
-train_17,train_11,False,Cycle,50.377533360447735
-train_17,train_12,False,SoC (%),0.6817016183626403
-train_17,train_12,False,Cycle,24.15561785125585
-train_17,train_13,False,SoC (%),0.7679101313838291
-train_17,train_13,False,Cycle,7.3391629526535445
-train_17,train_14,False,SoC (%),1.3779361861392434
-train_17,train_14,False,Cycle,6.831510715601932
-train_17,train_15,False,SoC (%),2.421494621379056
-train_17,train_15,False,Cycle,10.977192330292764
-train_17,train_16,False,SoC (%),1.7635958102840665
-train_17,train_16,False,Cycle,46.97637665324016
-train_17,train_17,True,SoC (%),0.5141012017269954
-train_17,train_17,True,Cycle,11.229199859196603
-train_17,val_01,False,SoC (%),1.1185993867377246
-train_17,val_01,False,Cycle,5.642847641017214
-train_17,val_02,False,SoC (%),1.616148930560052
-train_17,val_02,False,Cycle,8.289984614025341
-train_17,val_03,False,SoC (%),1.8090321264480813
-train_17,val_03,False,Cycle,11.301582950512405
-train_17,val_04,False,SoC (%),1.3266044097018068
-train_17,val_04,False,Cycle,32.54536451677804
-train_17,val_05,False,SoC (%),1.0221339915432737
-train_17,val_05,False,Cycle,3.956616682599429
-train_17,test_01,False,SoC (%),1.289564934629049
-train_17,test_01,False,Cycle,8.257204657050757
-train_17,test_02,False,SoC (%),1.5184642148069156
-train_17,test_02,False,Cycle,10.853443132744125
-train_17,test_03,False,SoC (%),1.4692587973781817
-train_17,test_03,False,Cycle,13.768522807962196
-val_01,train_01,False,SoC (%),2.7497848955367257
-val_01,train_01,False,Cycle,68.33997646902432
-val_01,train_02,False,SoC (%),2.2066219538421357
-val_01,train_02,False,Cycle,56.85137762418215
-val_01,train_03,False,SoC (%),1.2751359772011013
-val_01,train_03,False,Cycle,31.250828976994995
-val_01,train_04,False,SoC (%),1.7110266173127755
-val_01,train_04,False,Cycle,20.52292475368779
-val_01,train_05,False,SoC (%),3.4271984788907632
-val_01,train_05,False,Cycle,18.30815289736922
-val_01,train_06,False,SoC (%),2.371836796974718
-val_01,train_06,False,Cycle,65.97453714088779
-val_01,train_07,False,SoC (%),1.7846164645121623
-val_01,train_07,False,Cycle,50.46070538343531
-val_01,train_08,False,SoC (%),1.0352076500439622
-val_01,train_08,False,Cycle,30.58048391046815
-val_01,train_09,False,SoC (%),1.3466226487703143
-val_01,train_09,False,Cycle,20.550275371616312
-val_01,train_10,False,SoC (%),2.7580798101893897
-val_01,train_10,False,Cycle,17.355060700281143
-val_01,train_11,False,SoC (%),2.1547205889862395
-val_01,train_11,False,Cycle,63.39577116664615
-val_01,train_12,False,SoC (%),1.4343340289344446
-val_01,train_12,False,Cycle,45.71796220509455
-val_01,train_13,False,SoC (%),0.650203199231524
-val_01,train_13,False,Cycle,26.933433434815417
-val_01,train_14,False,SoC (%),0.6575688046154491
-val_01,train_14,False,Cycle,16.173005348395723
-val_01,train_15,False,SoC (%),1.7169501082451846
-val_01,train_15,False,Cycle,13.325374458650298
-val_01,train_16,False,SoC (%),1.9277255769978612
-val_01,train_16,False,Cycle,58.25317879813264
-val_01,train_17,False,SoC (%),0.8451648986032023
-val_01,train_17,False,Cycle,34.85738741959021
-val_01,val_01,True,SoC (%),0.4737602366642472
-val_01,val_01,True,Cycle,20.5123987241385
-val_01,val_02,False,SoC (%),0.6554403391564269
-val_01,val_02,False,Cycle,13.972594656778552
-val_01,val_03,False,SoC (%),1.3251293229972154
-val_01,val_03,False,Cycle,12.261797964921652
-val_01,val_04,False,SoC (%),1.400474273569293
-val_01,val_04,False,Cycle,47.892798278529064
-val_01,val_05,False,SoC (%),0.45648404368830214
-val_01,val_05,False,Cycle,23.109294866311107
-val_01,test_01,False,SoC (%),0.6077266732727933
-val_01,test_01,False,Cycle,16.023448540989286
-val_01,test_02,False,SoC (%),1.0130010727680834
-val_01,test_02,False,Cycle,16.872203937208205
-val_01,test_03,False,SoC (%),1.270032177682635
-val_01,test_03,False,Cycle,20.561932413860994
-val_02,train_01,False,SoC (%),2.625439873668145
-val_02,train_01,False,Cycle,68.1808069525504
-val_02,train_02,False,SoC (%),2.360012147437304
-val_02,train_02,False,Cycle,58.76994886404345
-val_02,train_03,False,SoC (%),1.794401963613711
-val_02,train_03,False,Cycle,38.74613289858348
-val_02,train_04,False,SoC (%),1.6999402804755617
-val_02,train_04,False,Cycle,25.887968902658475
-val_02,train_05,False,SoC (%),3.020917603206924
-val_02,train_05,False,Cycle,22.281041838661444
-val_02,train_06,False,SoC (%),2.4300687669574406
-val_02,train_06,False,Cycle,65.78900158420934
-val_02,train_07,False,SoC (%),2.2731161961428725
-val_02,train_07,False,Cycle,55.12287501846319
-val_02,train_08,False,SoC (%),1.6614518044029365
-val_02,train_08,False,Cycle,38.56280147795816
-val_02,train_09,False,SoC (%),1.3912652963236345
-val_02,train_09,False,Cycle,27.36349950141722
-val_02,train_10,False,SoC (%),2.3730627999738085
-val_02,train_10,False,Cycle,21.00987951578667
-val_02,train_11,False,SoC (%),2.331065478788287
-val_02,train_11,False,Cycle,62.960226152494194
-val_02,train_12,False,SoC (%),2.003729593602081
-val_02,train_12,False,Cycle,50.40351808069735
-val_02,train_13,False,SoC (%),1.6045843909915833
-val_02,train_13,False,Cycle,37.15036534229211
-val_02,train_14,False,SoC (%),1.0306784830700835
-val_02,train_14,False,Cycle,25.096183728942382
-val_02,train_15,False,SoC (%),1.4317457650946657
-val_02,train_15,False,Cycle,19.498941698266606
-val_02,train_16,False,SoC (%),2.105839862482207
-val_02,train_16,False,Cycle,59.763123642349186
-val_02,train_17,False,SoC (%),1.709965072753652
-val_02,train_17,False,Cycle,41.17047425486031
-val_02,val_01,False,SoC (%),1.3330442221487286
-val_02,val_01,False,Cycle,30.223627890203474
-val_02,val_02,True,SoC (%),1.0004681502573016
-val_02,val_02,True,Cycle,24.451592972774144
-val_02,val_03,False,SoC (%),1.4662319948549187
-val_02,val_03,False,Cycle,19.566575454229444
-val_02,val_04,False,SoC (%),1.7604172483343852
-val_02,val_04,False,Cycle,49.24792521299723
-val_02,val_05,False,SoC (%),1.316247287218385
-val_02,val_05,False,Cycle,32.28809936615975
-val_02,test_01,False,SoC (%),1.232791610132494
-val_02,test_01,False,Cycle,25.803697747228522
-val_02,test_02,False,SoC (%),1.6522558749879288
-val_02,test_02,False,Cycle,26.797333383564943
-val_02,test_03,False,SoC (%),1.7928554681732825
-val_02,test_03,False,Cycle,48.26446918815186
-val_03,train_01,False,SoC (%),2.70890915839464
-val_03,train_01,False,Cycle,62.37694655417989
-val_03,train_02,False,SoC (%),2.5291902479412247
-val_03,train_02,False,Cycle,56.26841923806317
-val_03,train_03,False,SoC (%),1.8923817624418302
-val_03,train_03,False,Cycle,39.01171908210321
-val_03,train_04,False,SoC (%),1.8428962748601583
-val_03,train_04,False,Cycle,29.600624406547634
-val_03,train_05,False,SoC (%),2.1405081707783897
-val_03,train_05,False,Cycle,26.88188692880653
-val_03,train_06,False,SoC (%),2.567852337310859
-val_03,train_06,False,Cycle,60.20022881909314
-val_03,train_07,False,SoC (%),2.311688870910405
-val_03,train_07,False,Cycle,52.37517152914536
-val_03,train_08,False,SoC (%),1.7944844709929768
-val_03,train_08,False,Cycle,41.04522932457716
-val_03,train_09,False,SoC (%),1.6374947235771864
-val_03,train_09,False,Cycle,30.758253250094086
-val_03,train_10,False,SoC (%),1.6606387820134285
-val_03,train_10,False,Cycle,26.27120987708702
-val_03,train_11,False,SoC (%),2.337807653724792
-val_03,train_11,False,Cycle,58.401725496838615
-val_03,train_12,False,SoC (%),2.1025845841167703
-val_03,train_12,False,Cycle,48.326067402153214
-val_03,train_13,False,SoC (%),1.8307345032919349
-val_03,train_13,False,Cycle,37.697950091967876
-val_03,train_14,False,SoC (%),1.3166171050992712
-val_03,train_14,False,Cycle,29.96328829366155
-val_03,train_15,False,SoC (%),0.8930534369981608
-val_03,train_15,False,Cycle,24.428431443040804
-val_03,train_16,False,SoC (%),2.0592354288498473
-val_03,train_16,False,Cycle,55.40218326992655
-val_03,train_17,False,SoC (%),1.854572410800197
-val_03,train_17,False,Cycle,40.172094006879696
-val_03,val_01,False,SoC (%),1.6368987979196234
-val_03,val_01,False,Cycle,33.365564672838644
-val_03,val_02,False,SoC (%),1.2842806040074055
-val_03,val_02,False,Cycle,27.05380229283096
-val_03,val_03,True,SoC (%),0.84635524370844
-val_03,val_03,True,Cycle,22.57062656633182
-val_03,val_04,False,SoC (%),1.8681882406054768
-val_03,val_04,False,Cycle,46.55751443970748
-val_03,val_05,False,SoC (%),1.6418519374699807
-val_03,val_05,False,Cycle,34.256277675786016
-val_03,test_01,False,SoC (%),1.5552512611362628
-val_03,test_01,False,Cycle,31.371351078242334
-val_03,test_02,False,SoC (%),1.6118774506475155
-val_03,test_02,False,Cycle,30.637603302721132
-val_03,test_03,False,SoC (%),1.7982424405034712
-val_03,test_03,False,Cycle,42.42352811591521
-val_04,train_01,False,SoC (%),1.4026073109152248
-val_04,train_01,False,Cycle,18.60022380666648
-val_04,train_02,False,SoC (%),2.6881465177311483
-val_04,train_02,False,Cycle,14.158602469586521
-val_04,train_03,False,SoC (%),6.1874067338072845
-val_04,train_03,False,Cycle,57.814711357331916
-val_04,train_04,False,SoC (%),6.286943112248761
-val_04,train_04,False,Cycle,78.75747086351257
-val_04,train_05,False,SoC (%),6.274798521420188
-val_04,train_05,False,Cycle,84.856638236791
-val_04,train_06,False,SoC (%),1.0752635206473964
-val_04,train_06,False,Cycle,19.166100458706158
-val_04,train_07,False,SoC (%),3.9451206667711882
-val_04,train_07,False,Cycle,26.107213667357655
-val_04,train_08,False,SoC (%),6.265049395650898
-val_04,train_08,False,Cycle,51.999405565642974
-val_04,train_09,False,SoC (%),6.6387475587632725
-val_04,train_09,False,Cycle,67.44859785343988
-val_04,train_10,False,SoC (%),6.352269297460547
-val_04,train_10,False,Cycle,75.35449005887685
-val_04,train_11,False,SoC (%),0.9190844675080287
-val_04,train_11,False,Cycle,18.613327833736307
-val_04,train_12,False,SoC (%),4.4372559695111615
-val_04,train_12,False,Cycle,33.5748409394919
-val_04,train_13,False,SoC (%),6.665629459226113
-val_04,train_13,False,Cycle,67.39191605447382
-val_04,train_14,False,SoC (%),7.139317624853939
-val_04,train_14,False,Cycle,76.8115000952566
-val_04,train_15,False,SoC (%),6.929091155566364
-val_04,train_15,False,Cycle,78.47291014434087
-val_04,train_16,False,SoC (%),0.8213319345031863
-val_04,train_16,False,Cycle,15.692710365414076
-val_04,train_17,False,SoC (%),5.9290340455210675
-val_04,train_17,False,Cycle,56.34936976010875
-val_04,val_01,False,SoC (%),7.287669975727046
-val_04,val_01,False,Cycle,75.6811115987695
-val_04,val_02,False,SoC (%),7.269896192102776
-val_04,val_02,False,Cycle,78.68208361773681
-val_04,val_03,False,SoC (%),6.983503821329717
-val_04,val_03,False,Cycle,79.65625968724133
-val_04,val_04,True,SoC (%),0.9087542047713191
-val_04,val_04,True,Cycle,8.125155367738676
-val_04,val_05,False,SoC (%),7.076685681303816
-val_04,val_05,False,Cycle,75.30051607336263
-val_04,test_01,False,SoC (%),7.598033847176771
-val_04,test_01,False,Cycle,83.00584033179273
-val_04,test_02,False,SoC (%),8.132235837116463
-val_04,test_02,False,Cycle,76.4080896494179
-val_04,test_03,False,SoC (%),7.934746475740174
-val_04,test_03,False,Cycle,33.390413427192186
-val_05,train_01,False,SoC (%),3.7005379394297235
-val_05,train_01,False,Cycle,72.95957118317436
-val_05,train_02,False,SoC (%),2.5073903797889456
-val_05,train_02,False,Cycle,60.35091306294583
-val_05,train_03,False,SoC (%),1.5883563986836937
-val_05,train_03,False,Cycle,32.1475094775486
-val_05,train_04,False,SoC (%),1.4684728875195137
-val_05,train_04,False,Cycle,22.502202994790572
-val_05,train_05,False,SoC (%),2.6188797618000557
-val_05,train_05,False,Cycle,19.924925428666228
-val_05,train_06,False,SoC (%),3.3344235397380397
-val_05,train_06,False,Cycle,69.94530834983601
-val_05,train_07,False,SoC (%),2.0453871369121077
-val_05,train_07,False,Cycle,56.139987850673464
-val_05,train_08,False,SoC (%),1.4318831279845587
-val_05,train_08,False,Cycle,32.84211836176511
-val_05,train_09,False,SoC (%),1.1312374670913394
-val_05,train_09,False,Cycle,23.44530426099722
-val_05,train_10,False,SoC (%),1.7447157234397734
-val_05,train_10,False,Cycle,18.764194810532935
-val_05,train_11,False,SoC (%),3.0117546921877976
-val_05,train_11,False,Cycle,67.79599283011189
-val_05,train_12,False,SoC (%),1.721084934864978
-val_05,train_12,False,Cycle,49.30245035205178
-val_05,train_13,False,SoC (%),1.2308425657368904
-val_05,train_13,False,Cycle,29.9052928733643
-val_05,train_14,False,SoC (%),0.88739934649975
-val_05,train_14,False,Cycle,22.004090067639634
-val_05,train_15,False,SoC (%),1.0341836109580103
-val_05,train_15,False,Cycle,16.87976563870839
-val_05,train_16,False,SoC (%),2.59022757612981
-val_05,train_16,False,Cycle,63.325782230695985
-val_05,train_17,False,SoC (%),1.2529562364424307
-val_05,train_17,False,Cycle,39.540568761386815
-val_05,val_01,False,SoC (%),1.1085249621768274
-val_05,val_01,False,Cycle,27.612911208927812
-val_05,val_02,False,SoC (%),0.8944900097243208
-val_05,val_02,False,Cycle,22.3175470232812
-val_05,val_03,False,SoC (%),0.8388461921542929
-val_05,val_03,False,Cycle,17.528354737034878
-val_05,val_04,False,SoC (%),1.9553672558539177
-val_05,val_04,False,Cycle,53.00620308013822
-val_05,val_05,True,SoC (%),1.0388170948749793
-val_05,val_05,True,Cycle,29.068439559391173
-val_05,test_01,False,SoC (%),0.9554408846894764
-val_05,test_01,False,Cycle,23.30777738196219
-val_05,test_02,False,SoC (%),0.941996994867159
-val_05,test_02,False,Cycle,21.687487619199835
-val_05,test_03,False,SoC (%),1.6360090866201087
-val_05,test_03,False,Cycle,49.304045665156686
-test_01,train_01,False,SoC (%),3.445464558134934
-test_01,train_01,False,Cycle,89.64902913365364
-test_01,train_02,False,SoC (%),2.790445513759716
-test_01,train_02,False,Cycle,82.83856498846846
-test_01,train_03,False,SoC (%),2.185893369793299
-test_01,train_03,False,Cycle,62.368365353934706
-test_01,train_04,False,SoC (%),1.915301218134234
-test_01,train_04,False,Cycle,50.6143016311786
-test_01,train_05,False,SoC (%),2.7738951387867665
-test_01,train_05,False,Cycle,39.75725029254586
-test_01,train_06,False,SoC (%),2.9937545298849506
-test_01,train_06,False,Cycle,86.43053461037434
-test_01,train_07,False,SoC (%),2.51537058392946
-test_01,train_07,False,Cycle,78.10354545642844
-test_01,train_08,False,SoC (%),2.027367932108051
-test_01,train_08,False,Cycle,63.58367280417827
-test_01,train_09,False,SoC (%),1.742898094409497
-test_01,train_09,False,Cycle,51.33241349086169
-test_01,train_10,False,SoC (%),2.3746078844562293
-test_01,train_10,False,Cycle,39.29580489642609
-test_01,train_11,False,SoC (%),2.6413542852361114
-test_01,train_11,False,Cycle,85.18085605915455
-test_01,train_12,False,SoC (%),2.2664269800682457
-test_01,train_12,False,Cycle,72.66467197716554
-test_01,train_13,False,SoC (%),1.744610233382292
-test_01,train_13,False,Cycle,56.371051009563736
-test_01,train_14,False,SoC (%),1.2918062492040645
-test_01,train_14,False,Cycle,47.09737118273596
-test_01,train_15,False,SoC (%),1.596915367811256
-test_01,train_15,False,Cycle,35.88357332973463
-test_01,train_16,False,SoC (%),2.459019740980923
-test_01,train_16,False,Cycle,81.24201627991879
-test_01,train_17,False,SoC (%),1.8140056777680171
-test_01,train_17,False,Cycle,63.7213949617157
-test_01,val_01,False,SoC (%),1.493083623105796
-test_01,val_01,False,Cycle,51.39353346281918
-test_01,val_02,False,SoC (%),1.2123719423648842
-test_01,val_02,False,Cycle,44.34628069861927
-test_01,val_03,False,SoC (%),1.3609185273053668
-test_01,val_03,False,Cycle,37.00367615121343
-test_01,val_04,False,SoC (%),2.0644922015879867
-test_01,val_04,False,Cycle,73.62991259695477
-test_01,val_05,False,SoC (%),1.4970102934991332
-test_01,val_05,False,Cycle,53.49010948189541
-test_01,test_01,True,SoC (%),1.3643149174999039
-test_01,test_01,True,Cycle,48.47397138960362
-test_01,test_02,False,SoC (%),1.3959862321350551
-test_01,test_02,False,Cycle,46.28169272516472
-test_01,test_03,False,SoC (%),1.5596205949921336
-test_01,test_03,False,Cycle,45.67630052820121
-test_02,train_01,False,SoC (%),3.4388755239622713
-test_02,train_01,False,Cycle,91.99669075520478
-test_02,train_02,False,SoC (%),3.2131235903933653
-test_02,train_02,False,Cycle,83.58094255914959
-test_02,train_03,False,SoC (%),2.964363002881525
-test_02,train_03,False,Cycle,68.51388931162495
-test_02,train_04,False,SoC (%),2.4128892064346967
-test_02,train_04,False,Cycle,58.46110915202864
-test_02,train_05,False,SoC (%),2.71833591023445
-test_02,train_05,False,Cycle,50.2663477173652
-test_02,train_06,False,SoC (%),3.1809771673880456
-test_02,train_06,False,Cycle,88.73387560423564
-test_02,train_07,False,SoC (%),3.211536681956011
-test_02,train_07,False,Cycle,81.1564024246185
-test_02,train_08,False,SoC (%),2.812894996506266
-test_02,train_08,False,Cycle,69.81767509710694
-test_02,train_09,False,SoC (%),2.4253528026888898
-test_02,train_09,False,Cycle,59.52789122719078
-test_02,train_10,False,SoC (%),2.493624974139749
-test_02,train_10,False,Cycle,49.215890569292256
-test_02,train_11,False,SoC (%),3.0475201584353866
-test_02,train_11,False,Cycle,86.89240948150425
-test_02,train_12,False,SoC (%),3.03014937609584
-test_02,train_12,False,Cycle,77.67117049071048
-test_02,train_13,False,SoC (%),2.8845604206215687
-test_02,train_13,False,Cycle,66.6088386266743
-test_02,train_14,False,SoC (%),2.5463959725546226
-test_02,train_14,False,Cycle,58.45114606616724
-test_02,train_15,False,SoC (%),2.141775476798282
-test_02,train_15,False,Cycle,48.16785727666469
-test_02,train_16,False,SoC (%),2.963127352000733
-test_02,train_16,False,Cycle,83.39538089776487
-test_02,train_17,False,SoC (%),2.912490168117059
-test_02,train_17,False,Cycle,70.52236531289834
-test_02,val_01,False,SoC (%),2.752135950336444
-test_02,val_01,False,Cycle,61.58871318871225
-test_02,val_02,False,SoC (%),2.4684434234244925
-test_02,val_02,False,Cycle,55.738698063200786
-test_02,val_03,False,SoC (%),2.201879065355684
-test_02,val_03,False,Cycle,49.70845350201845
-test_02,val_04,False,SoC (%),2.7677213019734954
-test_02,val_04,False,Cycle,75.39567340766686
-test_02,val_05,False,SoC (%),2.7140723215622877
-test_02,val_05,False,Cycle,64.16301831807286
-test_02,test_01,False,SoC (%),2.573870162437117
-test_02,test_01,False,Cycle,58.118310678650836
-test_02,test_02,True,SoC (%),2.359761325001023
-test_02,test_02,True,Cycle,56.12039262542841
-test_02,test_03,False,SoC (%),2.5288958761655613
-test_02,test_03,False,Cycle,66.54873459633698
-test_03,train_01,False,SoC (%),3.0891818930488433
-test_03,train_01,False,Cycle,84.6723624473391
-test_03,train_02,False,SoC (%),2.9763768171805833
-test_03,train_02,False,Cycle,79.60625377007581
-test_03,train_03,False,SoC (%),2.6150677493883947
-test_03,train_03,False,Cycle,67.70949644449618
-test_03,train_04,False,SoC (%),2.3702778726244156
-test_03,train_04,False,Cycle,61.1231895681206
-test_03,train_05,False,SoC (%),1.9335678717851412
-test_03,train_05,False,Cycle,53.518063357593
-test_03,train_06,False,SoC (%),2.9283623357620514
-test_03,train_06,False,Cycle,82.31309216809044
-test_03,train_07,False,SoC (%),2.786903345335003
-test_03,train_07,False,Cycle,75.93633224409166
-test_03,train_08,False,SoC (%),2.527189105206908
-test_03,train_08,False,Cycle,67.98850888087038
-test_03,train_09,False,SoC (%),2.222003439291432
-test_03,train_09,False,Cycle,61.09591439566188
-test_03,train_10,False,SoC (%),1.7908103167494207
-test_03,train_10,False,Cycle,54.58607606406957
-test_03,train_11,False,SoC (%),2.777834043278963
-test_03,train_11,False,Cycle,80.59466900063798
-test_03,train_12,False,SoC (%),2.675274718610834
-test_03,train_12,False,Cycle,73.82396297333956
-test_03,train_13,False,SoC (%),2.4548005226704936
-test_03,train_13,False,Cycle,65.9148926490026
-test_03,train_14,False,SoC (%),2.158233883300025
-test_03,train_14,False,Cycle,58.87816998783361
-test_03,train_15,False,SoC (%),1.678572710704254
-test_03,train_15,False,Cycle,52.95041759056516
-test_03,train_16,False,SoC (%),2.637613405041035
-test_03,train_16,False,Cycle,76.80316242419072
-test_03,train_17,False,SoC (%),2.5110483738530505
-test_03,train_17,False,Cycle,68.1752132590386
-test_03,val_01,False,SoC (%),2.371333564523131
-test_03,val_01,False,Cycle,61.995501009813374
-test_03,val_02,False,SoC (%),2.1098597040789717
-test_03,val_02,False,Cycle,58.13265468883098
-test_03,val_03,False,SoC (%),1.6646818289110126
-test_03,val_03,False,Cycle,51.95563732501257
-test_03,val_04,False,SoC (%),2.5649167408771607
-test_03,val_04,False,Cycle,71.87542404702927
-test_03,val_05,False,SoC (%),2.351457951767546
-test_03,val_05,False,Cycle,63.809058313761454
-test_03,test_01,False,SoC (%),2.208158405396364
-test_03,test_01,False,Cycle,59.010937300000755
-test_03,test_02,False,SoC (%),2.0377595373758544
-test_03,test_02,False,Cycle,57.62005758930775
-test_03,test_03,True,SoC (%),2.3868556483432983
-test_03,test_03,True,Cycle,64.82312213540293
+train_01,train_01,True,SoC (%),0.6692881236558206
+train_01,train_01,True,Cycle,6.9815395496459685
+train_01,train_02,False,SoC (%),10.422311148558832
+train_01,train_02,False,Cycle,50.455362180357795
+train_01,train_03,False,SoC (%),14.428079720549443
+train_01,train_03,False,Cycle,64.98197703757431
+train_01,train_04,False,SoC (%),15.620557241742494
+train_01,train_04,False,Cycle,59.98958961903166
+train_01,train_05,False,SoC (%),17.360780077366297
+train_01,train_05,False,Cycle,61.6551187612745
+train_01,train_06,False,SoC (%),0.6276097411449181
+train_01,train_06,False,Cycle,4.520412282754178
+train_01,train_07,False,SoC (%),12.832894596342163
+train_01,train_07,False,Cycle,61.11186735459204
+train_01,train_08,False,SoC (%),15.037148780524387
+train_01,train_08,False,Cycle,66.21964369466299
+train_01,train_09,False,SoC (%),17.42996630760632
+train_01,train_09,False,Cycle,66.38469193361748
+train_01,train_10,False,SoC (%),17.697805198235073
+train_01,train_10,False,Cycle,66.70459124390327
+train_01,train_11,False,SoC (%),0.7975671562309116
+train_01,train_11,False,Cycle,3.8759068402084282
+train_01,train_12,False,SoC (%),13.290213483886518
+train_01,train_12,False,Cycle,61.19814212750713
+train_01,train_13,False,SoC (%),15.200706801039038
+train_01,train_13,False,Cycle,69.60969509645818
+train_01,train_14,False,SoC (%),16.499212129342542
+train_01,train_14,False,Cycle,68.11501100615811
+train_01,train_15,False,SoC (%),20.431171429801626
+train_01,train_15,False,Cycle,56.239715478381825
+train_01,train_16,False,SoC (%),0.9944522040200547
+train_01,train_16,False,Cycle,3.219042645613814
+train_01,train_17,False,SoC (%),14.110541691931042
+train_01,train_17,False,Cycle,67.88020198447389
+train_01,val_01,False,SoC (%),15.201692643488453
+train_01,val_01,False,Cycle,66.23122884856271
+train_01,val_02,False,SoC (%),16.1645955176841
+train_01,val_02,False,Cycle,60.750550814559894
+train_01,val_03,False,SoC (%),17.078494889673614
+train_01,val_03,False,Cycle,48.0355547812639
+train_01,val_04,False,SoC (%),2.849831628539295
+train_01,val_04,False,Cycle,11.288695487320881
+train_01,val_05,False,SoC (%),15.613917435994173
+train_01,val_05,False,Cycle,52.17071310118418
+train_01,test_01,False,SoC (%),14.589263469702942
+train_01,test_01,False,Cycle,27.35570549671766
+train_01,test_02,False,SoC (%),14.181710619284972
+train_01,test_02,False,Cycle,25.768620021496098
+train_01,test_03,False,SoC (%),14.44805341908533
+train_01,test_03,False,Cycle,34.376354027220984
+train_02,train_01,False,SoC (%),1.6154933044368005
+train_02,train_01,False,Cycle,33.516166892453086
+train_02,train_02,True,SoC (%),0.895101489088043
+train_02,train_02,True,Cycle,4.5791338919941
+train_02,train_03,False,SoC (%),1.988960779512752
+train_02,train_03,False,Cycle,31.66235928694004
+train_02,train_04,False,SoC (%),3.55467640364485
+train_02,train_04,False,Cycle,35.6440109757131
+train_02,train_05,False,SoC (%),4.630308935377488
+train_02,train_05,False,Cycle,29.512572696794656
+train_02,train_06,False,SoC (%),1.6934577418892556
+train_02,train_06,False,Cycle,30.397856666685197
+train_02,train_07,False,SoC (%),1.6575470682094389
+train_02,train_07,False,Cycle,7.746368487303756
+train_02,train_08,False,SoC (%),1.453054028562157
+train_02,train_08,False,Cycle,27.90252225167206
+train_02,train_09,False,SoC (%),2.5737187644052715
+train_02,train_09,False,Cycle,34.8376406149298
+train_02,train_10,False,SoC (%),3.4610179977576663
+train_02,train_10,False,Cycle,25.73972128930156
+train_02,train_11,False,SoC (%),1.8958983179178346
+train_02,train_11,False,Cycle,28.62450852787482
+train_02,train_12,False,SoC (%),1.8559218693273771
+train_02,train_12,False,Cycle,10.896192505732328
+train_02,train_13,False,SoC (%),2.7297109731576166
+train_02,train_13,False,Cycle,26.857813417294263
+train_02,train_14,False,SoC (%),3.160428604857623
+train_02,train_14,False,Cycle,33.34341761215231
+train_02,train_15,False,SoC (%),4.036457062393148
+train_02,train_15,False,Cycle,24.708969025364375
+train_02,train_16,False,SoC (%),2.1918316009805863
+train_02,train_16,False,Cycle,26.993124934296244
+train_02,train_17,False,SoC (%),2.979120021017895
+train_02,train_17,False,Cycle,19.16337675293864
+train_02,val_01,False,SoC (%),3.822280138202076
+train_02,val_01,False,Cycle,30.611831761343954
+train_02,val_02,False,SoC (%),3.821674705203004
+train_02,val_02,False,Cycle,34.12654042197968
+train_02,val_03,False,SoC (%),4.48595099041684
+train_02,val_03,False,Cycle,28.817786855180938
+train_02,val_04,False,SoC (%),2.2891385709632246
+train_02,val_04,False,Cycle,12.104294139075794
+train_02,val_05,False,SoC (%),3.9841124748470547
+train_02,val_05,False,Cycle,22.744761270249302
+train_02,test_01,False,SoC (%),3.826078275593251
+train_02,test_01,False,Cycle,26.049394267365585
+train_02,test_02,False,SoC (%),3.39128308703567
+train_02,test_02,False,Cycle,24.889743561726092
+train_02,test_03,False,SoC (%),3.7501435891783728
+train_02,test_03,False,Cycle,22.735071165030686
+train_03,train_01,False,SoC (%),3.1545098373140474
+train_03,train_01,False,Cycle,50.13586851617079
+train_03,train_02,False,SoC (%),2.2017292263478145
+train_03,train_02,False,Cycle,25.699507725568655
+train_03,train_03,True,SoC (%),0.6870278099724136
+train_03,train_03,True,Cycle,5.325025787242887
+train_03,train_04,False,SoC (%),2.616787672458873
+train_03,train_04,False,Cycle,22.846982193834165
+train_03,train_05,False,SoC (%),4.158415366501407
+train_03,train_05,False,Cycle,23.24596549185592
+train_03,train_06,False,SoC (%),2.8043643775666447
+train_03,train_06,False,Cycle,45.88855437606214
+train_03,train_07,False,SoC (%),2.3947421097040498
+train_03,train_07,False,Cycle,23.72283159776269
+train_03,train_08,False,SoC (%),0.7586536013852823
+train_03,train_08,False,Cycle,5.107735241892356
+train_03,train_09,False,SoC (%),1.5535440143668633
+train_03,train_09,False,Cycle,21.169176859261878
+train_03,train_10,False,SoC (%),3.326411121491615
+train_03,train_10,False,Cycle,23.715196669214645
+train_03,train_11,False,SoC (%),2.5051018810670738
+train_03,train_11,False,Cycle,41.54674249968553
+train_03,train_12,False,SoC (%),2.2932604198794184
+train_03,train_12,False,Cycle,19.21911710910011
+train_03,train_13,False,SoC (%),0.9543466141604551
+train_03,train_13,False,Cycle,7.529035562444719
+train_03,train_14,False,SoC (%),1.1267343889917258
+train_03,train_14,False,Cycle,20.418181197508897
+train_03,train_15,False,SoC (%),2.8380649941892804
+train_03,train_15,False,Cycle,23.529963755010073
+train_03,train_16,False,SoC (%),2.4554369170178205
+train_03,train_16,False,Cycle,37.33601790160279
+train_03,train_17,False,SoC (%),1.9411349427564675
+train_03,train_17,False,Cycle,10.603583265755958
+train_03,val_01,False,SoC (%),0.9811256435615188
+train_03,val_01,False,Cycle,14.33148581141916
+train_03,val_02,False,SoC (%),1.3573885509708017
+train_03,val_02,False,Cycle,22.32463539768955
+train_03,val_03,False,SoC (%),2.245687213268194
+train_03,val_03,False,Cycle,22.518091562111913
+train_03,val_04,False,SoC (%),2.143483194011945
+train_03,val_04,False,Cycle,22.39123953813845
+train_03,val_05,False,SoC (%),2.0539113725001203
+train_03,val_05,False,Cycle,9.205530211269988
+train_03,test_01,False,SoC (%),1.6878683573308162
+train_03,test_01,False,Cycle,17.383609380795313
+train_03,test_02,False,SoC (%),1.2790122174604377
+train_03,test_02,False,Cycle,16.979560488425946
+train_03,test_03,False,SoC (%),1.6540297942537108
+train_03,test_03,False,Cycle,15.131029877570542
+train_04,train_01,False,SoC (%),5.357524543171417
+train_04,train_01,False,Cycle,51.82103817006489
+train_04,train_02,False,SoC (%),3.839942795781833
+train_04,train_02,False,Cycle,31.118420245958024
+train_04,train_03,False,SoC (%),2.093809371935161
+train_04,train_03,False,Cycle,9.924462236838352
+train_04,train_04,True,SoC (%),0.6265587129363936
+train_04,train_04,True,Cycle,5.2741829990925115
+train_04,train_05,False,SoC (%),1.4639497297934485
+train_04,train_05,False,Cycle,11.335942290027557
+train_04,train_06,False,SoC (%),5.148664546192851
+train_04,train_06,False,Cycle,47.80760141005345
+train_04,train_07,False,SoC (%),4.251609106876802
+train_04,train_07,False,Cycle,28.965100398161315
+train_04,train_08,False,SoC (%),2.4859128185634645
+train_04,train_08,False,Cycle,10.58784905087737
+train_04,train_09,False,SoC (%),1.0361554382227163
+train_04,train_09,False,Cycle,4.561459724514765
+train_04,train_10,False,SoC (%),1.0161541016049447
+train_04,train_10,False,Cycle,10.614212547546408
+train_04,train_11,False,SoC (%),4.787740273474403
+train_04,train_11,False,Cycle,43.06337873553175
+train_04,train_12,False,SoC (%),3.995661148950752
+train_04,train_12,False,Cycle,25.64487912390535
+train_04,train_13,False,SoC (%),2.601290992723509
+train_04,train_13,False,Cycle,10.329903724447039
+train_04,train_14,False,SoC (%),1.5126226367275497
+train_04,train_14,False,Cycle,6.046478628594229
+train_04,train_15,False,SoC (%),1.4130377995994898
+train_04,train_15,False,Cycle,11.365415172765564
+train_04,train_16,False,SoC (%),4.724313526675059
+train_04,train_16,False,Cycle,39.86361255088152
+train_04,train_17,False,SoC (%),3.424372916503366
+train_04,train_17,False,Cycle,18.199960440945137
+train_04,val_01,False,SoC (%),2.498809220993468
+train_04,val_01,False,Cycle,8.12243625180963
+train_04,val_02,False,SoC (%),1.5249449657396994
+train_04,val_02,False,Cycle,9.576748715814622
+train_04,val_03,False,SoC (%),1.5537200239117515
+train_04,val_03,False,Cycle,13.384001058233968
+train_04,val_04,False,SoC (%),4.184077325888958
+train_04,val_04,False,Cycle,30.31701559316271
+train_04,val_05,False,SoC (%),2.9195729838273796
+train_04,val_05,False,Cycle,13.887170208812316
+train_04,test_01,False,SoC (%),2.918292193492923
+train_04,test_01,False,Cycle,8.51566280230806
+train_04,test_02,False,SoC (%),2.333340438440069
+train_04,test_02,False,Cycle,10.556030550315505
+train_04,test_03,False,SoC (%),2.6701808287511115
+train_04,test_03,False,Cycle,14.022226148309027
+train_05,train_01,False,SoC (%),7.7428816629323185
+train_05,train_01,False,Cycle,45.96277181544532
+train_05,train_02,False,SoC (%),6.583883756349906
+train_05,train_02,False,Cycle,29.01702183659992
+train_05,train_03,False,SoC (%),4.477814116131561
+train_05,train_03,False,Cycle,14.98243337911721
+train_05,train_04,False,SoC (%),1.29809150974539
+train_05,train_04,False,Cycle,5.148280440578775
+train_05,train_05,True,SoC (%),0.7603451865802322
+train_05,train_05,True,Cycle,2.9492015670898994
+train_05,train_06,False,SoC (%),8.003528206349024
+train_05,train_06,False,Cycle,41.80561329054527
+train_05,train_07,False,SoC (%),6.622827657291206
+train_05,train_07,False,Cycle,27.34577926343428
+train_05,train_08,False,SoC (%),4.602311296490495
+train_05,train_08,False,Cycle,14.046864821931102
+train_05,train_09,False,SoC (%),2.213032288564883
+train_05,train_09,False,Cycle,5.131874617586608
+train_05,train_10,False,SoC (%),0.6347781693684332
+train_05,train_10,False,Cycle,3.53847369675441
+train_05,train_11,False,SoC (%),7.75927752447596
+train_05,train_11,False,Cycle,36.190514837554396
+train_05,train_12,False,SoC (%),6.392338231135933
+train_05,train_12,False,Cycle,25.399202952052157
+train_05,train_13,False,SoC (%),4.523225560701309
+train_05,train_13,False,Cycle,12.498864326536566
+train_05,train_14,False,SoC (%),2.829392687218955
+train_05,train_14,False,Cycle,6.420805008386004
+train_05,train_15,False,SoC (%),1.4300781141820127
+train_05,train_15,False,Cycle,4.67297945046467
+train_05,train_16,False,SoC (%),7.639746011502157
+train_05,train_16,False,Cycle,32.766816247930734
+train_05,train_17,False,SoC (%),5.680487311044607
+train_05,train_17,False,Cycle,18.977644789422495
+train_05,val_01,False,SoC (%),4.444503428955418
+train_05,val_01,False,Cycle,11.489522492460532
+train_05,val_02,False,SoC (%),2.6606177488240763
+train_05,val_02,False,Cycle,6.975422786667946
+train_05,val_03,False,SoC (%),1.9790961700673182
+train_05,val_03,False,Cycle,6.613649595957064
+train_05,val_04,False,SoC (%),6.8166286442279915
+train_05,val_04,False,Cycle,24.46792562609143
+train_05,val_05,False,SoC (%),5.163647565530998
+train_05,val_05,False,Cycle,16.1091550536536
+train_05,test_01,False,SoC (%),4.187554165311955
+train_05,test_01,False,Cycle,8.860730051964063
+train_05,test_02,False,SoC (%),3.2869601874417853
+train_05,test_02,False,Cycle,8.372545213156227
+train_05,test_03,False,SoC (%),3.6156320380735503
+train_05,test_03,False,Cycle,11.05237661914885
+train_06,train_01,False,SoC (%),0.9746278770609804
+train_06,train_01,False,Cycle,8.209732512399714
+train_06,train_02,False,SoC (%),7.557193130158024
+train_06,train_02,False,Cycle,56.27178798825414
+train_06,train_03,False,SoC (%),11.66381869556779
+train_06,train_03,False,Cycle,75.30677762661996
+train_06,train_04,False,SoC (%),14.836873149277581
+train_06,train_04,False,Cycle,70.32364946133421
+train_06,train_05,False,SoC (%),16.969479322798794
+train_06,train_05,False,Cycle,70.18386472601169
+train_06,train_06,True,SoC (%),0.8481798426403457
+train_06,train_06,True,Cycle,5.188382949345119
+train_06,train_07,False,SoC (%),10.855767111357132
+train_06,train_07,False,Cycle,68.62485284477438
+train_06,train_08,False,SoC (%),12.762850901750474
+train_06,train_08,False,Cycle,76.00771492274076
+train_06,train_09,False,SoC (%),15.005168937192533
+train_06,train_09,False,Cycle,74.8749070459008
+train_06,train_10,False,SoC (%),16.511538584354906
+train_06,train_10,False,Cycle,67.11862488999647
+train_06,train_11,False,SoC (%),0.7847973473351575
+train_06,train_11,False,Cycle,4.3729281316531425
+train_06,train_12,False,SoC (%),11.311798378313803
+train_06,train_12,False,Cycle,71.61784018950249
+train_06,train_13,False,SoC (%),13.150647004494061
+train_06,train_13,False,Cycle,79.03430126199343
+train_06,train_14,False,SoC (%),14.449757337201763
+train_06,train_14,False,Cycle,72.00684500657965
+train_06,train_15,False,SoC (%),17.335363642150213
+train_06,train_15,False,Cycle,54.17004690920587
+train_06,train_16,False,SoC (%),0.8007081586887561
+train_06,train_16,False,Cycle,4.193947610153268
+train_06,train_17,False,SoC (%),12.450171261143318
+train_06,train_17,False,Cycle,76.46326134371772
+train_06,val_01,False,SoC (%),13.408364142091743
+train_06,val_01,False,Cycle,69.1982572335096
+train_06,val_02,False,SoC (%),13.665008531959755
+train_06,val_02,False,Cycle,55.47649342404674
+train_06,val_03,False,SoC (%),14.733339927655042
+train_06,val_03,False,Cycle,44.855449666916385
+train_06,val_04,False,SoC (%),1.6446608177660171
+train_06,val_04,False,Cycle,5.8557598438331455
+train_06,val_05,False,SoC (%),13.620620260057075
+train_06,val_05,False,Cycle,53.88127525229546
+train_06,test_01,False,SoC (%),13.106680527532722
+train_06,test_01,False,Cycle,31.504799292945947
+train_06,test_02,False,SoC (%),12.977431850324976
+train_06,test_02,False,Cycle,33.692494621189745
+train_06,test_03,False,SoC (%),13.129837152919592
+train_06,test_03,False,Cycle,32.20523119047865
+train_07,train_01,False,SoC (%),0.9850006620173429
+train_07,train_01,False,Cycle,36.59684619922005
+train_07,train_02,False,SoC (%),0.9120456195570634
+train_07,train_02,False,Cycle,4.381104661140208
+train_07,train_03,False,SoC (%),1.8855244499917434
+train_07,train_03,False,Cycle,32.07051822666133
+train_07,train_04,False,SoC (%),3.5915892924102284
+train_07,train_04,False,Cycle,29.580661458744114
+train_07,train_05,False,SoC (%),4.86090622748925
+train_07,train_05,False,Cycle,22.242193331137056
+train_07,train_06,False,SoC (%),1.0303799047865057
+train_07,train_06,False,Cycle,34.57532147843035
+train_07,train_07,True,SoC (%),0.8613693263584706
+train_07,train_07,True,Cycle,5.6996954487032845
+train_07,train_08,False,SoC (%),1.3598327945773496
+train_07,train_08,False,Cycle,26.868709617315858
+train_07,train_09,False,SoC (%),3.961641637437438
+train_07,train_09,False,Cycle,35.89205301805239
+train_07,train_10,False,SoC (%),4.869915976939945
+train_07,train_10,False,Cycle,25.497858164002867
+train_07,train_11,False,SoC (%),1.280609372610193
+train_07,train_11,False,Cycle,33.78696074494528
+train_07,train_12,False,SoC (%),1.0852582336113799
+train_07,train_12,False,Cycle,12.005145653360248
+train_07,train_13,False,SoC (%),2.7940404970146098
+train_07,train_13,False,Cycle,29.580181839748718
+train_07,train_14,False,SoC (%),3.860012775273636
+train_07,train_14,False,Cycle,36.88008859247612
+train_07,train_15,False,SoC (%),7.047972299946931
+train_07,train_15,False,Cycle,30.04834928379424
+train_07,train_16,False,SoC (%),1.5580497672340698
+train_07,train_16,False,Cycle,31.101901818928823
+train_07,train_17,False,SoC (%),2.459467218103294
+train_07,train_17,False,Cycle,23.832372300111903
+train_07,val_01,False,SoC (%),3.266654632454829
+train_07,val_01,False,Cycle,36.21088775355458
+train_07,val_02,False,SoC (%),3.9431608332640646
+train_07,val_02,False,Cycle,39.72307619126148
+train_07,val_03,False,SoC (%),5.481242730546184
+train_07,val_03,False,Cycle,33.58834586982742
+train_07,val_04,False,SoC (%),2.5091967397988086
+train_07,val_04,False,Cycle,18.974333469585343
+train_07,val_05,False,SoC (%),3.2936744488907093
+train_07,val_05,False,Cycle,30.131615780956903
+train_07,test_01,False,SoC (%),3.0987383742925867
+train_07,test_01,False,Cycle,33.348749015520106
+train_07,test_02,False,SoC (%),3.265810731897306
+train_07,test_02,False,Cycle,27.967867284683702
+train_07,test_03,False,SoC (%),2.830393445008431
+train_07,test_03,False,Cycle,21.405799804232295
+train_08,train_01,False,SoC (%),2.1808866661248194
+train_08,train_01,False,Cycle,46.447522556237026
+train_08,train_02,False,SoC (%),1.5286523871015818
+train_08,train_02,False,Cycle,20.8081944785944
+train_08,train_03,False,SoC (%),0.7700010106367092
+train_08,train_03,False,Cycle,6.942981368528902
+train_08,train_04,False,SoC (%),2.847885054328447
+train_08,train_04,False,Cycle,22.055841815925273
+train_08,train_05,False,SoC (%),4.459252002915075
+train_08,train_05,False,Cycle,28.10221499298074
+train_08,train_06,False,SoC (%),2.1080839952955146
+train_08,train_06,False,Cycle,42.80785443414641
+train_08,train_07,False,SoC (%),1.347942147492661
+train_08,train_07,False,Cycle,17.840140800231456
+train_08,train_08,True,SoC (%),0.48270230742105075
+train_08,train_08,True,Cycle,6.624842586408482
+train_08,train_09,False,SoC (%),1.6010626594895085
+train_08,train_09,False,Cycle,22.688657513627266
+train_08,train_10,False,SoC (%),3.6848765897895874
+train_08,train_10,False,Cycle,28.876208614098722
+train_08,train_11,False,SoC (%),2.152958348032412
+train_08,train_11,False,Cycle,38.03178244977213
+train_08,train_12,False,SoC (%),1.2373386566113957
+train_08,train_12,False,Cycle,13.990942631669059
+train_08,train_13,False,SoC (%),0.6257645827433068
+train_08,train_13,False,Cycle,11.713016319244176
+train_08,train_14,False,SoC (%),1.3336615188817105
+train_08,train_14,False,Cycle,23.825899403917553
+train_08,train_15,False,SoC (%),2.7514599237948643
+train_08,train_15,False,Cycle,28.092936883137444
+train_08,train_16,False,SoC (%),2.162247333264777
+train_08,train_16,False,Cycle,31.870153035768688
+train_08,train_17,False,SoC (%),1.2710874073245886
+train_08,train_17,False,Cycle,12.614267553061428
+train_08,val_01,False,SoC (%),0.8684301798700769
+train_08,val_01,False,Cycle,18.974098412482885
+train_08,val_02,False,SoC (%),1.609322414400899
+train_08,val_02,False,Cycle,25.884609179149827
+train_08,val_03,False,SoC (%),2.4200941769488984
+train_08,val_03,False,Cycle,28.927971435369667
+train_08,val_04,False,SoC (%),2.4318829940568634
+train_08,val_04,False,Cycle,20.916426751867174
+train_08,val_05,False,SoC (%),1.4728738592695156
+train_08,val_05,False,Cycle,14.595334014354988
+train_08,test_01,False,SoC (%),1.4206954840341912
+train_08,test_01,False,Cycle,20.889329588643626
+train_08,test_02,False,SoC (%),1.8795721636928844
+train_08,test_02,False,Cycle,23.078642280341306
+train_08,test_03,False,SoC (%),2.34541146617234
+train_08,test_03,False,Cycle,16.815666306980823
+train_09,train_01,False,SoC (%),2.728471200897645
+train_09,train_01,False,Cycle,50.826806371084686
+train_09,train_02,False,SoC (%),2.165045259631243
+train_09,train_02,False,Cycle,27.440107233051982
+train_09,train_03,False,SoC (%),1.0898523000799578
+train_09,train_03,False,Cycle,7.83565478710685
+train_09,train_04,False,SoC (%),1.6476921322406026
+train_09,train_04,False,Cycle,9.640857533208358
+train_09,train_05,False,SoC (%),2.7392484866389437
+train_09,train_05,False,Cycle,17.020158852741265
+train_09,train_06,False,SoC (%),2.5545768826917037
+train_09,train_06,False,Cycle,45.24896216435126
+train_09,train_07,False,SoC (%),2.33475859814278
+train_09,train_07,False,Cycle,25.317774570449263
+train_09,train_08,False,SoC (%),1.1100258856001968
+train_09,train_08,False,Cycle,8.545521958201657
+train_09,train_09,True,SoC (%),0.6201784108033623
+train_09,train_09,True,Cycle,7.6994013778786154
+train_09,train_10,False,SoC (%),2.238256211671189
+train_09,train_10,False,Cycle,16.701996050466203
+train_09,train_11,False,SoC (%),2.34902738695866
+train_09,train_11,False,Cycle,39.733800884319045
+train_09,train_12,False,SoC (%),2.0003720185413734
+train_09,train_12,False,Cycle,22.21896628145961
+train_09,train_13,False,SoC (%),1.213188225685812
+train_09,train_13,False,Cycle,6.7400227850325365
+train_09,train_14,False,SoC (%),0.5416328413824801
+train_09,train_14,False,Cycle,9.208502265547178
+train_09,train_15,False,SoC (%),1.2743218580221745
+train_09,train_15,False,Cycle,16.940597311437212
+train_09,train_16,False,SoC (%),2.1410201917216862
+train_09,train_16,False,Cycle,33.850788300862675
+train_09,train_17,False,SoC (%),1.6583882402474996
+train_09,train_17,False,Cycle,13.013593539897668
+train_09,val_01,False,SoC (%),1.1342201279868747
+train_09,val_01,False,Cycle,8.495856119379994
+train_09,val_02,False,SoC (%),0.6908896486774121
+train_09,val_02,False,Cycle,13.404387361263016
+train_09,val_03,False,SoC (%),1.348873194436058
+train_09,val_03,False,Cycle,19.059560764865118
+train_09,val_04,False,SoC (%),1.8476814634028458
+train_09,val_04,False,Cycle,25.58123292398036
+train_09,val_05,False,SoC (%),1.4303860322834585
+train_09,val_05,False,Cycle,14.048186274674194
+train_09,test_01,False,SoC (%),1.5124662729056284
+train_09,test_01,False,Cycle,13.604557426647862
+train_09,test_02,False,SoC (%),1.1286850095831078
+train_09,test_02,False,Cycle,15.787323995103321
+train_09,test_03,False,SoC (%),1.1327840333006314
+train_09,test_03,False,Cycle,15.865451460502918
+train_10,train_01,False,SoC (%),5.4454695189663065
+train_10,train_01,False,Cycle,46.28938449121243
+train_10,train_02,False,SoC (%),5.490207439969708
+train_10,train_02,False,Cycle,30.441043604273847
+train_10,train_03,False,SoC (%),3.7984641188277823
+train_10,train_03,False,Cycle,14.996256041020564
+train_10,train_04,False,SoC (%),0.9039070201094286
+train_10,train_04,False,Cycle,4.770498294908444
+train_10,train_05,False,SoC (%),0.9998613417147676
+train_10,train_05,False,Cycle,3.6090844410707925
+train_10,train_06,False,SoC (%),5.792226933643942
+train_10,train_06,False,Cycle,42.75117168852618
+train_10,train_07,False,SoC (%),5.306906524008288
+train_10,train_07,False,Cycle,27.51847380991134
+train_10,train_08,False,SoC (%),3.840593886503577
+train_10,train_08,False,Cycle,15.105031349556876
+train_10,train_09,False,SoC (%),1.8273479026723407
+train_10,train_09,False,Cycle,5.281689412163503
+train_10,train_10,True,SoC (%),0.6181701807422716
+train_10,train_10,True,Cycle,4.508127121115386
+train_10,train_11,False,SoC (%),5.590840005443879
+train_10,train_11,False,Cycle,36.88366792063105
+train_10,train_12,False,SoC (%),4.952573104196683
+train_10,train_12,False,Cycle,24.910732070686237
+train_10,train_13,False,SoC (%),3.5555447114484298
+train_10,train_13,False,Cycle,12.864872446454303
+train_10,train_14,False,SoC (%),2.1973471527380646
+train_10,train_14,False,Cycle,5.99312688174358
+train_10,train_15,False,SoC (%),0.7253645987652213
+train_10,train_15,False,Cycle,5.48107052256465
+train_10,train_16,False,SoC (%),5.554060120384652
+train_10,train_16,False,Cycle,32.32803027234044
+train_10,train_17,False,SoC (%),4.216114889271168
+train_10,train_17,False,Cycle,18.165961881857765
+train_10,val_01,False,SoC (%),3.4665031218318902
+train_10,val_01,False,Cycle,11.240432417880466
+train_10,val_02,False,SoC (%),2.1300485798873283
+train_10,val_02,False,Cycle,6.811160251561576
+train_10,val_03,False,SoC (%),1.2861579946036288
+train_10,val_03,False,Cycle,7.198886607382616
+train_10,val_04,False,SoC (%),5.171244729923152
+train_10,val_04,False,Cycle,26.958441705179986
+train_10,val_05,False,SoC (%),3.757370259893094
+train_10,val_05,False,Cycle,15.170050121550872
+train_10,test_01,False,SoC (%),3.2853231141181602
+train_10,test_01,False,Cycle,10.819232790860186
+train_10,test_02,False,SoC (%),2.580369966923098
+train_10,test_02,False,Cycle,8.359156635225819
+train_10,test_03,False,SoC (%),2.600758515972074
+train_10,test_03,False,Cycle,11.282569123930731
+train_11,train_01,False,SoC (%),0.9542124837391591
+train_11,train_01,False,Cycle,3.5957978723002983
+train_11,train_02,False,SoC (%),5.96150743206802
+train_11,train_02,False,Cycle,62.13822414059769
+train_11,train_03,False,SoC (%),10.030013739571672
+train_11,train_03,False,Cycle,79.19887625035338
+train_11,train_04,False,SoC (%),13.097922344284962
+train_11,train_04,False,Cycle,79.47182319607012
+train_11,train_05,False,SoC (%),15.502934513436895
+train_11,train_05,False,Cycle,76.24970099833737
+train_11,train_06,False,SoC (%),0.9052043436533629
+train_11,train_06,False,Cycle,2.2922572606897202
+train_11,train_07,False,SoC (%),9.380739342702425
+train_11,train_07,False,Cycle,71.26406905704398
+train_11,train_08,False,SoC (%),11.35518473681191
+train_11,train_08,False,Cycle,80.89083161705764
+train_11,train_09,False,SoC (%),12.678257572093257
+train_11,train_09,False,Cycle,81.72122968659018
+train_11,train_10,False,SoC (%),14.519854663435964
+train_11,train_10,False,Cycle,76.46638392557229
+train_11,train_11,True,SoC (%),0.8855508651193877
+train_11,train_11,True,Cycle,2.8451966306661856
+train_11,train_12,False,SoC (%),9.915551405515233
+train_11,train_12,False,Cycle,74.60361022361002
+train_11,train_13,False,SoC (%),12.059071739672554
+train_11,train_13,False,Cycle,84.25845182804113
+train_11,train_14,False,SoC (%),12.90734041183447
+train_11,train_14,False,Cycle,77.77780087210988
+train_11,train_15,False,SoC (%),15.238082118198399
+train_11,train_15,False,Cycle,64.75966895730977
+train_11,train_16,False,SoC (%),0.6888592666322402
+train_11,train_16,False,Cycle,2.5850602300980228
+train_11,train_17,False,SoC (%),11.758701459009725
+train_11,train_17,False,Cycle,80.14310849100679
+train_11,val_01,False,SoC (%),12.675519099155265
+train_11,val_01,False,Cycle,75.97679912865925
+train_11,val_02,False,SoC (%),12.718866607166165
+train_11,val_02,False,Cycle,63.849438220890114
+train_11,val_03,False,SoC (%),13.978152886025075
+train_11,val_03,False,Cycle,51.41058477009431
+train_11,val_04,False,SoC (%),0.8572913245840068
+train_11,val_04,False,Cycle,4.986133916626985
+train_11,val_05,False,SoC (%),13.548303236078512
+train_11,val_05,False,Cycle,60.41232173574285
+train_11,test_01,False,SoC (%),11.493546251744165
+train_11,test_01,False,Cycle,37.518009299763555
+train_11,test_02,False,SoC (%),10.840501069899773
+train_11,test_02,False,Cycle,34.87846634836814
+train_11,test_03,False,SoC (%),11.427814740806724
+train_11,test_03,False,Cycle,33.48837356548017
+train_12,train_01,False,SoC (%),1.1581847330035067
+train_12,train_01,False,Cycle,40.184919947111446
+train_12,train_02,False,SoC (%),0.6935055833277954
+train_12,train_02,False,Cycle,7.111596715193403
+train_12,train_03,False,SoC (%),1.2034732622082882
+train_12,train_03,False,Cycle,25.595539660847287
+train_12,train_04,False,SoC (%),2.976453736175979
+train_12,train_04,False,Cycle,25.166460027029196
+train_12,train_05,False,SoC (%),5.318012127781882
+train_12,train_05,False,Cycle,26.831358391596478
+train_12,train_06,False,SoC (%),1.062736309682778
+train_12,train_06,False,Cycle,38.71980895102255
+train_12,train_07,False,SoC (%),0.5776755904169281
+train_12,train_07,False,Cycle,2.5418272602544176
+train_12,train_08,False,SoC (%),0.9240703872982158
+train_12,train_08,False,Cycle,23.294383716960816
+train_12,train_09,False,SoC (%),2.9695851495039216
+train_12,train_09,False,Cycle,31.84886712440025
+train_12,train_10,False,SoC (%),5.734203051369861
+train_12,train_10,False,Cycle,30.60979800391955
+train_12,train_11,False,SoC (%),1.1540463099754077
+train_12,train_11,False,Cycle,38.11274593811138
+train_12,train_12,True,SoC (%),0.6821313159210144
+train_12,train_12,True,Cycle,6.745191937610546
+train_12,train_13,False,SoC (%),1.8091173717919131
+train_12,train_13,False,Cycle,28.888445984044488
+train_12,train_14,False,SoC (%),3.2801924174621764
+train_12,train_14,False,Cycle,32.938233901346486
+train_12,train_15,False,SoC (%),5.132251428128291
+train_12,train_15,False,Cycle,32.439540933359375
+train_12,train_16,False,SoC (%),1.4586867880166103
+train_12,train_16,False,Cycle,36.4343894404366
+train_12,train_17,False,SoC (%),1.335633334785755
+train_12,train_17,False,Cycle,24.71883327670413
+train_12,val_01,False,SoC (%),2.3426761211704146
+train_12,val_01,False,Cycle,34.76397764715768
+train_12,val_02,False,SoC (%),3.081229372270524
+train_12,val_02,False,Cycle,38.58415646639551
+train_12,val_03,False,SoC (%),4.339553643332554
+train_12,val_03,False,Cycle,35.207892824607
+train_12,val_04,False,SoC (%),2.199456647062561
+train_12,val_04,False,Cycle,27.352860810457912
+train_12,val_05,False,SoC (%),2.4351533147651825
+train_12,val_05,False,Cycle,31.710413097995048
+train_12,test_01,False,SoC (%),2.6472726920278697
+train_12,test_01,False,Cycle,34.69224788109889
+train_12,test_02,False,SoC (%),2.235065378528332
+train_12,test_02,False,Cycle,34.62608687042959
+train_12,test_03,False,SoC (%),2.9348628455199983
+train_12,test_03,False,Cycle,23.4249103847347
+train_13,train_01,False,SoC (%),1.5491845299002123
+train_13,train_01,False,Cycle,50.02522093602678
+train_13,train_02,False,SoC (%),1.337342075065936
+train_13,train_02,False,Cycle,21.77861650965521
+train_13,train_03,False,SoC (%),0.6539740618994097
+train_13,train_03,False,Cycle,5.494427162869062
+train_13,train_04,False,SoC (%),2.2040095058306806
+train_13,train_04,False,Cycle,16.820013170873274
+train_13,train_05,False,SoC (%),4.029020155913583
+train_13,train_05,False,Cycle,22.864366857252236
+train_13,train_06,False,SoC (%),1.4624757260858763
+train_13,train_06,False,Cycle,45.790531567354776
+train_13,train_07,False,SoC (%),1.0074879262066998
+train_13,train_07,False,Cycle,18.410670056778418
+train_13,train_08,False,SoC (%),0.4271805419426494
+train_13,train_08,False,Cycle,5.1988355223546225
+train_13,train_09,False,SoC (%),1.2580972072130465
+train_13,train_09,False,Cycle,19.561866930190174
+train_13,train_10,False,SoC (%),3.1964839975590995
+train_13,train_10,False,Cycle,25.11847079882627
+train_13,train_11,False,SoC (%),1.5018816589598858
+train_13,train_11,False,Cycle,41.280646538106815
+train_13,train_12,False,SoC (%),0.6954626788073007
+train_13,train_12,False,Cycle,13.020164811629813
+train_13,train_13,True,SoC (%),0.399558563316643
+train_13,train_13,True,Cycle,9.757739357070797
+train_13,train_14,False,SoC (%),0.978493673266066
+train_13,train_14,False,Cycle,19.909268036208967
+train_13,train_15,False,SoC (%),2.042942386693845
+train_13,train_15,False,Cycle,25.985187801158474
+train_13,train_16,False,SoC (%),1.569068859407451
+train_13,train_16,False,Cycle,36.69892099382274
+train_13,train_17,False,SoC (%),0.634388281966481
+train_13,train_17,False,Cycle,9.06388255613563
+train_13,val_01,False,SoC (%),0.5273238032527888
+train_13,val_01,False,Cycle,14.790077188607615
+train_13,val_02,False,SoC (%),1.0886631213133704
+train_13,val_02,False,Cycle,22.457128161019106
+train_13,val_03,False,SoC (%),1.9874941380586415
+train_13,val_03,False,Cycle,26.41181713058704
+train_13,val_04,False,SoC (%),2.195447774812652
+train_13,val_04,False,Cycle,26.039293256858272
+train_13,val_05,False,SoC (%),1.0036957874119545
+train_13,val_05,False,Cycle,13.334669264031014
+train_13,test_01,False,SoC (%),1.1429939992850633
+train_13,test_01,False,Cycle,18.856758063757667
+train_13,test_02,False,SoC (%),1.5168924519041775
+train_13,test_02,False,Cycle,18.455905573144854
+train_13,test_03,False,SoC (%),1.9231068141265415
+train_13,test_03,False,Cycle,14.64499874396569
+train_14,train_01,False,SoC (%),1.5659320930148142
+train_14,train_01,False,Cycle,48.21966427513087
+train_14,train_02,False,SoC (%),1.3628678140918609
+train_14,train_02,False,Cycle,25.812543169174738
+train_14,train_03,False,SoC (%),0.8595326895590168
+train_14,train_03,False,Cycle,6.627958952856783
+train_14,train_04,False,SoC (%),1.605120981694291
+train_14,train_04,False,Cycle,7.2382096659557575
+train_14,train_05,False,SoC (%),3.0135389174744307
+train_14,train_05,False,Cycle,15.232021336424905
+train_14,train_06,False,SoC (%),1.5468108308706092
+train_14,train_06,False,Cycle,44.27962486511464
+train_14,train_07,False,SoC (%),1.1854769826279168
+train_14,train_07,False,Cycle,22.590895943225938
+train_14,train_08,False,SoC (%),0.6185434899975752
+train_14,train_08,False,Cycle,7.45444917654617
+train_14,train_09,False,SoC (%),0.6415681328969494
+train_14,train_09,False,Cycle,5.8691281882256465
+train_14,train_10,False,SoC (%),2.357911906114829
+train_14,train_10,False,Cycle,14.847034349195146
+train_14,train_11,False,SoC (%),1.4126035727820077
+train_14,train_11,False,Cycle,37.06812956985435
+train_14,train_12,False,SoC (%),1.0418762611023242
+train_14,train_12,False,Cycle,18.961424721017927
+train_14,train_13,False,SoC (%),0.4750291984830096
+train_14,train_13,False,Cycle,4.426614324733368
+train_14,train_14,True,SoC (%),0.4020774259337731
+train_14,train_14,True,Cycle,7.491345472776238
+train_14,train_15,False,SoC (%),1.3077560898641216
+train_14,train_15,False,Cycle,14.13592658301156
+train_14,train_16,False,SoC (%),1.4434245404460977
+train_14,train_16,False,Cycle,30.563979769311175
+train_14,train_17,False,SoC (%),0.6539150487330307
+train_14,train_17,False,Cycle,8.875011812460004
+train_14,val_01,False,SoC (%),0.39241993537969344
+train_14,val_01,False,Cycle,7.089586431693359
+train_14,val_02,False,SoC (%),0.5909519938705795
+train_14,val_02,False,Cycle,12.020659823733032
+train_14,val_03,False,SoC (%),1.242006756900506
+train_14,val_03,False,Cycle,16.639074547786386
+train_14,val_04,False,SoC (%),1.6002630512141094
+train_14,val_04,False,Cycle,23.27130178267621
+train_14,val_05,False,SoC (%),0.5837281698118018
+train_14,val_05,False,Cycle,10.831944807476336
+train_14,test_01,False,SoC (%),0.8289894695082997
+train_14,test_01,False,Cycle,11.518618205222577
+train_14,test_02,False,SoC (%),0.8700944173293483
+train_14,test_02,False,Cycle,11.877559446475452
+train_14,test_03,False,SoC (%),1.304370224942165
+train_14,test_03,False,Cycle,11.560309008465847
+train_15,train_01,False,SoC (%),3.038587262917904
+train_15,train_01,False,Cycle,44.273460119200315
+train_15,train_02,False,SoC (%),3.179947373257548
+train_15,train_02,False,Cycle,28.80506104992506
+train_15,train_03,False,SoC (%),1.9821374757659995
+train_15,train_03,False,Cycle,13.647246691876484
+train_15,train_04,False,SoC (%),0.7253537618235476
+train_15,train_04,False,Cycle,5.692993423947834
+train_15,train_05,False,SoC (%),1.9784932219513052
+train_15,train_05,False,Cycle,4.741769176369564
+train_15,train_06,False,SoC (%),3.3091345911740433
+train_15,train_06,False,Cycle,40.544775866673334
+train_15,train_07,False,SoC (%),3.0234365926508944
+train_15,train_07,False,Cycle,26.096443630520906
+train_15,train_08,False,SoC (%),1.901109141984866
+train_15,train_08,False,Cycle,13.759915197021513
+train_15,train_09,False,SoC (%),0.7022249618020248
+train_15,train_09,False,Cycle,4.5683946070750725
+train_15,train_10,False,SoC (%),1.6669727059666295
+train_15,train_10,False,Cycle,5.722163511217359
+train_15,train_11,False,SoC (%),3.4385496502639814
+train_15,train_11,False,Cycle,34.547223022821065
+train_15,train_12,False,SoC (%),2.794643935976695
+train_15,train_12,False,Cycle,22.52211229885701
+train_15,train_13,False,SoC (%),1.6839036428718392
+train_15,train_13,False,Cycle,10.762498447805864
+train_15,train_14,False,SoC (%),0.828164182106598
+train_15,train_14,False,Cycle,4.738259269521435
+train_15,train_15,True,SoC (%),0.8682055248953805
+train_15,train_15,True,Cycle,6.745899824572331
+train_15,train_16,False,SoC (%),3.4535948744706624
+train_15,train_16,False,Cycle,29.368040538551853
+train_15,train_17,False,SoC (%),2.1286504652773672
+train_15,train_17,False,Cycle,14.22337082764353
+train_15,val_01,False,SoC (%),1.5491537024180433
+train_15,val_01,False,Cycle,8.606455582717413
+train_15,val_02,False,SoC (%),0.6891517922991348
+train_15,val_02,False,Cycle,5.8143995472081
+train_15,val_03,False,SoC (%),0.8609453806892173
+train_15,val_03,False,Cycle,9.047880332939267
+train_15,val_04,False,SoC (%),2.7428640247670955
+train_15,val_04,False,Cycle,26.418812866755676
+train_15,val_05,False,SoC (%),1.673978275879972
+train_15,val_05,False,Cycle,12.351175353893973
+train_15,test_01,False,SoC (%),1.656105620746947
+train_15,test_01,False,Cycle,11.061162698308562
+train_15,test_02,False,SoC (%),1.2974467229936697
+train_15,test_02,False,Cycle,8.21125861456542
+train_15,test_03,False,SoC (%),1.5573639850068473
+train_15,test_03,False,Cycle,8.689907145991908
+train_16,train_01,False,SoC (%),1.9485326815866768
+train_16,train_01,False,Cycle,2.509673223376343
+train_16,train_02,False,SoC (%),4.271399347153041
+train_16,train_02,False,Cycle,59.483514182736485
+train_16,train_03,False,SoC (%),8.136465278036471
+train_16,train_03,False,Cycle,80.20320879210033
+train_16,train_04,False,SoC (%),10.592212280399522
+train_16,train_04,False,Cycle,82.54205606873654
+train_16,train_05,False,SoC (%),13.573870583027057
+train_16,train_05,False,Cycle,81.78104886963983
+train_16,train_06,False,SoC (%),0.9934431529382369
+train_16,train_06,False,Cycle,2.7105383815482487
+train_16,train_07,False,SoC (%),7.939159605488933
+train_16,train_07,False,Cycle,70.57937278959005
+train_16,train_08,False,SoC (%),9.27094073035791
+train_16,train_08,False,Cycle,84.41388299758157
+train_16,train_09,False,SoC (%),10.566521839156536
+train_16,train_09,False,Cycle,86.71929024109876
+train_16,train_10,False,SoC (%),12.661765742544297
+train_16,train_10,False,Cycle,81.61103463583245
+train_16,train_11,False,SoC (%),0.8104618276044864
+train_16,train_11,False,Cycle,2.086390957151998
+train_16,train_12,False,SoC (%),8.598776942644394
+train_16,train_12,False,Cycle,75.9790382048577
+train_16,train_13,False,SoC (%),10.246670703074685
+train_16,train_13,False,Cycle,86.94016388209663
+train_16,train_14,False,SoC (%),10.993498011573998
+train_16,train_14,False,Cycle,86.49596142857014
+train_16,train_15,False,SoC (%),12.505303587458062
+train_16,train_15,False,Cycle,76.39912053132501
+train_16,train_16,True,SoC (%),0.7077793391731467
+train_16,train_16,True,Cycle,1.3722565558621271
+train_16,train_17,False,SoC (%),10.494725295877483
+train_16,train_17,False,Cycle,85.83172089501423
+train_16,val_01,False,SoC (%),11.472351848977038
+train_16,val_01,False,Cycle,82.76293948226547
+train_16,val_02,False,SoC (%),11.023967515239239
+train_16,val_02,False,Cycle,75.41042723304906
+train_16,val_03,False,SoC (%),12.247474073119031
+train_16,val_03,False,Cycle,65.88299466773796
+train_16,val_04,False,SoC (%),0.5613063804089627
+train_16,val_04,False,Cycle,5.68902734452914
+train_16,val_05,False,SoC (%),12.232492144253804
+train_16,val_05,False,Cycle,75.7223099314697
+train_16,test_01,False,SoC (%),9.955626805232049
+train_16,test_01,False,Cycle,44.93414397736655
+train_16,test_02,False,SoC (%),9.5210140602027
+train_16,test_02,False,Cycle,51.4430740564237
+train_16,test_03,False,SoC (%),9.112651824980748
+train_16,test_03,False,Cycle,36.15054642856857
+train_17,train_01,False,SoC (%),1.677715411894917
+train_17,train_01,False,Cycle,49.811668412496154
+train_17,train_02,False,SoC (%),1.196424592445139
+train_17,train_02,False,Cycle,16.496034756396558
+train_17,train_03,False,SoC (%),0.7708619029045526
+train_17,train_03,False,Cycle,8.845127029968301
+train_17,train_04,False,SoC (%),2.6004653226730494
+train_17,train_04,False,Cycle,12.074609473541221
+train_17,train_05,False,SoC (%),4.714843153012362
+train_17,train_05,False,Cycle,16.18996461028528
+train_17,train_06,False,SoC (%),1.460485046981824
+train_17,train_06,False,Cycle,47.986885740611136
+train_17,train_07,False,SoC (%),1.037486676473733
+train_17,train_07,False,Cycle,12.181745903755846
+train_17,train_08,False,SoC (%),0.8088037544229565
+train_17,train_08,False,Cycle,7.480955780553725
+train_17,train_09,False,SoC (%),1.8827014020192923
+train_17,train_09,False,Cycle,18.04345159645713
+train_17,train_10,False,SoC (%),4.369496093428693
+train_17,train_10,False,Cycle,19.60233075486545
+train_17,train_11,False,SoC (%),1.4134447994871344
+train_17,train_11,False,Cycle,48.486512319990936
+train_17,train_12,False,SoC (%),0.8097312642954355
+train_17,train_12,False,Cycle,7.07602183345777
+train_17,train_13,False,SoC (%),0.7443531661183086
+train_17,train_13,False,Cycle,13.464804131718818
+train_17,train_14,False,SoC (%),1.9915917962495107
+train_17,train_14,False,Cycle,20.2365206884529
+train_17,train_15,False,SoC (%),3.5382122786965104
+train_17,train_15,False,Cycle,20.45731913259723
+train_17,train_16,False,SoC (%),1.6155343101060298
+train_17,train_16,False,Cycle,46.62081534990951
+train_17,train_17,True,SoC (%),0.45458293179018594
+train_17,train_17,True,Cycle,9.926017178489086
+train_17,val_01,False,SoC (%),1.0232223837393513
+train_17,val_01,False,Cycle,21.019487845383285
+train_17,val_02,False,SoC (%),1.9256324381515908
+train_17,val_02,False,Cycle,24.043197426879924
+train_17,val_03,False,SoC (%),3.1849984660528023
+train_17,val_03,False,Cycle,23.273615921857917
+train_17,val_04,False,SoC (%),2.0819340964464392
+train_17,val_04,False,Cycle,42.64619081857425
+train_17,val_05,False,SoC (%),1.1047919724946151
+train_17,val_05,False,Cycle,17.70716011794861
+train_17,test_01,False,SoC (%),1.378484975377526
+train_17,test_01,False,Cycle,21.1073922978188
+train_17,test_02,False,SoC (%),1.6502825029367756
+train_17,test_02,False,Cycle,22.214063569004566
+train_17,test_03,False,SoC (%),1.771294061374474
+train_17,test_03,False,Cycle,11.790743856718748
+val_01,train_01,False,SoC (%),2.0026913772012214
+val_01,train_01,False,Cycle,60.86313861504522
+val_01,train_02,False,SoC (%),1.578077963208007
+val_01,train_02,False,Cycle,33.417749434134926
+val_01,train_03,False,SoC (%),1.1826103613007808
+val_01,train_03,False,Cycle,11.898410489773534
+val_01,train_04,False,SoC (%),2.0217328372340044
+val_01,train_04,False,Cycle,13.714666102382948
+val_01,train_05,False,SoC (%),3.5896146675243097
+val_01,train_05,False,Cycle,11.743276493149438
+val_01,train_06,False,SoC (%),1.8758808301850498
+val_01,train_06,False,Cycle,57.89155808568048
+val_01,train_07,False,SoC (%),1.4710630405604894
+val_01,train_07,False,Cycle,30.038035955009207
+val_01,train_08,False,SoC (%),0.8913419242884119
+val_01,train_08,False,Cycle,12.128840155333831
+val_01,train_09,False,SoC (%),1.1180396354926216
+val_01,train_09,False,Cycle,9.949003835376866
+val_01,train_10,False,SoC (%),2.8162077730002024
+val_01,train_10,False,Cycle,12.72650002355216
+val_01,train_11,False,SoC (%),1.8559510091339861
+val_01,train_11,False,Cycle,52.948916636889386
+val_01,train_12,False,SoC (%),1.2340856529683106
+val_01,train_12,False,Cycle,23.988211257675765
+val_01,train_13,False,SoC (%),0.7251429337261287
+val_01,train_13,False,Cycle,7.75030173025309
+val_01,train_14,False,SoC (%),0.8549367992763331
+val_01,train_14,False,Cycle,8.080143280883915
+val_01,train_15,False,SoC (%),1.5401137861878174
+val_01,train_15,False,Cycle,10.607955278138341
+val_01,train_16,False,SoC (%),1.9002607751925182
+val_01,train_16,False,Cycle,48.81154226646028
+val_01,train_17,False,SoC (%),0.695273974453586
+val_01,train_17,False,Cycle,11.330021302784449
+val_01,val_01,True,SoC (%),0.4718833745759297
+val_01,val_01,True,Cycle,5.300439801141541
+val_01,val_02,False,SoC (%),0.8229365096404336
+val_01,val_02,False,Cycle,8.222221348120446
+val_01,val_03,False,SoC (%),1.384760982001399
+val_01,val_03,False,Cycle,9.405220638535106
+val_01,val_04,False,SoC (%),2.4793249406592417
+val_01,val_04,False,Cycle,42.47624197084069
+val_01,val_05,False,SoC (%),0.8462787191666508
+val_01,val_05,False,Cycle,6.586828530641591
+val_01,test_01,False,SoC (%),0.7153123488602043
+val_01,test_01,False,Cycle,4.938088711519102
+val_01,test_02,False,SoC (%),1.1842647878351684
+val_01,test_02,False,Cycle,5.291675026482044
+val_01,test_03,False,SoC (%),1.1901183384254586
+val_01,test_03,False,Cycle,8.777475985613908
+val_02,train_01,False,SoC (%),2.238265182927256
+val_02,train_01,False,Cycle,58.137481649827
+val_02,train_02,False,SoC (%),1.8511076889602953
+val_02,train_02,False,Cycle,34.953210089228776
+val_02,train_03,False,SoC (%),1.5977576910554754
+val_02,train_03,False,Cycle,18.66510436714966
+val_02,train_04,False,SoC (%),1.796071065299385
+val_02,train_04,False,Cycle,13.506523640576829
+val_02,train_05,False,SoC (%),3.003749548128124
+val_02,train_05,False,Cycle,12.75443422031734
+val_02,train_06,False,SoC (%),2.0777561930369473
+val_02,train_06,False,Cycle,53.066583017140324
+val_02,train_07,False,SoC (%),1.721492936516018
+val_02,train_07,False,Cycle,32.29269922577333
+val_02,train_08,False,SoC (%),1.3794382322805383
+val_02,train_08,False,Cycle,18.659380800333576
+val_02,train_09,False,SoC (%),1.0651049513057977
+val_02,train_09,False,Cycle,11.072734809417293
+val_02,train_10,False,SoC (%),2.4318109448740937
+val_02,train_10,False,Cycle,12.890006688760447
+val_02,train_11,False,SoC (%),2.08263468960518
+val_02,train_11,False,Cycle,47.63493321689892
+val_02,train_12,False,SoC (%),1.6104608359721657
+val_02,train_12,False,Cycle,27.632458508609552
+val_02,train_13,False,SoC (%),1.2164880338386714
+val_02,train_13,False,Cycle,14.723705886839246
+val_02,train_14,False,SoC (%),0.8790259228484543
+val_02,train_14,False,Cycle,9.245786575246589
+val_02,train_15,False,SoC (%),1.2205146526055433
+val_02,train_15,False,Cycle,10.860722214940749
+val_02,train_16,False,SoC (%),1.9354345732035745
+val_02,train_16,False,Cycle,41.01424718820548
+val_02,train_17,False,SoC (%),1.2643243766460739
+val_02,train_17,False,Cycle,15.313428987257396
+val_02,val_01,False,SoC (%),1.0051714747774616
+val_02,val_01,False,Cycle,9.396544658125606
+val_02,val_02,True,SoC (%),0.6581990814912981
+val_02,val_02,True,Cycle,8.221949075077761
+val_02,val_03,False,SoC (%),1.0363625810766706
+val_02,val_03,False,Cycle,8.609320464266416
+val_02,val_04,False,SoC (%),2.0513738439926
+val_02,val_04,False,Cycle,34.83265014093841
+val_02,val_05,False,SoC (%),0.8355438487294363
+val_02,val_05,False,Cycle,11.030386856051617
+val_02,test_01,False,SoC (%),0.9621752397981667
+val_02,test_01,False,Cycle,7.490114726715838
+val_02,test_02,False,SoC (%),0.9118288681009524
+val_02,test_02,False,Cycle,6.814250149941389
+val_02,test_03,False,SoC (%),1.3783909028901389
+val_02,test_03,False,Cycle,9.30361377796405
+val_03,train_01,False,SoC (%),2.4505624296262387
+val_03,train_01,False,Cycle,51.34593683792406
+val_03,train_02,False,SoC (%),2.030021720265024
+val_03,train_02,False,Cycle,35.53020038488738
+val_03,train_03,False,SoC (%),1.6835600016223764
+val_03,train_03,False,Cycle,24.96179327777463
+val_03,train_04,False,SoC (%),1.6220970361082294
+val_03,train_04,False,Cycle,17.376054697923124
+val_03,train_05,False,SoC (%),2.239933068939348
+val_03,train_05,False,Cycle,14.504020994879813
+val_03,train_06,False,SoC (%),2.3283781379693225
+val_03,train_06,False,Cycle,48.897754235085685
+val_03,train_07,False,SoC (%),1.9608431407516915
+val_03,train_07,False,Cycle,35.45285141346465
+val_03,train_08,False,SoC (%),1.4923997326577572
+val_03,train_08,False,Cycle,24.84710252805002
+val_03,train_09,False,SoC (%),1.2525680499373248
+val_03,train_09,False,Cycle,17.595743625115542
+val_03,train_10,False,SoC (%),1.8281452447095055
+val_03,train_10,False,Cycle,14.939068432293372
+val_03,train_11,False,SoC (%),2.1829222652237696
+val_03,train_11,False,Cycle,43.35317166974955
+val_03,train_12,False,SoC (%),1.7732699683663657
+val_03,train_12,False,Cycle,32.34931375491936
+val_03,train_13,False,SoC (%),1.4348218145880292
+val_03,train_13,False,Cycle,22.019534529840715
+val_03,train_14,False,SoC (%),1.1669859929324484
+val_03,train_14,False,Cycle,15.952701287227184
+val_03,train_15,False,SoC (%),0.991785479374936
+val_03,train_15,False,Cycle,13.406896319963291
+val_03,train_16,False,SoC (%),2.041647290186137
+val_03,train_16,False,Cycle,37.20924742375942
+val_03,train_17,False,SoC (%),1.4370792384159687
+val_03,train_17,False,Cycle,22.779063160286324
+val_03,val_01,False,SoC (%),1.2468648531539304
+val_03,val_01,False,Cycle,16.856677183028296
+val_03,val_02,False,SoC (%),1.0125211468488482
+val_03,val_02,False,Cycle,12.66186643462712
+val_03,val_03,True,SoC (%),0.818587657656106
+val_03,val_03,True,Cycle,11.857101274225752
+val_03,val_04,False,SoC (%),1.7244608473469067
+val_03,val_04,False,Cycle,35.555790168661304
+val_03,val_05,False,SoC (%),1.053327041787914
+val_03,val_05,False,Cycle,19.16851431212854
+val_03,test_01,False,SoC (%),1.362638529843393
+val_03,test_01,False,Cycle,13.381209862716675
+val_03,test_02,False,SoC (%),1.3897584751209413
+val_03,test_02,False,Cycle,14.959047329785559
+val_03,test_03,False,SoC (%),1.7572382535352244
+val_03,test_03,False,Cycle,16.52571353163843
+val_04,train_01,False,SoC (%),3.6678150827195095
+val_04,train_01,False,Cycle,4.534229532473005
+val_04,train_02,False,SoC (%),3.703767923675479
+val_04,train_02,False,Cycle,48.26249272721098
+val_04,train_03,False,SoC (%),6.412442656881458
+val_04,train_03,False,Cycle,70.43682321207277
+val_04,train_04,False,SoC (%),7.584050714228104
+val_04,train_04,False,Cycle,72.39040132203516
+val_04,train_05,False,SoC (%),9.545242733482866
+val_04,train_05,False,Cycle,74.60502903830157
+val_04,train_06,False,SoC (%),1.759875053659365
+val_04,train_06,False,Cycle,4.268846889164929
+val_04,train_07,False,SoC (%),7.138265828090486
+val_04,train_07,False,Cycle,58.95019843763058
+val_04,train_08,False,SoC (%),7.522293494719518
+val_04,train_08,False,Cycle,75.21330179876216
+val_04,train_09,False,SoC (%),7.674103461519707
+val_04,train_09,False,Cycle,82.32275540362969
+val_04,train_10,False,SoC (%),9.16136131724785
+val_04,train_10,False,Cycle,80.46866711037013
+val_04,train_11,False,SoC (%),1.0326414474578982
+val_04,train_11,False,Cycle,3.0631060583609107
+val_04,train_12,False,SoC (%),7.559803958882803
+val_04,train_12,False,Cycle,65.01912996314762
+val_04,train_13,False,SoC (%),8.506371507316837
+val_04,train_13,False,Cycle,83.11222834103461
+val_04,train_14,False,SoC (%),8.313638968268783
+val_04,train_14,False,Cycle,83.23333601961077
+val_04,train_15,False,SoC (%),9.152669018630325
+val_04,train_15,False,Cycle,79.9734437255878
+val_04,train_16,False,SoC (%),0.8470906017501856
+val_04,train_16,False,Cycle,3.0063042829297912
+val_04,train_17,False,SoC (%),9.273149091104223
+val_04,train_17,False,Cycle,78.23713955149796
+val_04,val_01,False,SoC (%),8.929586308124966
+val_04,val_01,False,Cycle,81.42988712728453
+val_04,val_02,False,SoC (%),8.273034227711035
+val_04,val_02,False,Cycle,76.88023829066255
+val_04,val_03,False,SoC (%),9.511436642686217
+val_04,val_03,False,Cycle,68.63172567845591
+val_04,val_04,True,SoC (%),0.6296695125717583
+val_04,val_04,True,Cycle,4.451834224899886
+val_04,val_05,False,SoC (%),9.699109577240149
+val_04,val_05,False,Cycle,76.99054959820377
+val_04,test_01,False,SoC (%),7.6482216746934535
+val_04,test_01,False,Cycle,59.60271473561909
+val_04,test_02,False,SoC (%),7.3127495788071215
+val_04,test_02,False,Cycle,54.99690420522659
+val_04,test_03,False,SoC (%),6.81846609678989
+val_04,test_03,False,Cycle,45.18297227815943
+val_05,train_01,False,SoC (%),2.1497492161840546
+val_05,train_01,False,Cycle,70.75233337457922
+val_05,train_02,False,SoC (%),1.982659762937717
+val_05,train_02,False,Cycle,39.91605602607267
+val_05,train_03,False,SoC (%),1.6131133970109037
+val_05,train_03,False,Cycle,20.426364822121254
+val_05,train_04,False,SoC (%),2.6309335243102265
+val_05,train_04,False,Cycle,15.863468822404434
+val_05,train_05,False,SoC (%),3.274959406102506
+val_05,train_05,False,Cycle,14.881400535219344
+val_05,train_06,False,SoC (%),1.960269363083699
+val_05,train_06,False,Cycle,67.75027369776572
+val_05,train_07,False,SoC (%),1.9200566910714896
+val_05,train_07,False,Cycle,36.387565036739105
+val_05,train_08,False,SoC (%),1.5780342408152228
+val_05,train_08,False,Cycle,20.973300932000104
+val_05,train_09,False,SoC (%),1.8377563491009965
+val_05,train_09,False,Cycle,12.374294504118815
+val_05,train_10,False,SoC (%),2.6916850170179596
+val_05,train_10,False,Cycle,12.920516626375578
+val_05,train_11,False,SoC (%),1.9003584010034305
+val_05,train_11,False,Cycle,67.37066699568342
+val_05,train_12,False,SoC (%),1.7093255302533736
+val_05,train_12,False,Cycle,30.792835847001964
+val_05,train_13,False,SoC (%),1.5500484507329195
+val_05,train_13,False,Cycle,15.091219263406323
+val_05,train_14,False,SoC (%),1.7812406208708353
+val_05,train_14,False,Cycle,9.377307841891781
+val_05,train_15,False,SoC (%),1.9955072550477924
+val_05,train_15,False,Cycle,9.873061152211536
+val_05,train_16,False,SoC (%),1.9211393584153054
+val_05,train_16,False,Cycle,67.05875088706362
+val_05,train_17,False,SoC (%),1.253387798230567
+val_05,train_17,False,Cycle,17.595134037194242
+val_05,val_01,False,SoC (%),1.3063526189244101
+val_05,val_01,False,Cycle,8.547944168954919
+val_05,val_02,False,SoC (%),1.4840607987007768
+val_05,val_02,False,Cycle,8.627951440947024
+val_05,val_03,False,SoC (%),1.6618207176845705
+val_05,val_03,False,Cycle,8.56758517783868
+val_05,val_04,False,SoC (%),2.265265248488177
+val_05,val_04,False,Cycle,64.29131164694637
+val_05,val_05,True,SoC (%),0.8672826029533526
+val_05,val_05,True,Cycle,11.432727525289803
+val_05,test_01,False,SoC (%),1.1218335110924138
+val_05,test_01,False,Cycle,7.9915742963357905
+val_05,test_02,False,SoC (%),1.2458250318733162
+val_05,test_02,False,Cycle,8.051992061256591
+val_05,test_03,False,SoC (%),1.492399002577721
+val_05,test_03,False,Cycle,11.57728337857369
+test_01,train_01,False,SoC (%),2.631379998498506
+test_01,train_01,False,Cycle,86.91728715184013
+test_01,train_02,False,SoC (%),2.1255561631388487
+test_01,train_02,False,Cycle,60.84084605647951
+test_01,train_03,False,SoC (%),1.6667657702282996
+test_01,train_03,False,Cycle,41.81318015561373
+test_01,train_04,False,SoC (%),1.685374681296219
+test_01,train_04,False,Cycle,37.930664081884174
+test_01,train_05,False,SoC (%),3.0353146326817972
+test_01,train_05,False,Cycle,35.49810278389811
+test_01,train_06,False,SoC (%),2.5060178177908843
+test_01,train_06,False,Cycle,83.34053686055854
+test_01,train_07,False,SoC (%),2.06950950403803
+test_01,train_07,False,Cycle,57.48879478794118
+test_01,train_08,False,SoC (%),1.6328194754899183
+test_01,train_08,False,Cycle,42.175820902292045
+test_01,train_09,False,SoC (%),1.7209541148822518
+test_01,train_09,False,Cycle,32.56305371597835
+test_01,train_10,False,SoC (%),2.2268091369433547
+test_01,train_10,False,Cycle,30.571881252728147
+test_01,train_11,False,SoC (%),2.392696606615395
+test_01,train_11,False,Cycle,79.15143527835527
+test_01,train_12,False,SoC (%),1.9281508637258093
+test_01,train_12,False,Cycle,52.38206959737631
+test_01,train_13,False,SoC (%),1.5893971026026246
+test_01,train_13,False,Cycle,37.81796411722133
+test_01,train_14,False,SoC (%),1.5194902493339408
+test_01,train_14,False,Cycle,30.612488854093375
+test_01,train_15,False,SoC (%),1.35224482144162
+test_01,train_15,False,Cycle,27.96102400764945
+test_01,train_16,False,SoC (%),2.3681106271223817
+test_01,train_16,False,Cycle,74.41909493064962
+test_01,train_17,False,SoC (%),1.6834250934785469
+test_01,train_17,False,Cycle,41.11645791852408
+test_01,val_01,False,SoC (%),1.5499316576530313
+test_01,val_01,False,Cycle,33.64574046114512
+test_01,val_02,False,SoC (%),1.3792540109349045
+test_01,val_02,False,Cycle,28.31229465348453
+test_01,val_03,False,SoC (%),1.1532745369752886
+test_01,val_03,False,Cycle,26.869181777823748
+test_01,val_04,False,SoC (%),2.5082382644646377
+test_01,val_04,False,Cycle,70.30457986821519
+test_01,val_05,False,SoC (%),1.2752808505233544
+test_01,val_05,False,Cycle,35.71438297193193
+test_01,test_01,True,SoC (%),1.5889012178790016
+test_01,test_01,True,Cycle,30.34840869219606
+test_01,test_02,False,SoC (%),1.3483767382613814
+test_01,test_02,False,Cycle,33.510636749079694
+test_01,test_03,False,SoC (%),1.904245008257771
+test_01,test_03,False,Cycle,36.897861441482476
+test_02,train_01,False,SoC (%),3.2235010328388203
+test_02,train_01,False,Cycle,84.02157571523063
+test_02,train_02,False,SoC (%),2.50731826530684
+test_02,train_02,False,Cycle,61.620397493871955
+test_02,train_03,False,SoC (%),2.2654831114398912
+test_02,train_03,False,Cycle,48.10967967802898
+test_02,train_04,False,SoC (%),1.7831867212289612
+test_02,train_04,False,Cycle,43.770501355342674
+test_02,train_05,False,SoC (%),2.3777688584834324
+test_02,train_05,False,Cycle,42.15196230996597
+test_02,train_06,False,SoC (%),3.006202620982001
+test_02,train_06,False,Cycle,79.20617864510456
+test_02,train_07,False,SoC (%),2.4739359390017395
+test_02,train_07,False,Cycle,60.081632977428455
+test_02,train_08,False,SoC (%),2.2012024170757476
+test_02,train_08,False,Cycle,50.32676749034033
+test_02,train_09,False,SoC (%),2.0480127544296067
+test_02,train_09,False,Cycle,42.275993208850466
+test_02,train_10,False,SoC (%),1.7398786376793463
+test_02,train_10,False,Cycle,39.35653417750847
+test_02,train_11,False,SoC (%),2.9357331440955052
+test_02,train_11,False,Cycle,74.26991339991079
+test_02,train_12,False,SoC (%),2.419979114690994
+test_02,train_12,False,Cycle,56.41369802915414
+test_02,train_13,False,SoC (%),2.2453492254459633
+test_02,train_13,False,Cycle,46.211119770518366
+test_02,train_14,False,SoC (%),1.9644373853302084
+test_02,train_14,False,Cycle,40.516414183828005
+test_02,train_15,False,SoC (%),1.5249746601295273
+test_02,train_15,False,Cycle,37.993904788705
+test_02,train_16,False,SoC (%),2.8858560011368315
+test_02,train_16,False,Cycle,69.6107395906985
+test_02,train_17,False,SoC (%),2.150669885767798
+test_02,train_17,False,Cycle,45.87599325038558
+test_02,val_01,False,SoC (%),2.2200071597502173
+test_02,val_01,False,Cycle,41.1956135651131
+test_02,val_02,False,SoC (%),1.9065262412758042
+test_02,val_02,False,Cycle,37.12934940904713
+test_02,val_03,False,SoC (%),1.3745202205388873
+test_02,val_03,False,Cycle,36.353894230366876
+test_02,val_04,False,SoC (%),2.41930482364666
+test_02,val_04,False,Cycle,65.07445287350059
+test_02,val_05,False,SoC (%),1.9057577553572365
+test_02,val_05,False,Cycle,43.52799991738362
+test_02,test_01,False,SoC (%),2.064601592814609
+test_02,test_01,False,Cycle,37.9598115259506
+test_02,test_02,True,SoC (%),2.0740525506082252
+test_02,test_02,True,Cycle,36.51997460924646
+test_02,test_03,False,SoC (%),1.9371268490951161
+test_02,test_03,False,Cycle,39.31838996157241
+test_03,train_01,False,SoC (%),3.1506896040020598
+test_03,train_01,False,Cycle,77.6964554518373
+test_03,train_02,False,SoC (%),2.5740775678209746
+test_03,train_02,False,Cycle,63.87407211343046
+test_03,train_03,False,SoC (%),2.3497585597880866
+test_03,train_03,False,Cycle,55.40855995163205
+test_03,train_04,False,SoC (%),2.023891157428917
+test_03,train_04,False,Cycle,50.48588219649322
+test_03,train_05,False,SoC (%),2.0645398357738998
+test_03,train_05,False,Cycle,45.93278334085293
+test_03,train_06,False,SoC (%),2.9513486577464816
+test_03,train_06,False,Cycle,75.22629693191438
+test_03,train_07,False,SoC (%),2.593369506586743
+test_03,train_07,False,Cycle,62.63322590311724
+test_03,train_08,False,SoC (%),2.3411868735529464
+test_03,train_08,False,Cycle,55.57687366941202
+test_03,train_09,False,SoC (%),2.1239814797302214
+test_03,train_09,False,Cycle,48.41148175247481
+test_03,train_10,False,SoC (%),1.864407094058596
+test_03,train_10,False,Cycle,47.37063283837686
+test_03,train_11,False,SoC (%),2.83828221899405
+test_03,train_11,False,Cycle,68.95837557972543
+test_03,train_12,False,SoC (%),2.410684066584578
+test_03,train_12,False,Cycle,59.88043503684342
+test_03,train_13,False,SoC (%),2.217263405556995
+test_03,train_13,False,Cycle,51.851813495965004
+test_03,train_14,False,SoC (%),2.0848341684731144
+test_03,train_14,False,Cycle,49.41720115216299
+test_03,train_15,False,SoC (%),1.8041370950187834
+test_03,train_15,False,Cycle,46.76371029364707
+test_03,train_16,False,SoC (%),2.6819423270369964
+test_03,train_16,False,Cycle,63.331507250960904
+test_03,train_17,False,SoC (%),2.2776213691608675
+test_03,train_17,False,Cycle,52.81494460687081
+test_03,val_01,False,SoC (%),2.229170551402864
+test_03,val_01,False,Cycle,49.74905945869156
+test_03,val_02,False,SoC (%),1.9050566377202747
+test_03,val_02,False,Cycle,46.809679074957145
+test_03,val_03,False,SoC (%),1.8266533915785295
+test_03,val_03,False,Cycle,43.78305594049944
+test_03,val_04,False,SoC (%),2.4507426952708866
+test_03,val_04,False,Cycle,62.605870599728625
+test_03,val_05,False,SoC (%),2.2690478046908518
+test_03,val_05,False,Cycle,49.23943074157474
+test_03,test_01,False,SoC (%),2.4208692322150855
+test_03,test_01,False,Cycle,47.51865457430824
+test_03,test_02,False,SoC (%),2.2982146318994556
+test_03,test_02,False,Cycle,45.27871724565764
+test_03,test_03,True,SoC (%),2.0981329284616876
+test_03,test_03,True,Cycle,52.832702558026476
