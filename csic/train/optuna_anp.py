@@ -173,22 +173,13 @@ def objective(
         "y_std":  data["denorm_values"]["y_std"],
     }
 
-    # ── Model — inject attn_dropout for this trial ────────────────────────────
-    # Temporarily patch MultiheadAttention dropout, then restore immediately.
-    # This is isolated per-trial and does not affect other trials or anp.py.
-    _orig_init = anp_module.MultiheadAttention.__init__
-
-    def _patched_init(self, num_hidden_k):
-        _orig_init(self, num_hidden_k)
-        self.attn_dropout = nn.Dropout(p=attn_dropout)
-
-    anp_module.MultiheadAttention.__init__ = _patched_init
+    # ── Model — pass attn_dropout natively ────────────────────────────────────
     model = LatentModel(
         num_hidden=num_hidden,
         input_dim=input_dim,
         output_dim=output_dim,
+        attn_dropout=attn_dropout,
     ).to(device)
-    anp_module.MultiheadAttention.__init__ = _orig_init  # restore immediately
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"     params: {n_params:,}")

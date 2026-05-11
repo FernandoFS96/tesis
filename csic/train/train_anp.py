@@ -127,6 +127,7 @@ class Config:
     batch_size:         int   = 4      # episodes per GPU forward pass
     lr:                 float = 1e-4
     lr_min:             float = 5e-5   # cosine annealing minimum LR
+    attn_dropout:       float = 0.1    # dropout in attention layers
     beta:               float = 1.0    # KL weight in ELBO: loss = NLL + beta*KL
     grad_clip:          float = 1.0    # max gradient norm before clipping
     seed:               int   = 18
@@ -231,6 +232,7 @@ def train(cfg: Config) -> tuple:
         num_hidden=cfg.num_hidden,
         input_dim=cfg.input_dim,
         output_dim=cfg.output_dim,
+        attn_dropout=cfg.attn_dropout,
     ).to(device)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -433,7 +435,7 @@ def eval_only(cfg: Config) -> None:
     def presort(tasks: list) -> list:
         return [sort_task_by_cycle(X, y) for X, y in tasks]
 
-    model = LatentModel(cfg.num_hidden, cfg.input_dim, cfg.output_dim).to(device)
+    model = LatentModel(cfg.num_hidden, cfg.input_dim, cfg.output_dim, attn_dropout=cfg.attn_dropout).to(device)
     ckpt  = torch.load(cfg.ckpt, map_location=device)
     model.load_state_dict(ckpt["model"])
     print(f"✓ Checkpoint loaded: {cfg.ckpt}  (epoch {ckpt.get('epoch', '?')})")
@@ -467,17 +469,18 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--data_dir",       type=str,   default=None)
     p.add_argument("--run_dir",        type=str,   default="")
-    p.add_argument("--num_hidden",     type=int,   default=256)
+    p.add_argument("--num_hidden",     type=int,   default=128)
     p.add_argument("--ctx_cycles",     type=int,   default=60)
     p.add_argument("--tgt_cycles",     type=int,   default=60)
     p.add_argument("--meas_per_cycle", type=int,   default=30, dest="measurements_per_cycle")
     p.add_argument("--epochs",         type=int,   default=1000)
     p.add_argument("--early_stop",     type=int,   default=200, dest="early_stopping")
     p.add_argument("--episodes",       type=int,   default=100, dest="episodes_per_epoch")
-    p.add_argument("--batch_size",     type=int,   default=9)
-    p.add_argument("--lr",             type=float, default=1e-4)
+    p.add_argument("--batch_size",     type=int,   default=4)
+    p.add_argument("--lr",             type=float, default=5e-4)
     p.add_argument("--lr_min",         type=float, default=5e-5)
-    p.add_argument("--beta",           type=float, default=1.0)
+    p.add_argument("--attn_dropout",   type=float, default=0.2)
+    p.add_argument("--beta",           type=float, default=0.5)
     p.add_argument("--grad_clip",      type=float, default=1.0)
     p.add_argument("--seed",           type=int,   default=18)
     p.add_argument("--log_every",      type=int,   default=10)
@@ -506,6 +509,7 @@ def main() -> None:
         batch_size             = args.batch_size,
         lr                     = args.lr,
         lr_min                 = args.lr_min,
+        attn_dropout           = args.attn_dropout,
         beta                   = args.beta,
         grad_clip              = args.grad_clip,
         seed                   = args.seed,

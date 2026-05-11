@@ -17,10 +17,10 @@ class Linear(nn.Module):
         return self.linear_layer(x)
 
 class LatentEncoder(nn.Module):
-    def __init__(self, num_hidden, num_latent, input_dim, output_dim):
+    def __init__(self, num_hidden, num_latent, input_dim, output_dim, attn_dropout: float = 0.1):
         super(LatentEncoder, self).__init__()
         self.input_projection = Linear(input_dim + output_dim, num_hidden)
-        self.self_attentions = nn.ModuleList([Attention(num_hidden) for _ in range(2)])
+        self.self_attentions = nn.ModuleList([Attention(num_hidden, attn_dropout=attn_dropout) for _ in range(2)])
         self.penultimate_layer = Linear(num_hidden, num_hidden, w_init='relu')
         self.mu = Linear(num_hidden, num_latent)
         self.log_var = Linear(num_hidden, num_latent)
@@ -44,10 +44,10 @@ class LatentEncoder(nn.Module):
         return mu, log_var, z
 
 class DeterministicEncoder(nn.Module):
-    def __init__(self, num_hidden, num_latent, input_dim, output_dim):
+    def __init__(self, num_hidden, num_latent, input_dim, output_dim, attn_dropout: float = 0.1):
         super(DeterministicEncoder, self).__init__()
-        self.self_attentions = nn.ModuleList([Attention(num_hidden) for _ in range(2)])
-        self.cross_attentions = nn.ModuleList([Attention(num_hidden) for _ in range(2)])
+        self.self_attentions = nn.ModuleList([Attention(num_hidden, attn_dropout=attn_dropout) for _ in range(2)])
+        self.cross_attentions = nn.ModuleList([Attention(num_hidden, attn_dropout=attn_dropout) for _ in range(2)])
         self.input_projection = Linear(input_dim + output_dim, num_hidden)
         self.context_projection = Linear(input_dim, num_hidden)
         self.target_projection = Linear(input_dim, num_hidden)
@@ -87,10 +87,10 @@ class Decoder(nn.Module):
         return mean, var
 
 class MultiheadAttention(nn.Module):
-    def __init__(self, num_hidden_k):
+    def __init__(self, num_hidden_k, attn_dropout: float = 0.1):
         super().__init__()
         self.num_hidden_k = num_hidden_k
-        self.attn_dropout = nn.Dropout(p=0.1)
+        self.attn_dropout = nn.Dropout(p=attn_dropout)
 
     def forward(self, key, value, query):
         """
@@ -114,7 +114,7 @@ class MultiheadAttention(nn.Module):
 
 
 class Attention(nn.Module):
-    def __init__(self, num_hidden, h=4):
+    def __init__(self, num_hidden, h=4, attn_dropout: float = 0.1):
         super(Attention, self).__init__()
         self.num_hidden = num_hidden
         self.num_hidden_per_attn = num_hidden // h
@@ -122,8 +122,8 @@ class Attention(nn.Module):
         self.key = Linear(num_hidden, num_hidden, bias=False)
         self.value = Linear(num_hidden, num_hidden, bias=False)
         self.query = Linear(num_hidden, num_hidden, bias=False)
-        self.multihead = MultiheadAttention(self.num_hidden_per_attn)
-        self.residual_dropout = nn.Dropout(p=0.1)
+        self.multihead = MultiheadAttention(self.num_hidden_per_attn, attn_dropout=attn_dropout)
+        self.residual_dropout = nn.Dropout(p=attn_dropout)
         self.final_linear = Linear(num_hidden * 2, num_hidden)
         self.layer_norm = nn.LayerNorm(num_hidden)
 
@@ -157,15 +157,17 @@ class Attention(nn.Module):
 # LatentModel:
 
 class LatentModel(nn.Module):
-    def __init__(self, num_hidden, input_dim, output_dim):
+    def __init__(self, num_hidden, input_dim, output_dim, attn_dropout: float = 0.1):
         super(LatentModel, self).__init__()
         self.latent_encoder = LatentEncoder(num_hidden, num_latent=num_hidden,
                                             input_dim=input_dim,
-                                            output_dim=output_dim)
+                                            output_dim=output_dim,
+                                            attn_dropout=attn_dropout)
         self.deterministic_encoder = DeterministicEncoder(num_hidden,
                                                           num_latent=num_hidden,
                                                           input_dim=input_dim,
-                                                          output_dim=output_dim)
+                                                          output_dim=output_dim,
+                                                          attn_dropout=attn_dropout)
         self.decoder = Decoder(num_hidden,
                                input_dim=input_dim,
                                output_dim=output_dim)
