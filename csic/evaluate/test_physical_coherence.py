@@ -1,50 +1,43 @@
 """
 test_physical_coherence.py
 ==============================================================================
-Tests whether trained models produce physically incoherent predictions during
-inference and reports how frequently violations occur.
+Tests whether trained models produce physically incoherent predictions during inference and reports how frequently violations occur.
 
 Physical constraints checked:
     SoC (%):
         1. Range violation     — predicted SoC outside [0, 100] %
-        2. Large spike         — |ΔSoC| > spike_threshold % between consecutive
-                                 measurements within the same cycle
-        3. Monotonicity (soft) — SoC trend across cycles should be roughly
-                                 non-increasing (battery degrades over time).
-                                 Flagged if mean SoC increases > mono_threshold %
-                                 from first quarter to last quarter of trajectory.
+        2. Large spike         — |ΔSoC| > spike_threshold % between consecutive measurements within the same cycle
+        3. Monotonicity (soft) — SoC trend across cycles should be roughly non-increasing (battery degrades over time).
+                                 Flagged if mean SoC increases > mono_threshold % from first quarter to last quarter of trajectory.
 
     Cycle:
         4. Negative prediction — predicted Cycle < 0
-        5. Non-monotone        — predicted cycle number decreases across the
-                                 trajectory (cycles should always increase)
+        5. Non-monotone        — predicted cycle number decreases across the trajectory (cycles should always increase)
+
+Single-target ANP models are handled transparently:
+    - ANP-SoC  only predicts SoC  → Cycle checks are skipped (shown as N/A)
+    - ANP-Cycle only predicts Cycle → SoC checks are skipped (shown as N/A)
 
 Models evaluated:
-    - ANP   (from --anp_run)
-    - DR-MLP (from --mlp_run/dr_mlp/best.pt)
+    - ANP dual-target  (--anp_run)
+    - ANP SoC-only     (--anp_soc_run)
+    - ANP Cycle-only   (--anp_cycle_run)
+    - DR-MLP           (--mlp_run/dr_mlp/best.pt)
     - Optionally: a specific specialist (--specialist_id)
 
 Output (saved to --out_dir):
     coherence_report.txt      — full violation report per model and task
     coherence_summary.csv     — aggregated violation rates per model
     violation_plots/          — time-series plots showing violation examples
+    comparison_plots/         — all models overlaid on the same axes per task
 
 Usage:
     python test_physical_coherence.py \
-        --mlp_run  ../train/runs_mlp/20260505_161625 \
-        --anp_run  ../train/runs/20260505_114753 \
-        --data_dir ../csic_real_synth_load/prepared_data
-
-    python test_physical_coherence.py \
-        --mlp_run  ../train/runs_mlp/20260505_161625 \
-        --anp_run ../train/optuna_results/trial_019 \
-        --data_dir ../csic_real_synth_load/prepared_data
-
-    # Test all 25 tasks (train + val + test)
-    python test_physical_coherence.py \\
-        --anp_run ../train/runs/20260501_100000 \\
-        --mlp_run ../train/runs_mlp/20260501_120000 \\
-        --all_tasks
+        --mlp_run       ../train/runs_mlp/20260511_121741 \
+        --anp_run       ../train/runs/anp_all_20260512_124715 \
+        --anp_soc_run   "../train/runs/anp_SoC(pct)_20260512_114601" \
+        --anp_cycle_run ../train/runs/anp_Cycle_20260512_114703 \
+        --data_dir      ../csic_real_synth_load/prepared_data
 
 Location: csic/validation/test_physical_coherence.py
 ==============================================================================
@@ -165,31 +158,65 @@ def extract_window(
 # ==============================================================================
 # MODEL LOADING
 # ==============================================================================
-def load_anp(run_dir: Path, input_dim: int, output_dim: int,
-             device: torch.device) -> Optional[nn.Module]:
+def load_anp_model(
+    run_dir:          Path,
+    input_dim:        int,
+    all_target_cols:  List[str],
+    device:           torch.device,
+    label:            str = "ANP",
+) -> Optional[Tuple[str, nn.Module, List[str]]]:
+    """
+    Load an ANP checkpoint and detect which targets it was trained on.
+
+    Reads config.json for num_hidden, attn_dropout, and target_col.
+    Works for dual-target (output_dim=2) and single-target (output_dim=1) models.
+
+    Returns:
+        (label, model, model_target_cols) or None if checkpoint not found.
+        model_target_cols is the subset of all_target_cols this model predicts.
+    """
     ckpt_path = run_dir / "best.pt"
     cfg_path  = run_dir / "config.json"
+
     if not ckpt_path.exists():
-        print(f"  ⚠  ANP checkpoint not found: {ckpt_path}")
+        print(f"  ⚠  {label}: checkpoint not found: {ckpt_path}")
         return None
-    num_hidden = 128
+
+    num_hidden   = 128
+    attn_dropout = 0.1
+    target_col   = "all"
+
     if cfg_path.exists():
         with cfg_path.open() as f:
-            cfg = json.load(f)
-        # train_anp.py stores num_hidden at top level
-        # optuna_anp.py stores it inside params{}
-        num_hidden = (cfg.get("num_hidden")
-                      or cfg.get("params", {}).get("num_hidden")
-                      or 128)
-    model = LatentModel(num_hidden=num_hidden,
-                        input_dim=input_dim, output_dim=output_dim)
+            cfg_data = json.load(f)
+        num_hidden   = (cfg_data.get("num_hidden")
+                        or cfg_data.get("params", {}).get("num_hidden", 128))
+        attn_dropout = cfg_data.get("attn_dropout", 0.1)
+        target_col   = cfg_data.get("target_col", "all")
+
+    # Determine which targets this model predicts
+    if target_col == "all":
+        model_target_cols = all_target_cols
+    elif target_col in all_target_cols:
+        model_target_cols = [target_col]
+    else:
+        # Fallback: infer from decoder output weight shape
+        raw = torch.load(ckpt_path, map_location="cpu")
+        out_keys = [k for k in raw["model"] if "mean_projection" in k and "weight" in k]
+        out_dim  = raw["model"][out_keys[0]].shape[0] if out_keys else len(all_target_cols)
+        model_target_cols = all_target_cols[:out_dim]
+
+    output_dim = len(model_target_cols)
+    model = LatentModel(num_hidden=num_hidden, input_dim=input_dim,
+                        output_dim=output_dim, attn_dropout=attn_dropout)
     ckpt = torch.load(ckpt_path, map_location=device)
     model.load_state_dict(ckpt["model"])
     model.eval().to(device)
-    print(f"  ✓  ANP loaded  (num_hidden={num_hidden}  "
-          f"epoch={ckpt.get('epoch','?')}  "
-          f"val_MAE={ckpt.get('val_MAE', ckpt.get('val_loss','?'))})")
-    return model
+
+    val_mae = ckpt.get("val_MAE", ckpt.get("val_loss", "?"))
+    print(f"  ✓  {label:<22} targets={model_target_cols}  "
+          f"num_hidden={num_hidden}  val_MAE={val_mae}")
+    return (label, model, model_target_cols)
 
 
 def load_mlp(ckpt_path: Path, input_dim: int, output_dim: int,
@@ -212,18 +239,49 @@ def load_mlp(ckpt_path: Path, input_dim: int, output_dim: int,
 
 @torch.no_grad()
 def predict_anp(
-    model:   nn.Module,
-    X_ctx:   np.ndarray,
-    y_ctx:   np.ndarray,
-    X_tgt:   np.ndarray,
-    device:  torch.device,
+    model:             nn.Module,
+    X_ctx:             np.ndarray,
+    y_ctx:             np.ndarray,
+    X_tgt:             np.ndarray,
+    device:            torch.device,
+    all_target_cols:   List[str],
+    model_target_cols: List[str],
 ) -> np.ndarray:
-    """Run ANP inference. Returns predictions (Nt, O) in normalized space."""
+    """
+    Run ANP inference.
+
+    Filters y_ctx to the model's trained targets before the forward pass.
+    Returns predictions expanded to (Nt, len(all_target_cols)) with NaN for any target the model does not predict, so downstream checks can treat all models uniformly.
+
+    Args:
+        all_target_cols:   All targets present in the data.
+        model_target_cols: Subset of targets this model was trained on.
+
+    Returns:
+        pred (Nt, len(all_target_cols)) in normalized space, NaN for
+        columns not predicted by this model.
+    """
+    # Filter y_ctx to model's targets
+    if model_target_cols != all_target_cols:
+        col_idx = [all_target_cols.index(c) for c in model_target_cols]
+        y_ctx_m = y_ctx[:, col_idx]
+    else:
+        y_ctx_m = y_ctx
+
     ctx_x = torch.tensor(X_ctx).unsqueeze(0).to(device)
-    ctx_y = torch.tensor(y_ctx).unsqueeze(0).to(device)
+    ctx_y = torch.tensor(y_ctx_m).unsqueeze(0).to(device)
     tgt_x = torch.tensor(X_tgt).unsqueeze(0).to(device)
     pred_mean, _, _, _, _ = model(ctx_x, ctx_y, tgt_x, target_y=None)
-    return pred_mean.squeeze(0).cpu().numpy()
+    pred_model = pred_mean.squeeze(0).cpu().numpy()   # (Nt, O_model)
+
+    # Expand to full target shape — NaN for unmodelled targets
+    Nt = len(X_tgt)
+    pred_full = np.full((Nt, len(all_target_cols)), float("nan"), dtype=np.float32)
+    for model_i, col in enumerate(model_target_cols):
+        full_i = all_target_cols.index(col)
+        pred_full[:, full_i] = pred_model[:, model_i]
+
+    return pred_full
 
 
 @torch.no_grad()
@@ -280,7 +338,7 @@ class ViolationReport:
 
 
 def check_coherence(
-    pred_dn:     np.ndarray,     # (Nt, O) denormalized predictions
+    pred_dn:     np.ndarray,     # (Nt, O) denormalized predictions, NaN for missing targets
     target_cols: List[str],
     cfg:         CoherenceConfig,
     model_label: str,
@@ -289,15 +347,18 @@ def check_coherence(
     """
     Run all physical coherence checks on a prediction array.
 
+    Columns that are entirely NaN (targets not predicted by single-target models) are silently skipped, their violation counts stay at zero.
+
     Args:
-        pred_dn:     Denormalized predictions, shape (Nt, O).
-        target_cols: Ordered list of target column names.
+        pred_dn:     Denormalized predictions, shape (Nt, O). NaN values
+                     indicate targets not predicted by this model.
+        target_cols: Ordered list of all target column names.
         cfg:         CoherenceConfig with physical thresholds.
         model_label: Label for the model being evaluated.
         task_label:  Label for the task being evaluated.
 
     Returns:
-        ViolationReport with all counts populated.
+        ViolationReport with checks populated for predicted targets only.
     """
     Nt = len(pred_dn)
     report = ViolationReport(
@@ -311,45 +372,42 @@ def check_coherence(
         soc_idx  = target_cols.index("SoC (%)")
         soc_pred = pred_dn[:, soc_idx]
 
-        report.soc_pred_min  = float(soc_pred.min())
-        report.soc_pred_max  = float(soc_pred.max())
-        report.soc_pred_mean = float(soc_pred.mean())
+        # Skip entirely if this model does not predict SoC
+        if not np.all(np.isnan(soc_pred)):
+            report.soc_pred_min  = float(np.nanmin(soc_pred))
+            report.soc_pred_max  = float(np.nanmax(soc_pred))
+            report.soc_pred_mean = float(np.nanmean(soc_pred))
 
-        # 1. Range violations
-        report.soc_below_min = int((soc_pred < cfg.soc_min).sum())
-        report.soc_above_max = int((soc_pred > cfg.soc_max).sum())
+            report.soc_below_min = int((soc_pred < cfg.soc_min).sum())
+            report.soc_above_max = int((soc_pred > cfg.soc_max).sum())
 
-        # 2. Spike detection — large jumps between consecutive rows
-        if Nt > 1:
-            deltas = np.abs(np.diff(soc_pred))
-            report.soc_spike = int((deltas > cfg.spike_threshold).sum())
+            if Nt > 1:
+                deltas = np.abs(np.diff(soc_pred))
+                report.soc_spike = int((deltas > cfg.spike_threshold).sum())
 
-        # 3. Monotonicity check — SoC trend across trajectory
-        # Split into quarters and check if mean of last quarter > mean of first
-        q = max(1, Nt // 4)
-        mean_first = soc_pred[:q].mean()
-        mean_last  = soc_pred[-q:].mean()
-        report.soc_not_monotone = bool(
-            (mean_last - mean_first) > cfg.mono_threshold
-        )
+            q = max(1, Nt // 4)
+            mean_first = np.nanmean(soc_pred[:q])
+            mean_last  = np.nanmean(soc_pred[-q:])
+            report.soc_not_monotone = bool(
+                (mean_last - mean_first) > cfg.mono_threshold
+            )
 
     # ── Cycle checks ──────────────────────────────────────────────────────────
     if "Cycle" in target_cols:
         cyc_idx  = target_cols.index("Cycle")
         cyc_pred = pred_dn[:, cyc_idx]
 
-        report.cycle_pred_min = float(cyc_pred.min())
-        report.cycle_pred_max = float(cyc_pred.max())
+        # Skip entirely if this model does not predict Cycle
+        if not np.all(np.isnan(cyc_pred)):
+            report.cycle_pred_min = float(np.nanmin(cyc_pred))
+            report.cycle_pred_max = float(np.nanmax(cyc_pred))
 
-        # 4. Negative cycle predictions
-        report.cycle_negative = int((cyc_pred < cfg.cycle_min).sum())
+            report.cycle_negative = int((cyc_pred < cfg.cycle_min).sum())
 
-        # 5. Non-monotone cycle — cycle should increase across trajectory
-        if Nt > 1:
-            # Check if overall trend is decreasing
-            x   = np.arange(Nt)
-            slope = np.polyfit(x, cyc_pred, 1)[0]
-            report.cycle_not_monotone = bool(slope < -1.0)
+            if Nt > 1:
+                x     = np.arange(Nt)
+                slope = np.polyfit(x, cyc_pred, 1)[0]
+                report.cycle_not_monotone = bool(slope < -1.0)
 
     return report
 
@@ -449,8 +507,7 @@ def plot_comparison_coherence(
     out_path:    Path,
 ) -> None:
     """
-    Plot ANP and DR-MLP predictions side by side on the same axes for
-    direct comparison of physical coherence.
+    Plot ANP and DR-MLP predictions side by side on the same axes for direct comparison of physical coherence.
 
     Args:
         preds_dn: Dict mapping model label to denormalized predictions (Nt, O).
@@ -462,8 +519,10 @@ def plot_comparison_coherence(
     """
     # Color palette — one per model, consistent across subplots
     MODEL_COLORS = {
-        "ANP":    "#1C7293",
-        "DR-MLP": "#D4860A",
+        "ANP":       "#1C7293",   # teal  — dual-target
+        "ANP-SoC":   "#028090",   # darker teal — SoC only
+        "ANP-Cycle": "#21295C",   # navy  — Cycle only
+        "DR-MLP":    "#D4860A",   # amber
         "Specialist_01": "#237A3D",
     }
     DEFAULT_COLORS = ["#8E44AD", "#E74C3C", "#16A085"]
@@ -497,11 +556,15 @@ def plot_comparison_coherence(
             ax.axhline(cfg.soc_max, color="#C0392B", linestyle="--",
                        linewidth=1.0, alpha=0.5)
 
-        # One line per model
+        # One line per model — skip if model did not predict this target (all NaN)
         for m_label, pred_dn in preds_dn.items():
             color  = model_color(m_label)
             report = reports.get(m_label)
             p      = pred_dn[:, i]
+
+            # Skip this model for this target if it was not predicted
+            if np.all(np.isnan(p)):
+                continue
 
             # Violation summary for legend
             if report and "SoC" in col:
@@ -557,15 +620,17 @@ def plot_comparison_coherence(
 # ==============================================================================
 
 def run(
-    anp_run_dir:     Optional[Path],
-    mlp_run_dir:     Optional[Path],
-    data_dir:        str,
-    out_dir:         Path,
-    cfg:             CoherenceConfig,
-    all_tasks:       bool = False,
-    specialist_id:   Optional[int] = None,
-    plot_violations: bool = True,
-    plot_clean:      bool = False,
+    anp_run_dir:       Optional[Path],
+    anp_soc_run_dir:   Optional[Path],
+    anp_cycle_run_dir: Optional[Path],
+    mlp_run_dir:       Optional[Path],
+    data_dir:          str,
+    out_dir:           Path,
+    cfg:               CoherenceConfig,
+    all_tasks:         bool = False,
+    specialist_id:     Optional[int] = None,
+    plot_violations:   bool = True,
+    plot_clean:        bool = False,
 ) -> None:
     """
     Full coherence test pipeline.
@@ -627,13 +692,27 @@ def run(
     print(f"\n📦  Loading models...")
 
     # ── Load models ───────────────────────────────────────────────────────────
-    models_to_test: List[Tuple[str, nn.Module, str]] = []
-    # (label, model, type)  type ∈ {"anp", "mlp"}
+    # Each entry: (label, model, type, model_target_cols)
+    models_to_test: List[Tuple[str, nn.Module, str, List[str]]] = []
 
     if anp_run_dir is not None:
-        anp = load_anp(anp_run_dir, input_dim, output_dim, device)
+        anp = load_anp_model(anp_run_dir, input_dim, target_cols, device, label="ANP")
         if anp:
-            models_to_test.append(("ANP", anp, "anp"))
+            models_to_test.append((anp[0], anp[1], "anp", anp[2]))
+
+    if anp_soc_run_dir is not None:
+        anp_soc = load_anp_model(
+            anp_soc_run_dir, input_dim, target_cols, device, label="ANP-SoC"
+        )
+        if anp_soc:
+            models_to_test.append((anp_soc[0], anp_soc[1], "anp", anp_soc[2]))
+
+    if anp_cycle_run_dir is not None:
+        anp_cyc = load_anp_model(
+            anp_cycle_run_dir, input_dim, target_cols, device, label="ANP-Cycle"
+        )
+        if anp_cyc:
+            models_to_test.append((anp_cyc[0], anp_cyc[1], "anp", anp_cyc[2]))
 
     if mlp_run_dir is not None:
         cfg_path = mlp_run_dir / "config.json"
@@ -647,19 +726,19 @@ def run(
         dr = load_mlp(mlp_run_dir / "dr_mlp" / "best.pt",
                       input_dim, output_dim, device, neurons, dropout)
         if dr:
-            models_to_test.append(("DR-MLP", dr, "mlp"))
+            models_to_test.append(("DR-MLP", dr, "mlp", target_cols))
 
         if specialist_id is not None:
             spec_path = mlp_run_dir / f"specialist_{specialist_id:02d}" / "best.pt"
             spec = load_mlp(spec_path, input_dim, output_dim, device, neurons, dropout)
             if spec:
-                models_to_test.append((f"Specialist_{specialist_id:02d}", spec, "mlp"))
+                models_to_test.append((f"Specialist_{specialist_id:02d}", spec, "mlp", target_cols))
 
     if not models_to_test:
         print("\n  ⚠  No models loaded — check paths and try again.")
         return
 
-    print(f"\n  Models loaded: {[m for m, _, _ in models_to_test]}")
+    print(f"\n  Models loaded: {[m for m, _, _, _ in models_to_test]}")
 
     # ── Run coherence checks ──────────────────────────────────────────────────
     print(f"\n🔬  Running coherence checks...\n")
@@ -673,13 +752,16 @@ def run(
     task_reports:     Dict[str, Dict[str, ViolationReport]] = {}
     task_true_dn:     Dict[str, np.ndarray] = {}
 
-    for m_label, model, m_type in models_to_test:
+    for m_label, model, m_type, m_target_cols in models_to_test:
         print(f"  ── {m_label} ─────────────────────────────────────")
         for t_label, X_ctx, y_ctx, X_tgt, y_tgt in tasks_data:
 
-            # Predict in normalized space
+            # Predict in normalized space (NaN for unmodelled targets)
             if m_type == "anp":
-                pred_norm = predict_anp(model, X_ctx, y_ctx, X_tgt, device)
+                pred_norm = predict_anp(
+                    model, X_ctx, y_ctx, X_tgt, device,
+                    target_cols, m_target_cols
+                )
             else:
                 pred_norm = predict_mlp(model, X_tgt, device)
 
@@ -723,18 +805,21 @@ def run(
                 viol_str += "  Cyc↓trend"
 
             status = "✓ clean" if not report.has_any_violation() else f"⚠{viol_str}"
-            print(f"   {t_label:<14}  "
-                  f"SoC∈[{report.soc_pred_min:6.1f},{report.soc_pred_max:6.1f}]%  "
-                  f"Cyc∈[{report.cycle_pred_min:6.0f},{report.cycle_pred_max:6.0f}]  "
-                  f"{status}")
+            soc_range = (f"SoC∈[{report.soc_pred_min:6.1f},{report.soc_pred_max:6.1f}]%"
+                         if report.soc_pred_max > 0 or report.soc_pred_min < 0
+                         else "SoC=N/A          ")
+            cyc_range = (f"Cyc∈[{report.cycle_pred_min:6.0f},{report.cycle_pred_max:6.0f}]"
+                         if report.cycle_pred_max > 0 or report.cycle_pred_min < 0
+                         else "Cyc=N/A        ")
+            print(f"   {t_label:<14}  {soc_range}  {cyc_range}  {status}")
 
             # Individual model plot (existing behaviour)
-            should_plot = (plot_violations and report.has_any_violation()) or plot_clean
-            if should_plot:
-                plot_path = plots_dir / f"{m_label}_{t_label}.png"
-                plot_violation_example(
-                    pred_dn, true_dn, target_cols, report, cfg, plot_path
-                )
+            #should_plot = (plot_violations and report.has_any_violation()) or plot_clean
+            #if should_plot:
+            #    plot_path = plots_dir / f"{m_label}_{t_label}.png"
+            #    plot_violation_example(
+            #        pred_dn, true_dn, target_cols, report, cfg, plot_path
+            #    )
 
     # ── Comparison plots (all models on the same axes, per task) ─────────────
     print(f"\n  Generating comparison plots...")
@@ -795,7 +880,7 @@ def run(
                  f"mono_threshold = {cfg.mono_threshold}%")
     lines.append("=" * 70)
 
-    for m_label in [m for m, _, _ in models_to_test]:
+    for m_label in [m for m, _, _, _ in models_to_test]:
         m_reports = [r for r in all_reports if r.model_label == m_label]
         n_tasks   = len(m_reports)
         n_total   = sum(r.n_predictions for r in m_reports)
@@ -805,12 +890,12 @@ def run(
         lines.append("-" * 57)
 
         checks = [
-            ("SoC below 0%",           sum(r.soc_below_min for r in m_reports)),
-            ("SoC above 100%",         sum(r.soc_above_max for r in m_reports)),
-            ("SoC spike (>30%/step)",  sum(r.soc_spike for r in m_reports)),
+            ("SoC below 0%",             sum(r.soc_below_min for r in m_reports)),
+            ("SoC above 100%",           sum(r.soc_above_max for r in m_reports)),
+            ("SoC spike (>30%/step)",    sum(r.soc_spike for r in m_reports)),
             ("SoC trend not decreasing", sum(r.soc_not_monotone for r in m_reports)),
-            ("Cycle negative",         sum(r.cycle_negative for r in m_reports)),
-            ("Cycle trend decreasing", sum(r.cycle_not_monotone for r in m_reports)),
+            ("Cycle negative",           sum(r.cycle_negative for r in m_reports)),
+            ("Cycle trend decreasing",   sum(r.cycle_not_monotone for r in m_reports)),
             ("Tasks with any violation", sum(r.has_any_violation() for r in m_reports)),
         ]
 
@@ -821,13 +906,16 @@ def run(
                 pct = count / max(1, n_total) * 100
                 lines.append(f"  {name:<33} {count:>8}   {pct:>10.2f}%")
 
-        # SoC range summary
-        all_mins  = [r.soc_pred_min  for r in m_reports]
-        all_maxes = [r.soc_pred_max  for r in m_reports]
-        lines.append(f"\n  SoC predicted range across all tasks:")
-        lines.append(f"    Global min: {min(all_mins):.2f}%  "
-                     f"Global max: {max(all_maxes):.2f}%  "
-                     f"(valid: [0, 100]%)")
+        # SoC range summary (only if model predicts SoC)
+        soc_mins  = [r.soc_pred_min for r in m_reports if r.soc_pred_max != 0.0 or r.soc_pred_min != 0.0]
+        soc_maxes = [r.soc_pred_max for r in m_reports if r.soc_pred_max != 0.0 or r.soc_pred_min != 0.0]
+        if soc_mins:
+            lines.append(f"\n  SoC predicted range across all tasks:")
+            lines.append(f"    Global min: {min(soc_mins):.2f}%  "
+                         f"Global max: {max(soc_maxes):.2f}%  "
+                         f"(valid: [0, 100]%)")
+        else:
+            lines.append(f"\n  SoC: not predicted by this model (N/A)")
 
     report_text = "\n".join(lines)
     print("\n" + report_text)
@@ -844,33 +932,25 @@ def run(
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Physical coherence test for ANP and MLP predictions",
+        description="Physical coherence test for ANP variants and MLP predictions",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("--anp_run",        type=str, default=None,
-                   help="Path to runs/<timestamp>/ directory")
-    p.add_argument("--mlp_run",        type=str, default=None,
-                   help="Path to runs_mlp/<timestamp>/ directory")
-    p.add_argument("--data_dir",       type=str,
-                   default="../csic_real_synth_load/prepared_data")
-    p.add_argument("--out_dir",        type=str, default="",
-                   help="Output directory (default: ./coherence/<timestamp>/)")
-    p.add_argument("--all_tasks",      action="store_true",
-                   help="Evaluate all 25 tasks instead of val+test only")
-    p.add_argument("--specialist_id",  type=int, default=None,
-                   help="1-based specialist MLP index to include (e.g. 5)")
-    p.add_argument("--plot_clean",     action="store_true",
-                   help="Also save plots for tasks with no violations")
-    p.add_argument("--no_plots",       action="store_true",
-                   help="Skip all plots (faster, CSV only)")
+    p.add_argument("--anp_run",        type=str, default=None, help="Path to dual-target ANP run directory")
+    p.add_argument("--anp_soc_run",    type=str, default=None, help="Path to SoC-only ANP run directory")
+    p.add_argument("--anp_cycle_run",  type=str, default=None, help="Path to Cycle-only ANP run directory")
+    p.add_argument("--mlp_run",        type=str, default=None, help="Path to runs_mlp/<timestamp>/ directory")
+    p.add_argument("--data_dir",       type=str, default="../csic_real_synth_load/prepared_data")
+    p.add_argument("--out_dir",        type=str, default="", help="Output directory (default: ./coherence/)")
+    p.add_argument("--all_tasks",      action="store_true", help="Evaluate all 25 tasks instead of val+test only")
+    p.add_argument("--specialist_id",  type=int, default=None, help="1-based specialist MLP index to include (e.g. 5)")
+    p.add_argument("--plot_clean",     action="store_true", help="Also save plots for tasks with no violations")
+    p.add_argument("--no_plots",       action="store_true", help="Skip all plots (faster, CSV only)")
 
     # Physical thresholds
     p.add_argument("--soc_min",        type=float, default=0.0)
     p.add_argument("--soc_max",        type=float, default=100.0)
-    p.add_argument("--spike_threshold",type=float, default=30.0,
-                   help="Max allowed |ΔSoC| between consecutive rows (%)")
-    p.add_argument("--mono_threshold", type=float, default=10.0,
-                   help="Max allowed SoC increase across trajectory (%)")
+    p.add_argument("--spike_threshold",type=float, default=30.0)
+    p.add_argument("--mono_threshold", type=float, default=10.0)
 
     # Evaluation window
     p.add_argument("--ctx_cycles",     type=int, default=60)
@@ -904,15 +984,17 @@ def main() -> None:
     )
 
     run(
-        anp_run_dir     = Path(args.anp_run) if args.anp_run else None,
-        mlp_run_dir     = Path(args.mlp_run) if args.mlp_run else None,
-        data_dir        = args.data_dir,
-        out_dir         = out_dir,
-        cfg             = cfg,
-        all_tasks       = args.all_tasks,
-        specialist_id   = args.specialist_id,
-        plot_violations = not args.no_plots,
-        plot_clean      = args.plot_clean,
+        anp_run_dir       = Path(args.anp_run)       if args.anp_run       else None,
+        anp_soc_run_dir   = Path(args.anp_soc_run)   if args.anp_soc_run   else None,
+        anp_cycle_run_dir = Path(args.anp_cycle_run) if args.anp_cycle_run else None,
+        mlp_run_dir       = Path(args.mlp_run)       if args.mlp_run       else None,
+        data_dir          = args.data_dir,
+        out_dir           = out_dir,
+        cfg               = cfg,
+        all_tasks         = args.all_tasks,
+        specialist_id     = args.specialist_id,
+        plot_violations   = not args.no_plots,
+        plot_clean        = args.plot_clean,
     )
 
 
