@@ -281,7 +281,7 @@ def train(cfg: Config) -> tuple:
     print(f"\n🚀  Starting training — {cfg.epochs} epochs  |  "
           f"{steps_per_epoch} steps/epoch  |  batch_size={cfg.batch_size}\n")
 
-    pbar = tqdm(range(1, cfg.epochs + 1), desc="Training", unit="epoch", dynamic_ncols=True)
+    pbar = tqdm(range(1, cfg.epochs + 1), desc="Train", unit="epoch", dynamic_ncols=True)
 
     for epoch in pbar:
         model.train()

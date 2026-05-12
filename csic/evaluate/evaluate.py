@@ -4,13 +4,18 @@ evaluate.py
 Unified validation script: compares all models on all tasks.
 
 Loads:
-    - 17 Specialist MLPs   (from runs_mlp/<run>/specialist_XX/best.pt)
-    - 1  DR-MLP            (from runs_mlp/<run>/dr_mlp/best.pt)
-    - 1  ANP               (from runs/<run>/best.pt)
+    - 17 Specialist MLPs    (from --mlp_run/specialist_XX/best.pt)
+    - 1  DR-MLP             (from --mlp_run/dr_mlp/best.pt)
+    - 1  ANP dual-target    (from --anp_run,       predicts SoC% + Cycle)
+    - 1  ANP SoC-only       (from --anp_soc_run,   predicts SoC% only)
+    - 1  ANP Cycle-only     (from --anp_cycle_run, predicts Cycle only)
+
+Single-target ANP models are evaluated on both targets: the target they were trained on is reported normally; the target they did not predict is NaN.
+This allows a fair side-by-side comparison in the same table and heatmaps.
 
 Evaluation protocol (identical for all models):
-    - Context window : first ctx_cycles × meas_per_cycle rows (default 1 500)
-    - Target window  : next  tgt_cycles × meas_per_cycle rows (default 1 500)
+    - Context window : first ctx_cycles × meas_per_cycle rows (default 1 800)
+    - Target window  : next  tgt_cycles × meas_per_cycle rows (default 1 800)
     - Tasks evaluated: all 25 synthetic datasets (17 train + 5 val + 3 test)
 
 Outputs (saved to --out_dir, default ./validation/<timestamp>/):
@@ -24,15 +29,11 @@ Outputs (saved to --out_dir, default ./validation/<timestamp>/):
 
 Usage:
     python evaluate.py \
-        --mlp_run  ../train/runs_mlp/20260511_121741 \
-        --anp_run  ../train/runs/20260511_113746 \
-        --data_dir ../csic_real_synth_load/prepared_data
-
-    # Override context/target window if different from defaults
-    python evaluate.py \\
-        --mlp_run  ../train/runs_mlp/20260501_120000 \\
-        --anp_run  ../train/runs/20260501_100000 \\
-        --ctx_cycles 50 --tgt_cycles 50 --meas_per_cycle 30
+        --mlp_run       ../train/runs_mlp/20260511_121741 \
+        --anp_run       ../train/runs/anp_all_20260512_124715 \
+        --anp_soc_run   "../train/runs/anp_SoC(pct)_20260512_114601" \
+        --anp_cycle_run ../train/runs/anp_Cycle_20260512_114703 \
+        --data_dir      ../csic_real_synth_load/prepared_data
 
 Location: csic/validation/evaluate.py
 ==============================================================================
@@ -235,38 +236,84 @@ def load_dr_mlp(
     return ("dr_mlp", model)
 
 
-def load_anp(
-    anp_run_dir: Path,
-    input_dim:   int,
-    output_dim:  int,
-    device:      torch.device,
-) -> Optional[Tuple[str, nn.Module]]:
+def load_anp_model(
+    run_dir:          Path,
+    input_dim:        int,
+    all_target_cols:  List[str],
+    device:           torch.device,
+    label:            str = "anp",
+) -> Optional[Tuple[str, nn.Module, List[str]]]:
     """
-    Load the ANP best checkpoint from a runs/<timestamp>/ directory.
+    Load an ANP checkpoint and detect which targets it was trained on.
 
-    Reads config.json for num_hidden; falls back to 128.
+    Reads config.json for num_hidden, attn_dropout, and target_col.
+    Handles both dual-target and single-target checkpoints transparently.
+
+    Args:
+        run_dir:         Path to the run directory containing best.pt.
+        input_dim:       Number of input features (from the pkl).
+        all_target_cols: All target columns present in the data (e.g. ['SoC (%)', 'Cycle']). 
+                         Used to determine model output_dim when target_col is known.
+        device:          Torch device.
+        label:           Display label used in result tables and plots.
 
     Returns:
-        ('anp', model) tuple, or None if checkpoint not found.
+        (label, model, model_target_cols) tuple, or None if not found.
+        model_target_cols is the subset of all_target_cols this model predicts.
     """
-    cfg_path   = anp_run_dir / "config.json"
-    num_hidden = 128
-    if cfg_path.exists():
-        with cfg_path.open() as f:
-            cfg = json.load(f)
-        num_hidden = cfg.get("num_hidden", 128)
+    ckpt_path = run_dir / "best.pt"
+    cfg_path  = run_dir / "config.json"
 
-    ckpt_path = anp_run_dir / "best.pt"
     if not ckpt_path.exists():
-        print(f"  ⚠  ANP: best.pt not found at {ckpt_path} — skipping")
+        print(f"  ⚠  {label}: best.pt not found at {ckpt_path} — skipping")
         return None
 
-    model = LatentModel(num_hidden=num_hidden, input_dim=input_dim, output_dim=output_dim)
-    ckpt  = torch.load(ckpt_path, map_location=device)
+    # Read architecture params from config
+    num_hidden   = 128
+    attn_dropout = 0.1
+    target_col   = "all"   # default: dual-target
+
+    if cfg_path.exists():
+        with cfg_path.open() as f:
+            cfg_data = json.load(f)
+        num_hidden   = (cfg_data.get("num_hidden")
+                        or cfg_data.get("params", {}).get("num_hidden", 128))
+        attn_dropout = cfg_data.get("attn_dropout", 0.1)
+        target_col   = cfg_data.get("target_col", "all")
+
+    # Determine which targets this model predicts
+    if target_col == "all":
+        model_target_cols = all_target_cols
+    elif target_col in all_target_cols:
+        model_target_cols = [target_col]
+    else:
+        # Fallback: infer from checkpoint output_dim
+        ckpt = torch.load(ckpt_path, map_location="cpu")
+        # Peek at the decoder output layer weight shape
+        out_dim_key = [k for k in ckpt["model"] if "mean_projection" in k
+                       and "weight" in k]
+        if out_dim_key:
+            out_dim = ckpt["model"][out_dim_key[0]].shape[0]
+            model_target_cols = all_target_cols[:out_dim]
+        else:
+            model_target_cols = all_target_cols
+
+    output_dim = len(model_target_cols)
+
+    model = LatentModel(
+        num_hidden=num_hidden,
+        input_dim=input_dim,
+        output_dim=output_dim,
+        attn_dropout=attn_dropout,
+    )
+    ckpt = torch.load(ckpt_path, map_location=device)
     model.load_state_dict(ckpt["model"])
     model.eval().to(device)
-    print(f"  ✓  ANP loaded ")
-    return ("anp", model)
+
+    val_mae = ckpt.get("val_MAE", ckpt.get("val_loss", "?"))
+    print(f"  ✓  {label:<22} targets={model_target_cols}  "
+          f"num_hidden={num_hidden}  val_MAE={val_mae}")
+    return (label, model, model_target_cols)
 
 
 # ==============================================================================
@@ -285,8 +332,7 @@ def eval_mlp(
     """
     Evaluate an MLP on a target window.
 
-    The MLP receives individual rows and predicts targets directly —
-    no context mechanism.
+    The MLP receives individual rows and predicts targets directly, no context mechanism.
 
     Args:
         model:         MLP in eval mode.
@@ -306,44 +352,59 @@ def eval_mlp(
 
 @torch.no_grad()
 def eval_anp(
-    model:         nn.Module,
-    X_ctx:         np.ndarray,
-    y_ctx:         np.ndarray,
-    X_tgt:         np.ndarray,
-    y_tgt:         np.ndarray,
-    device:        torch.device,
-    denorm_values: dict,
-    target_cols:   List[str],
+    model:             nn.Module,
+    X_ctx:             np.ndarray,
+    y_ctx:             np.ndarray,
+    X_tgt:             np.ndarray,
+    y_tgt:             np.ndarray,
+    device:            torch.device,
+    denorm_values:     dict,
+    all_target_cols:   List[str],
+    model_target_cols: List[str],
 ) -> Dict[str, float]:
     """
-    Evaluate the ANP on a single task using context → target prediction.
+    Evaluate an ANP on a single task using context → target prediction.
 
-    At inference the ANP uses the prior (context only, no posterior),
-    which is the realistic deployment scenario.
+    Handles both dual-target and single-target models transparently:
+    - y_ctx and y_tgt are filtered to the model's trained targets before being passed to the model, so input dimensions always match.
+    - Targets that the model does not predict are returned as NaN, allowing all models to be compared in the same result table.
 
     Args:
-        model:         ANP LatentModel in eval mode.
-        X_ctx:         Context feature array (Nc, D).
-        y_ctx:         Context target array  (Nc, O).
-        X_tgt:         Target feature array  (Nt, D).
-        y_tgt:         Target ground truth   (Nt, O).
-        device:        Torch device.
-        denorm_values: Denormalization scalers.
-        target_cols:   Target column names.
+        model:             ANP LatentModel in eval mode.
+        X_ctx / y_ctx:     Context features and targets (Nc, D/O_all).
+        X_tgt / y_tgt:     Target features and ground truth (Nt, D/O_all).
+        device:            Torch device.
+        denorm_values:     Denormalization scalers (full dict for all targets).
+        all_target_cols:   All targets present in the data.
+        model_target_cols: Subset of targets this model was trained on.
 
     Returns:
-        Dict {col: mae} in original units.
+        Dict {col: mae} for all_target_cols. NaN for unmodelled targets.
     """
-    ctx_x = torch.tensor(X_ctx, dtype=torch.float32).unsqueeze(0).to(device)  # (1,Nc,D)
-    ctx_y = torch.tensor(y_ctx, dtype=torch.float32).unsqueeze(0).to(device)  # (1,Nc,O)
-    tgt_x = torch.tensor(X_tgt, dtype=torch.float32).unsqueeze(0).to(device)  # (1,Nt,D)
-    tgt_y = torch.tensor(y_tgt, dtype=torch.float32).unsqueeze(0).to(device)  # (1,Nt,O)
+    # Filter y to only the targets this model knows about
+    if model_target_cols != all_target_cols:
+        col_idx   = [all_target_cols.index(c) for c in model_target_cols]
+        y_ctx_m   = y_ctx[:, col_idx]
+        y_tgt_m   = y_tgt[:, col_idx]
+    else:
+        y_ctx_m = y_ctx
+        y_tgt_m = y_tgt
 
-    # target_y=None forces the ANP to use the prior (inference mode)
+    ctx_x = torch.tensor(X_ctx,   dtype=torch.float32).unsqueeze(0).to(device)
+    ctx_y = torch.tensor(y_ctx_m, dtype=torch.float32).unsqueeze(0).to(device)
+    tgt_x = torch.tensor(X_tgt,   dtype=torch.float32).unsqueeze(0).to(device)
+
+    # Prior-only inference (no target_y → realistic deployment scenario)
     pred_mean, _, _, _, _ = model(ctx_x, ctx_y, tgt_x, target_y=None)
+    pred = pred_mean.squeeze(0).cpu().numpy()   # (Nt, O_model)
 
-    pred = pred_mean.squeeze(0).cpu().numpy()   # (Nt, O)
-    return compute_mae(pred, y_tgt, denorm_values, target_cols)
+    # Compute MAE only for the model's targets
+    mae_model = compute_mae(pred, y_tgt_m, denorm_values, model_target_cols)
+
+    # Fill full result dict: NaN for targets not predicted by this model
+    result = {col: float("nan") for col in all_target_cols}
+    result.update(mae_model)
+    return result
 
 
 # ==============================================================================
@@ -410,10 +471,11 @@ def plot_heatmaps(
         if val_count > 0:
             ax.axvline(train_count + val_count - 0.5, color="white", linewidth=2)
 
-        # Horizontal separator before ANP row
-        anp_idx = [i for i, m in enumerate(df.index) if m == "anp"]
-        if anp_idx:
-            ax.axhline(anp_idx[0] - 0.5, color="white", linewidth=2)
+        # Horizontal separator before first ANP row
+        anp_labels = {"anp", "anp_soc", "anp_cycle"}
+        anp_rows   = [i for i, m in enumerate(df.index) if m in anp_labels]
+        if anp_rows:
+            ax.axhline(min(anp_rows) - 0.5, color="white", linewidth=2)
 
         plt.colorbar(im, ax=ax, label=metric, shrink=0.8)
         ax.set_title(f"{metric} — all models × all tasks\n"
@@ -444,11 +506,13 @@ def plot_bar_comparison(
     x      = np.arange(len(models))
     width  = 0.25
 
-    # Color: specialists grey, dr_mlp orange, anp blue
+    # Color palette: specialists grey, DR-MLP orange, ANP variants in blue tones
     def bar_color(label: str) -> str:
-        if label == "anp":      return "#1C7293"
-        if label == "dr_mlp":   return "#D4860A"
-        return "#9AB8C8"
+        if label == "anp":          return "#1C7293"   # teal  — dual-target
+        if label == "anp_soc":      return "#028090"   # darker teal — SoC only
+        if label == "anp_cycle":    return "#21295C"   # navy  — Cycle only
+        if label == "dr_mlp":       return "#D4860A"   # amber
+        return "#9AB8C8"                               # grey  — specialists
 
     colors = [bar_color(m) for m in models]
 
@@ -490,31 +554,37 @@ def plot_bar_comparison(
 # ==============================================================================
 
 def run(
-    mlp_run_dir:    Path,
-    anp_run_dir:    Optional[Path],
-    data_dir:       str,
-    out_dir:        Path,
-    train_task_ids: List[int],
-    val_task_ids:   List[int],
-    test_task_ids:  List[int],
-    ctx_cycles:     int,
-    tgt_cycles:     int,
-    meas_per_cycle: int,
+    mlp_run_dir:     Path,
+    anp_run_dir:     Optional[Path],
+    anp_soc_run_dir: Optional[Path],
+    anp_cycle_run_dir: Optional[Path],
+    data_dir:        str,
+    out_dir:         Path,
+    train_task_ids:  List[int],
+    val_task_ids:    List[int],
+    test_task_ids:   List[int],
+    ctx_cycles:      int,
+    tgt_cycles:      int,
+    meas_per_cycle:  int,
 ) -> None:
     """
     Full validation pipeline.
 
+    Evaluates all MLP and ANP variants on every synthetic task and produces comparison tables, heatmaps, and bar charts.
+
     Args:
-        mlp_run_dir:    Path to runs_mlp/<timestamp>/ directory.
-        anp_run_dir:    Path to runs/<timestamp>/ directory (None to skip ANP).
-        data_dir:       Path to the directory containing prepared_data.pkl.
-        out_dir:        Output directory for validation results.
-        train_task_ids: 0-based dataset indices used as training tasks.
-        val_task_ids:   0-based dataset indices used as val tasks.
-        test_task_ids:  0-based dataset indices used as test tasks.
-        ctx_cycles:     Context window size in cycles.
-        tgt_cycles:     Target  window size in cycles.
-        meas_per_cycle: Measurements per cycle in the dataset.
+        mlp_run_dir:       Path to runs_mlp/<timestamp>/ directory.
+        anp_run_dir:       Path to dual-target ANP run (None to skip).
+        anp_soc_run_dir:   Path to SoC-only ANP run   (None to skip).
+        anp_cycle_run_dir: Path to Cycle-only ANP run  (None to skip).
+        data_dir:          Path to the directory containing prepared_data.pkl.
+        out_dir:           Output directory for validation results.
+        train_task_ids:    0-based dataset indices used as training tasks.
+        val_task_ids:      0-based dataset indices used as val tasks.
+        test_task_ids:     0-based dataset indices used as test tasks.
+        ctx_cycles:        Context window size in cycles.
+        tgt_cycles:        Target  window size in cycles.
+        meas_per_cycle:    Measurements per cycle in the dataset.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     device   = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -565,24 +635,45 @@ def run(
     # ── Load models ───────────────────────────────────────────────────────────
     print("\n📦  Loading models...")
 
-    all_models: List[Tuple[str, nn.Module, str]] = []
-    # (label, model, type)  type ∈ {"mlp", "anp"}
+    # Each entry: (label, model, type, model_target_cols)
+    # type ∈ {"mlp", "anp"}
+    # model_target_cols: which targets the model predicts
+    all_models: List[Tuple[str, nn.Module, str, List[str]]] = []
 
+    # MLP Specialists
     specialists = load_mlp_specialists(
         mlp_run_dir, input_dim, output_dim, device,
         n_specialists=len(train_task_ids),
     )
     for label, model in specialists:
-        all_models.append((label, model, "mlp"))
+        all_models.append((label, model, "mlp", target_cols))
 
+    # DR-MLP
     dr = load_dr_mlp(mlp_run_dir, input_dim, output_dim, device)
     if dr:
-        all_models.append((dr[0], dr[1], "mlp"))
+        all_models.append((dr[0], dr[1], "mlp", target_cols))
 
+    # ANP dual-target
     if anp_run_dir is not None:
-        anp = load_anp(anp_run_dir, input_dim, output_dim, device)
+        anp = load_anp_model(anp_run_dir, input_dim, target_cols, device, label="anp")
         if anp:
-            all_models.append((anp[0], anp[1], "anp"))
+            all_models.append((anp[0], anp[1], "anp", anp[2]))
+
+    # ANP SoC-only
+    if anp_soc_run_dir is not None:
+        anp_soc = load_anp_model(
+            anp_soc_run_dir, input_dim, target_cols, device, label="anp_soc"
+        )
+        if anp_soc:
+            all_models.append((anp_soc[0], anp_soc[1], "anp", anp_soc[2]))
+
+    # ANP Cycle-only
+    if anp_cycle_run_dir is not None:
+        anp_cyc = load_anp_model(
+            anp_cycle_run_dir, input_dim, target_cols, device, label="anp_cycle"
+        )
+        if anp_cyc:
+            all_models.append((anp_cyc[0], anp_cyc[1], "anp", anp_cyc[2]))
 
     print(f"\n  Total models loaded: {len(all_models)}")
 
@@ -592,33 +683,33 @@ def run(
     # results[model_label][task_label] = {col: mae}
     results: Dict[str, Dict[str, Dict[str, float]]] = {}
 
-    for m_label, model, m_type in all_models:
+    for m_label, model, m_type, m_target_cols in all_models:
         results[m_label] = {}
-        for task_idx, (t_label, (X_ctx, y_ctx, X_tgt, y_tgt)) in enumerate(
-            zip(task_labels, windows)
-        ):
+        for t_label, (X_ctx, y_ctx, X_tgt, y_tgt) in zip(task_labels, windows):
             if m_type == "mlp":
                 mae = eval_mlp(model, X_tgt, y_tgt, device, denorm_values, target_cols)
             else:
                 mae = eval_anp(
                     model, X_ctx, y_ctx, X_tgt, y_tgt,
-                    device, denorm_values, target_cols
+                    device, denorm_values, target_cols, m_target_cols
                 )
             results[m_label][t_label] = mae
 
-        # Quick progress summary
-        avg_soc = np.mean([
+        # Progress summary (NaN-safe)
+        avg_soc = np.nanmean([
             results[m_label][t].get("SoC (%)", float("nan"))
             for t in task_labels
         ])
-        avg_cyc = np.mean([
+        avg_cyc = np.nanmean([
             results[m_label][t].get("Cycle", float("nan"))
             for t in task_labels
         ])
-        print(f"  {m_label:<22}  avg SoC MAE={avg_soc:.3f}%  avg Cycle MAE={avg_cyc:.2f}")
+        soc_str = f"{avg_soc:.3f}%" if not np.isnan(avg_soc) else "  N/A  "
+        cyc_str = f"{avg_cyc:.2f}"  if not np.isnan(avg_cyc) else "  N/A  "
+        print(f"  {m_label:<22}  avg SoC MAE={soc_str}  avg Cycle MAE={cyc_str}")
 
     # ── Build DataFrames ──────────────────────────────────────────────────────
-    model_labels_ordered = [m for m, _, _ in all_models]
+    model_labels_ordered = [m for m, _, _, _ in all_models]
 
     soc_col   = "SoC (%)" if "SoC (%)" in target_cols else target_cols[0]
     cycle_col = "Cycle"   if "Cycle"   in target_cols else target_cols[-1]
@@ -668,34 +759,41 @@ def run(
     test_labels  = [t for t in task_labels if t.startswith("test_")]
 
     lines = []
-    lines.append("=" * 90)
-    lines.append("VALIDATION SUMMARY — average MAE per split (original units)")
-    lines.append("=" * 90)
+    lines.append("=" * 95)
+    lines.append("VALIDATION SUMMARY — average MAE per split (original units)  |  NaN = target not predicted")
+    lines.append("=" * 95)
     lines.append(
         f"\n{'Model':<22} {'Train SoC':>10} {'Train Cyc':>10} "
         f"{'Val SoC':>9} {'Val Cyc':>9} {'Test SoC':>10} {'Test Cyc':>10}"
     )
-    lines.append("-" * 90)
+    lines.append("-" * 95)
+
+    def avg(m_label, labels, col):
+        vals = [results[m_label].get(t, {}).get(col, float("nan")) for t in labels]
+        vals = [v for v in vals if not np.isnan(v)]
+        return np.mean(vals) if vals else float("nan")
+
+    def fmt(v):
+        return f"{v:>10.3f}" if not np.isnan(v) else f"{'N/A':>10}"
 
     for m_label in model_labels_ordered:
-        def avg(labels, col):
-            vals = [results[m_label].get(t, {}).get(col, float("nan")) for t in labels]
-            vals = [v for v in vals if not np.isnan(v)]
-            return np.mean(vals) if vals else float("nan")
-
-        sep = "  ←── ANP" if m_label == "anp" else ""
+        anp_tag = ""
+        if m_label == "anp":       anp_tag = "  ← ANP dual"
+        elif m_label == "anp_soc": anp_tag = "  ← ANP SoC-only"
+        elif m_label == "anp_cycle": anp_tag = "  ← ANP Cycle-only"
         lines.append(
-            f"{m_label:<22} {avg(train_labels, soc_col):>10.3f}"
-            f" {avg(train_labels, cycle_col):>10.2f}"
-            f" {avg(val_labels, soc_col):>9.3f}"
-            f" {avg(val_labels, cycle_col):>9.2f}"
-            f" {avg(test_labels, soc_col):>10.3f}"
-            f" {avg(test_labels, cycle_col):>10.2f}"
-            f"{sep}"
+            f"{m_label:<22}"
+            f" {fmt(avg(m_label, train_labels, soc_col))}"
+            f" {fmt(avg(m_label, train_labels, cycle_col))}"
+            f" {fmt(avg(m_label, val_labels, soc_col))}"
+            f" {fmt(avg(m_label, val_labels, cycle_col))}"
+            f" {fmt(avg(m_label, test_labels, soc_col))}"
+            f" {fmt(avg(m_label, test_labels, cycle_col))}"
+            f"{anp_tag}"
         )
 
     # Aggregate rows
-    lines.append("-" * 90)
+    lines.append("-" * 95)
     specialist_labels = [m for m in model_labels_ordered if m.startswith("specialist_")]
 
     def group_avg(model_list, split_labels, col):
@@ -709,19 +807,21 @@ def run(
 
     for group_label, group_models in [
         ("AVG Specialists",   specialist_labels),
-        ("DR-MLP",            ["dr_mlp"] if "dr_mlp" in model_labels_ordered else []),
-        ("ANP",               ["anp"]    if "anp"    in model_labels_ordered else []),
+        ("DR-MLP",            ["dr_mlp"]    if "dr_mlp"    in model_labels_ordered else []),
+        ("ANP (dual)",        ["anp"]       if "anp"       in model_labels_ordered else []),
+        ("ANP (SoC-only)",    ["anp_soc"]   if "anp_soc"   in model_labels_ordered else []),
+        ("ANP (Cycle-only)",  ["anp_cycle"] if "anp_cycle" in model_labels_ordered else []),
     ]:
         if not group_models:
             continue
         lines.append(
             f"{group_label:<22}"
-            f" {group_avg(group_models, train_labels, soc_col):>10.3f}"
-            f" {group_avg(group_models, train_labels, cycle_col):>10.2f}"
-            f" {group_avg(group_models, val_labels, soc_col):>9.3f}"
-            f" {group_avg(group_models, val_labels, cycle_col):>9.2f}"
-            f" {group_avg(group_models, test_labels, soc_col):>10.3f}"
-            f" {group_avg(group_models, test_labels, cycle_col):>10.2f}"
+            f" {fmt(group_avg(group_models, train_labels, soc_col))}"
+            f" {fmt(group_avg(group_models, train_labels, cycle_col))}"
+            f" {fmt(group_avg(group_models, val_labels, soc_col))}"
+            f" {fmt(group_avg(group_models, val_labels, cycle_col))}"
+            f" {fmt(group_avg(group_models, test_labels, soc_col))}"
+            f" {fmt(group_avg(group_models, test_labels, cycle_col))}"
         )
 
     summary = "\n".join(lines)
@@ -738,31 +838,25 @@ def run(
 # ==============================================================================
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="Unified validation — Specialist MLPs, DR-MLP and ANP",
+    p = argparse.ArgumentParser(description="Unified validation — Specialist MLPs, DR-MLP and ANP variants",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("--mlp_run",  type=str, required=True,
-                   help="Path to the runs_mlp/<timestamp>/ directory")
-    p.add_argument("--anp_run",  type=str, default=None,
-                   help="Path to the runs/<timestamp>/ directory (optional)")
-    p.add_argument("--data_dir", type=str,
-                   default="../csic_real_synth_load/prepared_data")
-    p.add_argument("--out_dir",  type=str, default="",
-                   help="Output directory (default: ./validation/<timestamp>/)")
+    p.add_argument("--mlp_run", type=str, required=True, help="Path to the runs_mlp/<timestamp>/ directory")
+    p.add_argument("--anp_run", type=str, default=None, help="Path to the dual-target ANP run directory (optional)")
+    p.add_argument("--anp_soc_run", type=str, default=None, help="Path to the SoC-only ANP run directory (optional)")
+    p.add_argument("--anp_cycle_run", type=str, default=None, help="Path to the Cycle-only ANP run directory (optional)")
+    p.add_argument("--data_dir", type=str, default="../csic_real_synth_load/prepared_data")
+    p.add_argument("--out_dir",  type=str, default="", help="Output directory (default: ./validation/results/)")
 
     # Evaluation window
-    p.add_argument("--ctx_cycles",     type=int, default=50)
-    p.add_argument("--tgt_cycles",     type=int, default=50)
+    p.add_argument("--ctx_cycles",     type=int, default=60)
+    p.add_argument("--tgt_cycles",     type=int, default=60)
     p.add_argument("--meas_per_cycle", type=int, default=30)
 
     # Task split (must match the training run)
-    p.add_argument("--train_ids", type=int, nargs="+",
-                   default=list(range(17)))
-    p.add_argument("--val_ids",   type=int, nargs="+",
-                   default=list(range(17, 22)))
-    p.add_argument("--test_ids",  type=int, nargs="+",
-                   default=list(range(22, 25)))
+    p.add_argument("--train_ids", type=int, nargs="+", default=list(range(17)))
+    p.add_argument("--val_ids",   type=int, nargs="+", default=list(range(17, 22)))
+    p.add_argument("--test_ids",  type=int, nargs="+", default=list(range(22, 25)))
 
     return p.parse_args()
 
@@ -770,21 +864,22 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args    = parse_args()
     out_dir = Path(args.out_dir) if args.out_dir else (
-        Path(__file__).resolve().parent / "results" )
+        Path(__file__).resolve().parent / "results")
 
     run(
-        mlp_run_dir    = Path(args.mlp_run),
-        anp_run_dir    = Path(args.anp_run) if args.anp_run else None,
-        data_dir       = args.data_dir,
-        out_dir        = out_dir,
-        train_task_ids = args.train_ids,
-        val_task_ids   = args.val_ids,
-        test_task_ids  = args.test_ids,
-        ctx_cycles     = args.ctx_cycles,
-        tgt_cycles     = args.tgt_cycles,
-        meas_per_cycle = args.meas_per_cycle,
+        mlp_run_dir       = Path(args.mlp_run),
+        anp_run_dir       = Path(args.anp_run)       if args.anp_run       else None,
+        anp_soc_run_dir   = Path(args.anp_soc_run)   if args.anp_soc_run   else None,
+        anp_cycle_run_dir = Path(args.anp_cycle_run) if args.anp_cycle_run else None,
+        data_dir          = args.data_dir,
+        out_dir           = out_dir,
+        train_task_ids    = args.train_ids,
+        val_task_ids      = args.val_ids,
+        test_task_ids     = args.test_ids,
+        ctx_cycles        = args.ctx_cycles,
+        tgt_cycles        = args.tgt_cycles,
+        meas_per_cycle    = args.meas_per_cycle,
     )
-
 
 if __name__ == "__main__":
     main()
