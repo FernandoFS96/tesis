@@ -26,6 +26,7 @@ import matplotlib
 matplotlib.use("Agg")  # non-interactive backend — safe for remote servers
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+from matplotlib.figure import Figure
 import numpy as np
 import pandas as pd
 import torch
@@ -270,8 +271,7 @@ def make_batch(
     """
     Build a training batch by stacking `batch_size` episodes along dim 0.
 
-    Tasks are sampled with replacement (valid in meta-learning; allows any
-    batch_size regardless of the number of available tasks).
+    Tasks are sampled with replacement (valid in meta-learning; allows any batch_size regardless of the number of available tasks).
 
     Args:
         tasks:      List of (X_df, y_df) tuples, already cycle-sorted.
@@ -288,7 +288,12 @@ def make_batch(
     """
     cx_list, cy_list, tx_list, ty_list = [], [], [], []
 
-    for X, y in random.choices(tasks, k=batch_size):
+    if batch_size <= len(tasks):
+        chosen = random.sample(tasks, k=batch_size)  # sin reemplazo
+    else:
+        chosen = random.choices(tasks, k=batch_size)  # con reemplazo si necesario
+
+    for X, y in chosen:
         cx, cy, tx, ty = make_episode_fixed(X, y, ctx_rows, tgt_rows, device)
         cx_list.append(cx)
         cy_list.append(cy)
@@ -428,7 +433,7 @@ _STYLE = {
 }
 
 
-def _save(fig: plt.Figure, path: Path, tight: bool = True) -> None:
+def _save(fig: Figure, path: Path, tight: bool = True) -> None:
     """Save figure and close it."""
     if tight:
         fig.tight_layout()
@@ -466,7 +471,8 @@ def plot_training_curves(
     # ── Helper: safe column access ────────────────────────────────────────────
     def col(name: str) -> Optional[np.ndarray]:
         if name in metrics_df.columns:
-            return metrics_df[name].values
+            # Use to_numpy() to ensure a plain numpy ndarray is returned
+            return metrics_df[name].to_numpy()
         return None
 
     def safe_col_name(target: str) -> str:

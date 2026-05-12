@@ -21,6 +21,7 @@ class LatentEncoder(nn.Module):
         super(LatentEncoder, self).__init__()
         self.input_projection = Linear(input_dim + output_dim, num_hidden)
         self.self_attentions = nn.ModuleList([Attention(num_hidden, attn_dropout=attn_dropout) for _ in range(2)])
+        self.pool_attn = nn.Linear(num_hidden, 1)
         self.penultimate_layer = Linear(num_hidden, num_hidden, w_init='relu')
         self.mu = Linear(num_hidden, num_latent)
         self.log_var = Linear(num_hidden, num_latent)
@@ -31,7 +32,9 @@ class LatentEncoder(nn.Module):
         for attention in self.self_attentions:
             encoder_input, _ = attention(encoder_input, encoder_input, encoder_input)
 
-        hidden = encoder_input.mean(dim=1)
+        scores  = self.pool_attn(encoder_input)           # (B, T, 1)
+        weights = t.softmax(scores, dim=1)            # (B, T, 1)
+        hidden  = (encoder_input * weights).sum(dim=1)    # (B, H)
         hidden = t.relu(self.penultimate_layer(hidden))
         mu = self.mu(hidden)
         log_var = self.log_var(hidden)

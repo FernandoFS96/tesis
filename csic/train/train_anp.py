@@ -19,14 +19,25 @@ Professor's approach (cycle-based context/target windows):
 
 Usage:
     # Full training run (defaults)
-    python train_anp.py
+        python train_anp.py
 
-    # Custom data path and hyperparameters
-    python train_anp.py --data_dir ../csic_real_synth_load/prepared_data \\
-                        --num_hidden 256 --epochs 500 --batch_size 8
+    # ANP dual-target (SoC% + Cycle)
+        python train_anp.py \
+            --data_dir ../csic_real_synth_load/prepared_data \
+            --target_col all
+    
+    # ANP solo SoC
+        python train_anp.py \
+            --data_dir ../csic_real_synth_load/prepared_data \
+            --target_col "SoC (%)"
+        
+    # ANP solo Cycle
+        python train_anp.py \
+            --data_dir ../csic_real_synth_load/prepared_data \
+            --target_col Cycle 
 
     # Evaluate a saved checkpoint
-    python train_anp.py --eval_only --ckpt ./runs/20260501_120000/best.pt
+        python train_anp.py --eval_only --ckpt ./runs/20260501_120000/best.pt
 
 Outputs (inside run_dir, auto-generated as ./runs/<timestamp>/):
     best.pt            Checkpoint with lowest validation loss
@@ -101,12 +112,12 @@ class Config:
     #   - Train : datasets 1-17  (diverse conditions, seen during training)
     #   - Val   : datasets 18-22 (intermediate OOD — never seen in training)
     #   - Test  : datasets 23-25 (extreme-parameter OOD — hardest evaluation)
-    #
-    # !! Update these indices once you have the temperature/CD/CC metadata
-    # !! so that the extreme-condition datasets land in test_task_ids.
+
     train_task_ids: List[int] = field(default_factory=lambda: list(range(17)))
     val_task_ids:   List[int] = field(default_factory=lambda: list(range(17, 22)))
     test_task_ids:  List[int] = field(default_factory=lambda: list(range(22, 25)))
+
+    target_col: str = "all"   # "all" | "SoC (%)" | "Cycle"
 
     # ── Model ─────────────────────────────────────────────────────────────────
     num_hidden: int = 128   # Hidden dimension for all encoders and decoder
@@ -116,8 +127,8 @@ class Config:
     # ── Episode construction (professor's cycle-based approach) ────────────────
     # Context  = first ctx_cycles complete cycles of the trajectory
     # Target   = next  tgt_cycles complete cycles (immediately after context)
-    ctx_cycles:              int = 50   # cycles used as context
-    tgt_cycles:              int = 50   # cycles used as target during training
+    ctx_cycles:              int = 60   # cycles used as context
+    tgt_cycles:              int = 60   # cycles used as target during training
     measurements_per_cycle:  int = 30   # measurements per cycle in the dataset
 
     # ── Training ──────────────────────────────────────────────────────────────
@@ -125,7 +136,7 @@ class Config:
     early_stopping:     int   = 200    # patience: epochs without val improvement
     episodes_per_epoch: int   = 100    # total episodes drawn per epoch
     batch_size:         int   = 4      # episodes per GPU forward pass
-    lr:                 float = 1e-4
+    lr:                 float = 5e-4
     lr_min:             float = 5e-5   # cosine annealing minimum LR
     attn_dropout:       float = 0.1    # dropout in attention layers
     beta:               float = 1.0    # KL weight in ELBO: loss = NLL + beta*KL
@@ -142,7 +153,8 @@ class Config:
     def __post_init__(self) -> None:
         if not self.run_dir:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            self.run_dir = f"./runs/{ts}"
+            target = self.target_col.replace(" ", "").replace("%", "pct")
+            self.run_dir = f"./runs/anp_{target}_{ts}"
 
     @property
     def ctx_rows(self) -> int:
@@ -167,10 +179,8 @@ def train(cfg: Config) -> tuple:
         1. Set random seeds for reproducibility.
         2. Load and validate data; split into train/val/test tasks.
         3. Instantiate the ANP model, Adam optimizer, and cosine LR scheduler.
-        4. For each epoch, draw steps_per_epoch batches, compute ELBO loss,
-           and back-propagate.
-        5. Every val_every epochs, evaluate on the val set and track the best
-           checkpoint. Early stopping if patience is exceeded.
+        4. For each epoch, draw steps_per_epoch batches, compute ELBO loss, and back-propagate.
+        5. Every val_every epochs, evaluate on the val set and track the best checkpoint. Early stopping if patience is exceeded.
         6. After training, evaluate the best checkpoint on the test set.
         7. Generate and save training plots.
 
@@ -201,15 +211,26 @@ def train(cfg: Config) -> tuple:
     data = load_prepared_data(cfg.data_dir)
     validate_targets(data)
 
+    if cfg.target_col != "all":
+        for split_key in ["normalized_synth_datasets"]:
+            data[split_key] = [
+                (X, y[[cfg.target_col]]) for X, y in data[split_key]
+            ]
+        rd = data["normalized_real_dataset"]
+        data["normalized_real_dataset"] = (rd[0], rd[1][[cfg.target_col]])
+        # Actualizar también denorm_values para que solo tenga el target seleccionado
+        for k in ["y_mean", "y_std"]:
+            data["denorm_values"][k] = {
+                cfg.target_col: data["denorm_values"][k][cfg.target_col]
+            }
+
     target_cols    = list(data["normalized_synth_datasets"][0][1].columns)
     cfg.output_dim = len(target_cols)
     cfg.input_dim  = data["normalized_synth_datasets"][0][0].shape[1]
-    print(f"   input_dim  = {cfg.input_dim}")
-    print(f"   output_dim = {cfg.output_dim}  {target_cols}")
-    print(f"   ctx_rows   = {cfg.ctx_rows}  "
-          f"({cfg.ctx_cycles} cycles × {cfg.measurements_per_cycle} meas/cycle)")
-    print(f"   tgt_rows   = {cfg.tgt_rows}  "
-          f"({cfg.tgt_cycles} cycles × {cfg.measurements_per_cycle} meas/cycle)")
+    print(f" input_dim  = {cfg.input_dim}")
+    print(f" output_dim = {cfg.output_dim}  {target_cols}")
+    print(f" ctx_rows   = {cfg.ctx_rows} ({cfg.ctx_cycles} cycles × {cfg.measurements_per_cycle} meas/cycle)")
+    print(f" tgt_rows   = {cfg.tgt_rows} ({cfg.tgt_cycles} cycles × {cfg.measurements_per_cycle} meas/cycle)")
 
     train_tasks, val_tasks, test_tasks = get_task_splits(
         data, cfg.train_task_ids, cfg.val_task_ids, cfg.test_task_ids
@@ -260,7 +281,7 @@ def train(cfg: Config) -> tuple:
     print(f"\n🚀  Starting training — {cfg.epochs} epochs  |  "
           f"{steps_per_epoch} steps/epoch  |  batch_size={cfg.batch_size}\n")
 
-    pbar = tqdm(range(1, cfg.epochs + 1), desc="Training", unit="epoch")
+    pbar = tqdm(range(1, cfg.epochs + 1), desc="Training", unit="epoch", dynamic_ncols=True)
 
     for epoch in pbar:
         model.train()
@@ -317,11 +338,18 @@ def train(cfg: Config) -> tuple:
             )
             row.update(val_metrics)
 
-            #early stopping over SoC MAE desnormalized back to percentage points (easier to interpret than raw loss)
-            current_val = val_metrics.get("val/mae_SoC_pct", float("inf")) #current_val = val_metrics.get("val/loss", float("inf"))
+            # early stopping over SoC MAE desnormalized back to percentage points
+            if cfg.target_col == "Cycle":
+                es_metric_key = "val/mae_Cycle"
+            elif cfg.target_col == "SoC (%)":
+                es_metric_key = "val/mae_SoC_pct"
+            else:  # "all" — mantener SoC como criterio principal
+                es_metric_key = "val/mae_SoC_pct"
+
+            current_val = val_metrics.get(es_metric_key, float("inf"))
 
             if current_val < best_val_MAE:
-                best_val_MAE          = current_val
+                best_val_MAE = current_val
                 epochs_without_improve = 0
                 torch.save(
                     {
@@ -344,14 +372,18 @@ def train(cfg: Config) -> tuple:
         # ── Progress bar ──────────────────────────────────────────────────────
         postfix: dict = {
             "loss": f"{train_loss:.2f}",
-            "nll":  f"{train_nll:.2f}",
-            "kl":   f"{train_kl:.3f}",
+            #"nll":  f"{train_nll:.2f}",
+            #"kl":   f"{train_kl:.3f}",
             #"lr":   f"{lr_now:.1e}",
         }
         if "val/loss" in row:
-            postfix["val_loss"]      = f"{row['val/loss']:.2f}"
-            postfix["mae_soc"]  = f"{row.get('val/mae_SoC_pct', float('nan')):.2f}"
-            postfix["mae_cyc"]  = f"{row.get('val/mae_Cycle', float('nan')):.2f}"
+            postfix["val_loss"] = f"{row['val/loss']:.2f}"
+            if "val/mae_SoC_pct" in row:
+                postfix["mae_soc"] = f"{row['val/mae_SoC_pct']:.2f}"
+                postfix["best_soc"] = f"{best_val_MAE:.2f}"
+            if "val/mae_Cycle" in row:
+                postfix["mae_cyc"] = f"{row['val/mae_Cycle']:.2f}"
+                postfix["best_cyc"] = f"{best_val_MAE:.2f}"
             postfix["E_S"] = f"{epochs_without_improve}/{cfg.early_stopping}"
         pbar.set_postfix(postfix)
 
@@ -420,6 +452,17 @@ def eval_only(cfg: Config) -> None:
     data = load_prepared_data(cfg.data_dir)
     validate_targets(data)
 
+    if cfg.target_col != "all":
+        data["normalized_synth_datasets"] = [
+            (X, y[[cfg.target_col]]) for X, y in data["normalized_synth_datasets"]
+        ]
+        rd = data["normalized_real_dataset"]
+        data["normalized_real_dataset"] = (rd[0], rd[1][[cfg.target_col]])
+        for k in ["y_mean", "y_std"]:
+            data["denorm_values"][k] = {
+                cfg.target_col: data["denorm_values"][k][cfg.target_col]
+            }
+
     target_cols    = list(data["normalized_synth_datasets"][0][1].columns)
     cfg.output_dim = len(target_cols)
     cfg.input_dim  = data["normalized_synth_datasets"][0][0].shape[1]
@@ -469,6 +512,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--data_dir",       type=str,   default=None)
     p.add_argument("--run_dir",        type=str,   default="")
+    p.add_argument("--target_col",     type=str, default="all", choices=["all", "SoC (%)", "Cycle"], help="Target a predecir: 'all' entrena ambos, o uno solo")
     p.add_argument("--num_hidden",     type=int,   default=128)
     p.add_argument("--ctx_cycles",     type=int,   default=60)
     p.add_argument("--tgt_cycles",     type=int,   default=60)
@@ -499,6 +543,7 @@ def main() -> None:
     cfg = Config(
         data_dir               = args.data_dir or Config.data_dir,
         run_dir                = args.run_dir,
+        target_col             = args.target_col,
         num_hidden             = args.num_hidden,
         ctx_cycles             = args.ctx_cycles,
         tgt_cycles             = args.tgt_cycles,
