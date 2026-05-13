@@ -29,11 +29,13 @@ Outputs (saved to --out_dir, default ./validation/<timestamp>/):
 
 Usage:
     python evaluate.py \
-        --mlp_run       ../train/runs_mlp/20260511_121741 \
-        --anp_run       ../train/runs/anp_all_20260512_124715 \
-        --anp_soc_run   "../train/runs/anp_SoC(pct)_20260512_114601" \
-        --anp_cycle_run ../train/runs/anp_Cycle_20260512_114703 \
-        --data_dir      ../csic_real_synth_load/prepared_data
+        --mlp_run           ../train/runs_mlp/20260511_121741 \
+        --anp_run           ../train/runs/anp_all/20260512_124715 \
+        --anp_soc_run       ../train/runs/anp_SoC/20260512_114601 \
+        --anp_cycle_run     ../train/runs/anp_Cycle/20260512_114703 \
+        --anp_soc_reduced_run   ../train/runs/anp_SoC_reduced/20260513_110544 \
+        --anp_cycle_reduced_run ../train/runs/anp_Cycle_reduced/20260513_114323 \
+        --data_dir          ../csic_real_synth_load/prepared_data
 
 Location: csic/validation/evaluate.py
 ==============================================================================
@@ -71,6 +73,9 @@ from train.train_utils import (
     validate_targets,
     get_task_splits,
     sort_task_by_cycle,
+    REDUCED_FEATURE_SETS,
+    get_feature_indices,
+    filter_x,
 )
 
 # Import model architectures
@@ -242,24 +247,11 @@ def load_anp_model(
     all_target_cols:  List[str],
     device:           torch.device,
     label:            str = "anp",
-) -> Optional[Tuple[str, nn.Module, List[str]]]:
+) -> Optional[Tuple[str, nn.Module, List[str], Optional[List[str]]]]:
     """
-    Load an ANP checkpoint and detect which targets it was trained on.
-
-    Reads config.json for num_hidden, attn_dropout, and target_col.
-    Handles both dual-target and single-target checkpoints transparently.
-
-    Args:
-        run_dir:         Path to the run directory containing best.pt.
-        input_dim:       Number of input features (from the pkl).
-        all_target_cols: All target columns present in the data (e.g. ['SoC (%)', 'Cycle']). 
-                         Used to determine model output_dim when target_col is known.
-        device:          Torch device.
-        label:           Display label used in result tables and plots.
-
-    Returns:
-        (label, model, model_target_cols) tuple, or None if not found.
-        model_target_cols is the subset of all_target_cols this model predicts.
+    Load an ANP checkpoint and detect which targets and features it was trained on.
+    Returns (label, model, model_target_cols, feature_cols) or None if not found.
+    feature_cols is None for full-feature models, or a list of column names for reduced-feature models.
     """
     ckpt_path = run_dir / "best.pt"
     cfg_path  = run_dir / "config.json"
@@ -268,10 +260,10 @@ def load_anp_model(
         print(f"  ⚠  {label}: best.pt not found at {ckpt_path} — skipping")
         return None
 
-    # Read architecture params from config
     num_hidden   = 128
     attn_dropout = 0.1
-    target_col   = "all"   # default: dual-target
+    target_col   = "all"
+    use_reduced  = False
 
     if cfg_path.exists():
         with cfg_path.open() as f:
@@ -280,6 +272,7 @@ def load_anp_model(
                         or cfg_data.get("params", {}).get("num_hidden", 128))
         attn_dropout = cfg_data.get("attn_dropout", 0.1)
         target_col   = cfg_data.get("target_col", "all")
+        use_reduced  = cfg_data.get("use_reduced_features", False)
 
     # Determine which targets this model predicts
     if target_col == "all":
@@ -287,22 +280,19 @@ def load_anp_model(
     elif target_col in all_target_cols:
         model_target_cols = [target_col]
     else:
-        # Fallback: infer from checkpoint output_dim
-        ckpt = torch.load(ckpt_path, map_location="cpu")
-        # Peek at the decoder output layer weight shape
-        out_dim_key = [k for k in ckpt["model"] if "mean_projection" in k
-                       and "weight" in k]
-        if out_dim_key:
-            out_dim = ckpt["model"][out_dim_key[0]].shape[0]
-            model_target_cols = all_target_cols[:out_dim]
-        else:
-            model_target_cols = all_target_cols
+        raw = torch.load(ckpt_path, map_location="cpu")
+        out_keys = [k for k in raw["model"] if "mean_projection" in k and "weight" in k]
+        out_dim  = raw["model"][out_keys[0]].shape[0] if out_keys else len(all_target_cols)
+        model_target_cols = all_target_cols[:out_dim]
 
-    output_dim = len(model_target_cols)
+    # Determine which X features this model was trained on
+    feature_cols    = REDUCED_FEATURE_SETS.get(target_col) if use_reduced else None
+    model_input_dim = len(feature_cols) if feature_cols is not None else input_dim
+    output_dim      = len(model_target_cols)
 
     model = LatentModel(
         num_hidden=num_hidden,
-        input_dim=input_dim,
+        input_dim=model_input_dim,
         output_dim=output_dim,
         attn_dropout=attn_dropout,
     )
@@ -311,9 +301,10 @@ def load_anp_model(
     model.eval().to(device)
 
     val_mae = ckpt.get("val_MAE", ckpt.get("val_loss", "?"))
+    feat_str = f"reduced({model_input_dim})" if feature_cols else f"all({input_dim})"
     print(f"  ✓  {label:<22} targets={model_target_cols}  "
-          f"num_hidden={num_hidden}  val_MAE={val_mae}")
-    return (label, model, model_target_cols)
+          f"num_hidden={num_hidden}  features={feat_str}  val_MAE={val_mae}")
+    return (label, model, model_target_cols, feature_cols)
 
 
 # ==============================================================================
@@ -558,6 +549,8 @@ def run(
     anp_run_dir:     Optional[Path],
     anp_soc_run_dir: Optional[Path],
     anp_cycle_run_dir: Optional[Path],
+    anp_soc_reduced_run_dir: Optional[Path],
+    anp_cycle_reduced_run_dir: Optional[Path],
     data_dir:        str,
     out_dir:         Path,
     train_task_ids:  List[int],
@@ -610,6 +603,7 @@ def run(
     }
     print(f"   input_dim={input_dim}  output_dim={output_dim}  targets={target_cols}")
 
+    x_col_names = list(data["normalized_synth_datasets"][0][0].columns)
     # All 25 tasks evaluated
     all_task_ids = list(range(len(data["normalized_synth_datasets"])))
     all_tasks    = [
@@ -638,7 +632,7 @@ def run(
     # Each entry: (label, model, type, model_target_cols)
     # type ∈ {"mlp", "anp"}
     # model_target_cols: which targets the model predicts
-    all_models: List[Tuple[str, nn.Module, str, List[str]]] = []
+    all_models: List[Tuple[str, nn.Module, str, List[str], Optional[List[str]]]] = []
 
     # MLP Specialists
     specialists = load_mlp_specialists(
@@ -646,18 +640,18 @@ def run(
         n_specialists=len(train_task_ids),
     )
     for label, model in specialists:
-        all_models.append((label, model, "mlp", target_cols))
+        all_models.append((label, model, "mlp", target_cols, None))
 
     # DR-MLP
     dr = load_dr_mlp(mlp_run_dir, input_dim, output_dim, device)
     if dr:
-        all_models.append((dr[0], dr[1], "mlp", target_cols))
+        all_models.append((dr[0], dr[1], "mlp", target_cols, None))
 
     # ANP dual-target
     if anp_run_dir is not None:
         anp = load_anp_model(anp_run_dir, input_dim, target_cols, device, label="anp")
         if anp:
-            all_models.append((anp[0], anp[1], "anp", anp[2]))
+            all_models.append((anp[0], anp[1], "anp", anp[2], anp[3]))
 
     # ANP SoC-only
     if anp_soc_run_dir is not None:
@@ -665,7 +659,8 @@ def run(
             anp_soc_run_dir, input_dim, target_cols, device, label="anp_soc"
         )
         if anp_soc:
-            all_models.append((anp_soc[0], anp_soc[1], "anp", anp_soc[2]))
+            all_models.append((anp_soc[0], anp_soc[1], "anp", anp_soc[2], anp_soc[3]))
+
 
     # ANP Cycle-only
     if anp_cycle_run_dir is not None:
@@ -673,7 +668,27 @@ def run(
             anp_cycle_run_dir, input_dim, target_cols, device, label="anp_cycle"
         )
         if anp_cyc:
-            all_models.append((anp_cyc[0], anp_cyc[1], "anp", anp_cyc[2]))
+            all_models.append((anp_cyc[0], anp_cyc[1], "anp", anp_cyc[2], anp_cyc[3]))
+    
+    # ANP SoC-only — reduced features
+    if anp_soc_reduced_run_dir is not None:
+        anp_soc_r = load_anp_model(
+            anp_soc_reduced_run_dir, input_dim, target_cols,
+            device, label="anp_soc_reduced"
+        )
+        if anp_soc_r:
+            all_models.append((anp_soc_r[0], anp_soc_r[1], "anp",
+                                anp_soc_r[2], anp_soc_r[3]))
+
+    # ANP Cycle-only — reduced features
+    if anp_cycle_reduced_run_dir is not None:
+        anp_cyc_r = load_anp_model(
+            anp_cycle_reduced_run_dir, input_dim, target_cols,
+            device, label="anp_cycle_reduced"
+        )
+        if anp_cyc_r:
+            all_models.append((anp_cyc_r[0], anp_cyc_r[1], "anp",
+                                anp_cyc_r[2], anp_cyc_r[3]))
 
     print(f"\n  Total models loaded: {len(all_models)}")
 
@@ -683,14 +698,19 @@ def run(
     # results[model_label][task_label] = {col: mae}
     results: Dict[str, Dict[str, Dict[str, float]]] = {}
 
-    for m_label, model, m_type, m_target_cols in all_models:
+    for m_label, model, m_type, m_target_cols, feat_cols in all_models:
+        feat_idx = get_feature_indices(x_col_names, feat_cols)
         results[m_label] = {}
         for t_label, (X_ctx, y_ctx, X_tgt, y_tgt) in zip(task_labels, windows):
             if m_type == "mlp":
                 mae = eval_mlp(model, X_tgt, y_tgt, device, denorm_values, target_cols)
             else:
                 mae = eval_anp(
-                    model, X_ctx, y_ctx, X_tgt, y_tgt,
+                    model,
+                    filter_x(X_ctx, feat_idx),   # ← filtrado aquí
+                    y_ctx,
+                    filter_x(X_tgt, feat_idx),   # ← filtrado aquí
+                    y_tgt,
                     device, denorm_values, target_cols, m_target_cols
                 )
             results[m_label][t_label] = mae
@@ -709,7 +729,7 @@ def run(
         print(f"  {m_label:<22}  avg SoC MAE={soc_str}  avg Cycle MAE={cyc_str}")
 
     # ── Build DataFrames ──────────────────────────────────────────────────────
-    model_labels_ordered = [m for m, _, _, _ in all_models]
+    model_labels_ordered = [m for m, _, _, _, _ in all_models]
 
     soc_col   = "SoC (%)" if "SoC (%)" in target_cols else target_cols[0]
     cycle_col = "Cycle"   if "Cycle"   in target_cols else target_cols[-1]
@@ -858,6 +878,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--val_ids",   type=int, nargs="+", default=list(range(17, 22)))
     p.add_argument("--test_ids",  type=int, nargs="+", default=list(range(22, 25)))
 
+    p.add_argument("--anp_soc_reduced_run",   type=str, default=None, help="Path to SoC-only ANP run trained with reduced features")
+    p.add_argument("--anp_cycle_reduced_run", type=str, default=None, help="Path to Cycle-only ANP run trained with reduced features")
+
     return p.parse_args()
 
 
@@ -871,6 +894,8 @@ def main() -> None:
         anp_run_dir       = Path(args.anp_run)       if args.anp_run       else None,
         anp_soc_run_dir   = Path(args.anp_soc_run)   if args.anp_soc_run   else None,
         anp_cycle_run_dir = Path(args.anp_cycle_run) if args.anp_cycle_run else None,
+        anp_soc_reduced_run_dir   = Path(args.anp_soc_reduced_run)   if args.anp_soc_reduced_run   else None,
+        anp_cycle_reduced_run_dir = Path(args.anp_cycle_reduced_run) if args.anp_cycle_reduced_run else None,
         data_dir          = args.data_dir,
         out_dir           = out_dir,
         train_task_ids    = args.train_ids,

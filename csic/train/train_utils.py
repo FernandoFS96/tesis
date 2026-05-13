@@ -746,3 +746,33 @@ def apply_feature_reduction(
     }
 
     return updated_data
+
+def get_feature_indices(
+    x_col_names:  List[str],
+    feature_cols: Optional[List[str]],
+) -> Optional[List[int]]:
+    """
+    Return the numpy column indices corresponding to feature_cols.
+    Returns None when feature_cols is None (no filtering needed).
+
+    Args:
+        x_col_names:  Ordered list of all X column names in the dataset.
+        feature_cols: Subset of column names to keep, or None.
+
+    Raises:
+        ValueError: if any name in feature_cols is absent from x_col_names.
+    """
+    if feature_cols is None:
+        return None
+    missing = [c for c in feature_cols if c not in x_col_names]
+    if missing:
+        raise ValueError(
+            f"Feature columns not found in data X: {missing}\n"
+            f"Check that REDUCED_FEATURE_SETS names match the pkl column names."
+        )
+    return [x_col_names.index(c) for c in feature_cols]
+
+
+def filter_x(X: np.ndarray, feat_idx: Optional[List[int]]) -> np.ndarray:
+    """Return X[:, feat_idx] if feat_idx is not None, else X unchanged."""
+    return X if feat_idx is None else X[:, feat_idx]
