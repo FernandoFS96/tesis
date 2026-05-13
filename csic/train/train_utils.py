@@ -652,3 +652,97 @@ def generate_all_plots(
     metrics_df = pd.read_csv(metrics_path)
     plots_dir  = run_dir / "plots"
     plot_training_curves(metrics_df, plots_dir, target_cols)
+
+# ==============================================================================
+# FEATURE REDUCTION — RF-based compact feature sets
+# (from Experiment 6, V3 synthetic datasets)
+# ==============================================================================
+
+# Feature sets identified by Random Forest feature importance (MRR ranking).
+# Keys match the target_col values used in Config.
+REDUCED_FEATURE_SETS: dict = {
+    "SoC (%)": [
+        "Potential",
+        "Phase_45", "Phase_46", "Phase_47", "Phase_48", "Phase_49",  # very-low freq
+        "Phase_3",  "Phase_4",  "Phase_5",  "Phase_6",  "Phase_7",   # high freq
+    ],
+    "Cycle": [
+        "Phase_30", "Phase_31", "Phase_27", "Phase_28", "Phase_26",  # mid freq
+        "Zmag_35",  "Zmag_36",  "Zmag_37",  "Zmag_40",               # low freq magnitude
+        "Zim_33",   "Zre_38",   "Zre_36",                            # low freq cartesian
+    ],
+    "all": None,  # no filtering — use all 201 features
+}
+
+def apply_feature_reduction(
+    data:       dict,
+    target_col: str,
+) -> dict:
+    """
+    Filter X features in the prepared dataset to the compact set identified by the RF feature importance study (Experiment 6, V3 synthetic datasets).
+
+    Filtering is only applied when target_col is 'SoC (%)' or 'Cycle'. For target_col='all' the data is returned unchanged.
+
+    The function modifies a shallow copy of the data dict, the original is not mutated.
+
+    Args:
+        data:       Dictionary returned by load_prepared_data().
+        target_col: Which target is being trained. Controls which feature subset is selected ('SoC (%)', 'Cycle', or 'all').
+
+    Returns:
+        data dict with X DataFrames filtered to the selected feature columns.
+        The 'denorm_values' entry is updated to only contain X stats for the kept columns (y_mean / y_std are not touched).
+
+    Raises:
+        ValueError: if any requested feature is not found in the dataset X.
+    """
+    feature_cols = REDUCED_FEATURE_SETS.get(target_col)
+
+    if feature_cols is None:
+        # 'all' or unknown target — no filtering
+        return data
+
+    # Validate that all requested features exist in the data
+    sample_X = data["normalized_synth_datasets"][0][0]
+    missing   = [f for f in feature_cols if f not in sample_X.columns]
+    if missing:
+        raise ValueError(
+            f"\nFeature reduction failed — the following columns were not found in the dataset X:\n  {missing}\n"
+            f"Available columns (first 20): {list(sample_X.columns[:20])}\n"
+            f"Check that the feature names match exactly (case-sensitive)."
+        )
+
+    print(f"\n🔬  Feature reduction active for target '{target_col}'")
+    print(f"   Using {len(feature_cols)} / {len(sample_X.columns)} features:")
+    print(f"   {feature_cols}")
+
+    # Filter all synthetic datasets
+    filtered_synth = [
+        (X[feature_cols], y)
+        for X, y in data["normalized_synth_datasets"]
+    ]
+
+    # Filter real dataset if present
+    real_X, real_y = data["normalized_real_dataset"]
+    filtered_real  = (real_X[feature_cols], real_y)
+
+    # Update denorm_values for X (only keep stats for selected features)
+    orig_x_mean = data["denorm_values"]["y_mean"]  # note: y_mean/y_std are for y
+    orig_x_mean_X = data["denorm_values"].get("X_mean", {})
+    orig_x_std_X  = data["denorm_values"].get("X_std",  {})
+    filtered_x_mean = {k: v for k, v in orig_x_mean_X.items() if k in feature_cols}
+    filtered_x_std  = {k: v for k, v in orig_x_std_X.items()  if k in feature_cols}
+
+    # Build updated data dict (shallow copy — y and denorm y are unchanged)
+    updated_data = {
+        **data,
+        "normalized_synth_datasets": filtered_synth,
+        "normalized_real_dataset":   filtered_real,
+        "denorm_values": {
+            **data["denorm_values"],
+            "X_mean": filtered_x_mean,
+            "X_std":  filtered_x_std,
+        },
+    }
+
+    return updated_data

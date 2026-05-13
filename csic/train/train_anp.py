@@ -29,12 +29,14 @@ Usage:
     # ANP solo SoC
         python train_anp.py \
             --data_dir ../csic_real_synth_load/prepared_data \
-            --target_col "SoC (%)"
+            --target_col "SoC (%)" \
+            --reduced_features
         
     # ANP solo Cycle
         python train_anp.py \
             --data_dir ../csic_real_synth_load/prepared_data \
-            --target_col Cycle 
+            --target_col Cycle \
+            --reduced_features
 
     # Evaluate a saved checkpoint
         python train_anp.py --eval_only --ckpt ./runs/20260501_120000/best.pt
@@ -119,6 +121,11 @@ class Config:
 
     target_col: str = "all"   # "all" | "SoC (%)" | "Cycle"
 
+    # ── Feature selection ─────────────────────────────────────────────────────────
+    # When True, filters X to the compact RF-identified feature set for target_col.
+    # Only affects when target_col is 'SoC (%)' or 'Cycle'. Ignored when target_col='all'.
+    use_reduced_features: bool = False
+
     # ── Model ─────────────────────────────────────────────────────────────────
     num_hidden: int = 128   # Hidden dimension for all encoders and decoder
     input_dim:  int = 201   # Number of X features (auto-detected from pkl)
@@ -153,8 +160,10 @@ class Config:
     def __post_init__(self) -> None:
         if not self.run_dir:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            target = self.target_col.replace(" ", "").replace("%", "pct")
-            self.run_dir = f"./runs/anp_{target}_{ts}"
+            target = self.target_col.replace(" ", "").replace("%", "")
+            if self.use_reduced_features and self.target_col != "all":
+                target += "_reduced"
+            self.run_dir = f"./runs/anp_{target}/{ts}"
 
     @property
     def ctx_rows(self) -> int:
@@ -211,6 +220,11 @@ def train(cfg: Config) -> tuple:
     data = load_prepared_data(cfg.data_dir)
     validate_targets(data)
 
+    # ── Feature reduction (optional) ──────────────────────────────────────────────
+    if cfg.use_reduced_features:
+        from train_utils import apply_feature_reduction
+        data = apply_feature_reduction(data, cfg.target_col)
+    # ── Target filtering ──────────────────────────────────────────────────────────
     if cfg.target_col != "all":
         for split_key in ["normalized_synth_datasets"]:
             data[split_key] = [
@@ -452,6 +466,11 @@ def eval_only(cfg: Config) -> None:
     data = load_prepared_data(cfg.data_dir)
     validate_targets(data)
 
+    # ── Feature reduction (optional) ──────────────────────────────────────────────
+    if cfg.use_reduced_features:
+        from train_utils import apply_feature_reduction
+        data = apply_feature_reduction(data, cfg.target_col)
+
     if cfg.target_col != "all":
         data["normalized_synth_datasets"] = [
             (X, y[[cfg.target_col]]) for X, y in data["normalized_synth_datasets"]
@@ -513,6 +532,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--data_dir",       type=str,   default=None)
     p.add_argument("--run_dir",        type=str,   default="")
     p.add_argument("--target_col",     type=str, default="all", choices=["all", "SoC (%)", "Cycle"], help="Target a predecir: 'all' entrena ambos, o uno solo")
+    p.add_argument( "--reduced_features", action="store_true", dest="use_reduced_features", 
+                   help=("Filter X to the compact RF-identified feature set for the selected target_col. No effect when target_col='all'."),)
     p.add_argument("--num_hidden",     type=int,   default=128)
     p.add_argument("--ctx_cycles",     type=int,   default=60)
     p.add_argument("--tgt_cycles",     type=int,   default=60)
@@ -544,6 +565,7 @@ def main() -> None:
         data_dir               = args.data_dir or Config.data_dir,
         run_dir                = args.run_dir,
         target_col             = args.target_col,
+        use_reduced_features   = args.use_reduced_features,
         num_hidden             = args.num_hidden,
         ctx_cycles             = args.ctx_cycles,
         tgt_cycles             = args.tgt_cycles,
