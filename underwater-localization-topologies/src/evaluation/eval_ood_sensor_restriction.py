@@ -58,7 +58,7 @@ python eval_ood_sensor_restriction.py \
     --lowvar-data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
     --highvar-data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
     --all-topologies \
-    --versions v1,v2 \
+    --versions v2 \
     --eval-protocol both_holdouts \
     --holdout-frac 0.2 \
     --output-dir results/eval_ood_sensor_restriction \
@@ -682,16 +682,22 @@ def run_exp_12(
                     linestyle=linestyles.get(d_domain, "-"),
                     color=colors.get(m_domain, "gray"),
                     marker="o",
-                    label=f"model={m_domain} / {domain_labels.get(d_domain, d_domain)}")
+                    label=f"model {m_domain} on {domain_labels.get(d_domain, d_domain)}")
 
-    ax.set_xlabel("Theta (channel variability)")
-    ax.set_ylabel("MAE (m)")
-    ax.set_title(f"Per-theta degradation (ctx={context_frac*100:.0f}%)")
-    ax.axvline(x=0.35, color="gray", linestyle=":", linewidth=1.5, label="low/high-var boundary")
+    axis_label_size = 18
+    tick_label_size = 15
+    title_size = 18
+    legend_size = 15
+
+    ax.set_xlabel("Theta (channel variability)", fontsize=axis_label_size)
+    ax.set_ylabel("MAE (m)", fontsize=axis_label_size)
+    #ax.set_title(f"Per-theta degradation (ctx={context_frac*100:.0f}%)", fontsize=title_size)
+    ax.axvline(x=0.35, color="gray", linestyle=":", linewidth=2, label="low/high-var boundary")
     ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=8)
+    ax.tick_params(axis="both", labelsize=tick_label_size)
+    ax.legend(fontsize=legend_size)
     plt.tight_layout()
-    fig.savefig(exp_dir / "theta_degradation_curve.png", dpi=150)
+    fig.savefig(exp_dir / "theta_degradation_curve.png", dpi=300)
     plt.close(fig)
     print(f"  Saved → {exp_dir}")
 
@@ -770,7 +776,7 @@ def run_exp_13(
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=9)
     plt.tight_layout()
-    fig.savefig(exp_dir / "context_sweep.png", dpi=150)
+    fig.savefig(exp_dir / "context_sweep.png", dpi=300)
     plt.close(fig)
     print(f"  Saved → {exp_dir}")
 
