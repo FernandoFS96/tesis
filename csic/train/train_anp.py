@@ -532,8 +532,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--data_dir",       type=str,   default=None)
     p.add_argument("--run_dir",        type=str,   default="")
     p.add_argument("--target_col",     type=str, default="all", choices=["all", "SoC (%)", "Cycle"], help="Target a predecir: 'all' entrena ambos, o uno solo")
-    p.add_argument( "--reduced_features", action="store_true", dest="use_reduced_features", 
-                   help=("Filter X to the compact RF-identified feature set for the selected target_col. No effect when target_col='all'."),)
+    p.add_argument( "--reduced_features", action="store_true", dest="use_reduced_features", help=("Filter X to the compact RF-identified feature set for the selected target_col. No effect when target_col='all'."),)
     p.add_argument("--num_hidden",     type=int,   default=128)
     p.add_argument("--ctx_cycles",     type=int,   default=60)
     p.add_argument("--tgt_cycles",     type=int,   default=60)
@@ -542,7 +541,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--early_stop",     type=int,   default=200, dest="early_stopping")
     p.add_argument("--episodes",       type=int,   default=100, dest="episodes_per_epoch")
     p.add_argument("--batch_size",     type=int,   default=4)
-    p.add_argument("--lr",             type=float, default=5e-4)
+    p.add_argument("--lr",             type=float, default=1e-4)
     p.add_argument("--lr_min",         type=float, default=5e-5)
     p.add_argument("--attn_dropout",   type=float, default=0.2)
     p.add_argument("--beta",           type=float, default=0.5)

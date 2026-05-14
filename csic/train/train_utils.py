@@ -667,6 +667,7 @@ REDUCED_FEATURE_SETS: dict = {
         "Phase_3",  "Phase_4",  "Phase_5",  "Phase_6",  "Phase_7",   # high freq
     ],
     "Cycle": [
+        "Potential",
         "Phase_30", "Phase_31", "Phase_27", "Phase_28", "Phase_26",  # mid freq
         "Zmag_35",  "Zmag_36",  "Zmag_37",  "Zmag_40",               # low freq magnitude
         "Zim_33",   "Zre_38",   "Zre_36",                            # low freq cartesian
