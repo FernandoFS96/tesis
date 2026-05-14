@@ -9,7 +9,7 @@ import argparse
 '''
 Use:
     python data_generator_topology.py \
-        --n_traj 150 \
+        --n_traj 10 \
         --snr 10 \
         --rep 1
 
@@ -696,7 +696,7 @@ def plot_validation(channels_dict, option_idx=0, n_samples=10, seed=None):
 
     # ahora sí: generamos una figura por trayectoria elegida
     for k, trajectory_idx in enumerate(chosen_trajs):
-        fig, axes = plt.subplots(1, 3, figsize=(18, 8))
+        fig, axes = plt.subplots(1, 3, figsize=(20, 10))
 
         for idx, (ax, topology, title) in enumerate(zip(axes, topologies, titles)):
             c = channels_dict[topology]
@@ -704,28 +704,29 @@ def plot_validation(channels_dict, option_idx=0, n_samples=10, seed=None):
             sensors = c.r_posicion
 
             # trayectoria
-            ax.plot(traj[0, :], traj[1, :], 'b-', linewidth=2)
+            ax.plot(traj[0, :], traj[1, :], 'b-', linewidth=3)
             # punto inicio
-            ax.plot(traj[0, 0], traj[1, 0], 'go', markersize=10)
+            ax.plot(traj[0, 0], traj[1, 0], 'go', markersize=17)
             # punto final
-            ax.plot(traj[0, -1], traj[1, -1], 'ko', markersize=10)
+            ax.plot(traj[0, -1], traj[1, -1], 'ko', markersize=17)
             # sensores junto con su número
             for i, (x, y) in enumerate(zip(sensors[0, :], sensors[1, :])):
-                ax.text(x, y, str(i), fontsize=9, ha='center', va='center', color='white', weight='bold')
-                ax.plot(x, y, 'ro', markeredgecolor='black', markersize=10)
+                ax.text(x, y, str(i), fontsize=15, ha='center', va='center', color='white', weight='bold')
+                ax.plot(x, y, 'ro', markeredgecolor='black', markersize=17)
 
-            ax.set_title(f"{title}\n(traj {trajectory_idx})", fontsize=16)
+            #ax.set_title(f"{title}\n(traj {trajectory_idx})", fontsize=20)
             ax.set_xlim([x_min, x_max])
             ax.set_ylim([y_min, y_max])
             ax.set_aspect('equal', adjustable='box')
-            ax.grid(True, alpha=0.3)
+            ax.grid(True, alpha=0.4)
+            ax.tick_params(axis='both', labelsize=18)
 
             if idx == 0:
-                ax.plot([], [], 'b-', linewidth=2, label='Trajectory')
-                ax.plot([], [], 'go', markersize=10, label='Start')
-                ax.plot([], [], 'ko', markersize=10, label='End')
-                ax.plot([], [], 'ro', markeredgecolor='black', markersize=10, label='Sensors')
-                ax.legend(loc='upper left', fontsize=12)
+                ax.plot([], [], 'b-', linewidth=3, label='Trajectory')
+                ax.plot([], [], 'go', markersize=17, label='Start')
+                ax.plot([], [], 'ko', markersize=17, label='End')
+                ax.plot([], [], 'ro', markeredgecolor='black', markersize=17, label='Sensors')
+                ax.legend(loc='upper left', fontsize=18)
 
         plt.tight_layout()
 
@@ -734,7 +735,7 @@ def plot_validation(channels_dict, option_idx=0, n_samples=10, seed=None):
             samples_dir,
             f'topology_comparison_option_{option_idx}_traj_{int(trajectory_idx):03d}.png'
         )
-        plt.savefig(out_path, dpi=150, bbox_inches='tight')
+        plt.savefig(out_path, dpi=300, bbox_inches='tight')
         plt.close(fig)
 
     print(f"Se han guardado {len(chosen_trajs)} imágenes en: {samples_dir}")
@@ -792,7 +793,7 @@ def save_velocity_histogram(traj, T_tot, bins=40, option_idx=None):
     plot_dir = f'{base_dir}/validation'
     filename=f"velocity_hist_theta_{option_idx}.png"
     os.makedirs(plot_dir, exist_ok=True)
-    plt.savefig(f'{plot_dir}/{filename}', dpi=150)
+    plt.savefig(f'{plot_dir}/{filename}', dpi=300, bbox_inches='tight')
     plt.close()
 
     #print(f"Histograma guardado en: {base_dir}/validation/{filename}")
@@ -837,7 +838,7 @@ def process(channel_options, snr, rep, nop=-1, n_traj_override=None):
             data, trjs = generate_batch_of_trajs(c, 'sinusoid', n=1024, snr=snr, rep=rep)
             
             # Save the generated data
-            root_dir = 'data'
+            root_dir = 'data_2'
             topology_dir = f'{root_dir}/channel_option_{option}/{topology}'
             
             # Create directories for this topology
