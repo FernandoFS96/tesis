@@ -1,0 +1,13 @@
+model_domain,data_domain,theta,mae
+lowvar,lowvar,0.0,7.4125261306762695
+lowvar,lowvar,0.1,7.60987663269043
+lowvar,lowvar,0.2,7.116304397583008
+lowvar,lowvar,0.3,9.173686027526855
+lowvar,highvar,0.4,15.7035551071167
+lowvar,highvar,0.5,26.843629837036133
+highvar,lowvar,0.0,13.24171257019043
+highvar,lowvar,0.1,12.421229362487793
+highvar,lowvar,0.2,12.698318481445312
+highvar,lowvar,0.3,12.09454345703125
+highvar,highvar,0.4,13.590149879455566
+highvar,highvar,0.5,14.183767318725586
