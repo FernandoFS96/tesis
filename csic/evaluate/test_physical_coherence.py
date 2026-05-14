@@ -33,11 +33,13 @@ Output (saved to --out_dir):
 
 Usage:
     python test_physical_coherence.py \
-        --mlp_run       ../train/runs_mlp/20260511_121741 \
-        --anp_run       ../train/runs/anp_all_20260512_124715 \
-        --anp_soc_run   "../train/runs/anp_SoC(pct)_20260512_114601" \
-        --anp_cycle_run ../train/runs/anp_Cycle_20260512_114703 \
-        --data_dir      ../csic_real_synth_load/prepared_data
+        --mlp_run             ../train/runs_mlp/20260511_121741 \
+        --anp_run             ../train/runs/anp_all/20260512_124715 \
+        --anp_soc_run         ../train/runs/anp_SoC/20260512_114601 \
+        --anp_cycle_run       ../train/runs/anp_Cycle/20260512_114703 \
+        --anp_soc_reduced_run   ../train/runs/anp_SoC_reduced/20260513_110544 \
+        --anp_cycle_reduced_run ../train/runs/anp_Cycle_reduced/20260513_114323 \
+        --data_dir            ../csic_real_synth_load/prepared_data
 
 Location: csic/validation/test_physical_coherence.py
 ==============================================================================
@@ -73,6 +75,9 @@ from train.train_utils import (
     load_prepared_data,
     validate_targets,
     sort_task_by_cycle,
+    REDUCED_FEATURE_SETS,
+    get_feature_indices,
+    filter_x,
 )
 
 from models.anp import LatentModel
@@ -164,16 +169,16 @@ def load_anp_model(
     all_target_cols:  List[str],
     device:           torch.device,
     label:            str = "ANP",
-) -> Optional[Tuple[str, nn.Module, List[str]]]:
+) -> Optional[Tuple[str, nn.Module, List[str], Optional[List[str]]]]:
     """
-    Load an ANP checkpoint and detect which targets it was trained on.
+    Load an ANP checkpoint and detect which targets and features it was trained on.
 
     Reads config.json for num_hidden, attn_dropout, and target_col.
-    Works for dual-target (output_dim=2) and single-target (output_dim=1) models.
+    Infers model_input_dim directly from checkpoint weight shapes, robust to missing 'use_reduced_features' field in config.json.
 
     Returns:
-        (label, model, model_target_cols) or None if checkpoint not found.
-        model_target_cols is the subset of all_target_cols this model predicts.
+        (label, model, model_target_cols, feature_cols) or None if not found.
+        feature_cols is None for full-feature models, or a list of column names for reduced-feature models.
     """
     ckpt_path = run_dir / "best.pt"
     cfg_path  = run_dir / "config.json"
@@ -200,23 +205,54 @@ def load_anp_model(
     elif target_col in all_target_cols:
         model_target_cols = [target_col]
     else:
-        # Fallback: infer from decoder output weight shape
         raw = torch.load(ckpt_path, map_location="cpu")
         out_keys = [k for k in raw["model"] if "mean_projection" in k and "weight" in k]
         out_dim  = raw["model"][out_keys[0]].shape[0] if out_keys else len(all_target_cols)
         model_target_cols = all_target_cols[:out_dim]
 
     output_dim = len(model_target_cols)
-    model = LatentModel(num_hidden=num_hidden, input_dim=input_dim,
+
+    # ── Robustly determine model_input_dim from the checkpoint itself ──────────
+    # Works even if use_reduced_features was not saved in config.json.
+    raw     = torch.load(ckpt_path, map_location="cpu")
+    lat_key = next(
+        (k for k in raw["model"]
+         if "latent_encoder.input_projection.linear_layer.weight" in k), None
+    )
+    if lat_key:
+        # weight shape: [num_hidden, input_dim + output_dim]
+        model_input_dim = raw["model"][lat_key].shape[1] - output_dim
+    else:
+        model_input_dim = input_dim  # fallback: assume full features
+
+    # Determine feature_cols for X filtering during evaluation
+    if model_input_dim == input_dim:
+        feature_cols = None          # full feature set — no filtering needed
+    else:
+        feature_cols = REDUCED_FEATURE_SETS.get(target_col)
+        if feature_cols is None:
+            raise ValueError(
+                f"'{label}' has input_dim={model_input_dim} (not {input_dim}), "
+                f"but REDUCED_FEATURE_SETS has no entry for target_col='{target_col}'. "
+                f"Add the reduced feature list to REDUCED_FEATURE_SETS in train_utils.py."
+            )
+        if len(feature_cols) != model_input_dim:
+            raise ValueError(
+                f"'{label}': checkpoint input_dim={model_input_dim} but "
+                f"REDUCED_FEATURE_SETS['{target_col}'] has {len(feature_cols)} features. "
+                f"These must match — check REDUCED_FEATURE_SETS in train_utils.py."
+            )
+
+    model = LatentModel(num_hidden=num_hidden, input_dim=model_input_dim,
                         output_dim=output_dim, attn_dropout=attn_dropout)
-    ckpt = torch.load(ckpt_path, map_location=device)
-    model.load_state_dict(ckpt["model"])
+    model.load_state_dict(raw["model"])   # reuse already-loaded raw dict
     model.eval().to(device)
 
-    val_mae = ckpt.get("val_MAE", ckpt.get("val_loss", "?"))
+    val_mae  = raw.get("val_MAE", raw.get("val_loss", "?"))
+    feat_str = f"reduced({model_input_dim})" if feature_cols else f"all({input_dim})"
     print(f"  ✓  {label:<22} targets={model_target_cols}  "
-          f"num_hidden={num_hidden}  val_MAE={val_mae}")
-    return (label, model, model_target_cols)
+          f"num_hidden={num_hidden}  features={feat_str}  val_MAE={val_mae}")
+    return (label, model, model_target_cols, feature_cols)
 
 
 def load_mlp(ckpt_path: Path, input_dim: int, output_dim: int,
@@ -350,8 +386,7 @@ def check_coherence(
     Columns that are entirely NaN (targets not predicted by single-target models) are silently skipped, their violation counts stay at zero.
 
     Args:
-        pred_dn:     Denormalized predictions, shape (Nt, O). NaN values
-                     indicate targets not predicted by this model.
+        pred_dn:     Denormalized predictions, shape (Nt, O). NaN values indicate targets not predicted by this model.
         target_cols: Ordered list of all target column names.
         cfg:         CoherenceConfig with physical thresholds.
         model_label: Label for the model being evaluated.
@@ -620,17 +655,19 @@ def plot_comparison_coherence(
 # ==============================================================================
 
 def run(
-    anp_run_dir:       Optional[Path],
-    anp_soc_run_dir:   Optional[Path],
-    anp_cycle_run_dir: Optional[Path],
-    mlp_run_dir:       Optional[Path],
-    data_dir:          str,
-    out_dir:           Path,
-    cfg:               CoherenceConfig,
-    all_tasks:         bool = False,
-    specialist_id:     Optional[int] = None,
-    plot_violations:   bool = True,
-    plot_clean:        bool = False,
+    anp_run_dir:              Optional[Path],
+    anp_soc_run_dir:          Optional[Path],
+    anp_cycle_run_dir:        Optional[Path],
+    anp_soc_reduced_run_dir:  Optional[Path],
+    anp_cycle_reduced_run_dir: Optional[Path],
+    mlp_run_dir:              Optional[Path],
+    data_dir:                 str,
+    out_dir:                  Path,
+    cfg:                      CoherenceConfig,
+    all_tasks:                bool = False,
+    specialist_id:            Optional[int] = None,
+    plot_violations:          bool = True,
+    plot_clean:               bool = False,
 ) -> None:
     """
     Full coherence test pipeline.
@@ -691,28 +728,50 @@ def run(
     print(f"   Target columns  : {target_cols}")
     print(f"\n📦  Loading models...")
 
+    # x_col_names needed to map feature names → numpy indices for reduced models
+    x_col_names = list(data["normalized_synth_datasets"][0][0].columns)
+
     # ── Load models ───────────────────────────────────────────────────────────
-    # Each entry: (label, model, type, model_target_cols)
-    models_to_test: List[Tuple[str, nn.Module, str, List[str]]] = []
+    # Each entry: (label, model, type, model_target_cols, feature_cols)
+    # feature_cols: list of X column names for reduced models, None for full
+    models_to_test: List[Tuple[str, nn.Module, str, List[str], Optional[List[str]]]] = []
 
     if anp_run_dir is not None:
         anp = load_anp_model(anp_run_dir, input_dim, target_cols, device, label="ANP")
         if anp:
-            models_to_test.append((anp[0], anp[1], "anp", anp[2]))
+            models_to_test.append((anp[0], anp[1], "anp", anp[2], anp[3]))
 
     if anp_soc_run_dir is not None:
         anp_soc = load_anp_model(
             anp_soc_run_dir, input_dim, target_cols, device, label="ANP-SoC"
         )
         if anp_soc:
-            models_to_test.append((anp_soc[0], anp_soc[1], "anp", anp_soc[2]))
+            models_to_test.append((anp_soc[0], anp_soc[1], "anp", anp_soc[2], anp_soc[3]))
 
     if anp_cycle_run_dir is not None:
         anp_cyc = load_anp_model(
             anp_cycle_run_dir, input_dim, target_cols, device, label="ANP-Cycle"
         )
         if anp_cyc:
-            models_to_test.append((anp_cyc[0], anp_cyc[1], "anp", anp_cyc[2]))
+            models_to_test.append((anp_cyc[0], anp_cyc[1], "anp", anp_cyc[2], anp_cyc[3]))
+
+    if anp_soc_reduced_run_dir is not None:
+        anp_soc_r = load_anp_model(
+            anp_soc_reduced_run_dir, input_dim, target_cols,
+            device, label="ANP-SoC-red"
+        )
+        if anp_soc_r:
+            models_to_test.append((anp_soc_r[0], anp_soc_r[1], "anp",
+                                    anp_soc_r[2], anp_soc_r[3]))
+
+    if anp_cycle_reduced_run_dir is not None:
+        anp_cyc_r = load_anp_model(
+            anp_cycle_reduced_run_dir, input_dim, target_cols,
+            device, label="ANP-Cycle-red"
+        )
+        if anp_cyc_r:
+            models_to_test.append((anp_cyc_r[0], anp_cyc_r[1], "anp",
+                                    anp_cyc_r[2], anp_cyc_r[3]))
 
     if mlp_run_dir is not None:
         cfg_path = mlp_run_dir / "config.json"
@@ -726,19 +785,20 @@ def run(
         dr = load_mlp(mlp_run_dir / "dr_mlp" / "best.pt",
                       input_dim, output_dim, device, neurons, dropout)
         if dr:
-            models_to_test.append(("DR-MLP", dr, "mlp", target_cols))
+            models_to_test.append(("DR-MLP", dr, "mlp", target_cols, None))
 
         if specialist_id is not None:
             spec_path = mlp_run_dir / f"specialist_{specialist_id:02d}" / "best.pt"
             spec = load_mlp(spec_path, input_dim, output_dim, device, neurons, dropout)
             if spec:
-                models_to_test.append((f"Specialist_{specialist_id:02d}", spec, "mlp", target_cols))
+                models_to_test.append((f"Specialist_{specialist_id:02d}", spec, "mlp",
+                                        target_cols, None))
 
     if not models_to_test:
         print("\n  ⚠  No models loaded — check paths and try again.")
         return
 
-    print(f"\n  Models loaded: {[m for m, _, _, _ in models_to_test]}")
+    print(f"\n  Models loaded: {[m for m, _, _, _, _ in models_to_test]}")
 
     # ── Run coherence checks ──────────────────────────────────────────────────
     print(f"\n🔬  Running coherence checks...\n")
@@ -752,14 +812,19 @@ def run(
     task_reports:     Dict[str, Dict[str, ViolationReport]] = {}
     task_true_dn:     Dict[str, np.ndarray] = {}
 
-    for m_label, model, m_type, m_target_cols in models_to_test:
+    for m_label, model, m_type, m_target_cols, feat_cols in models_to_test:
+        feat_idx = get_feature_indices(x_col_names, feat_cols)
         print(f"  ── {m_label} ─────────────────────────────────────")
         for t_label, X_ctx, y_ctx, X_tgt, y_tgt in tasks_data:
 
             # Predict in normalized space (NaN for unmodelled targets)
             if m_type == "anp":
                 pred_norm = predict_anp(
-                    model, X_ctx, y_ctx, X_tgt, device,
+                    model,
+                    filter_x(X_ctx, feat_idx),   # filter X to model's features
+                    y_ctx,
+                    filter_x(X_tgt, feat_idx),   # filter X to model's features
+                    device,
                     target_cols, m_target_cols
                 )
             else:
@@ -880,7 +945,7 @@ def run(
                  f"mono_threshold = {cfg.mono_threshold}%")
     lines.append("=" * 70)
 
-    for m_label in [m for m, _, _, _ in models_to_test]:
+    for m_label in [m for m, _, _, _, _ in models_to_test]:
         m_reports = [r for r in all_reports if r.model_label == m_label]
         n_tasks   = len(m_reports)
         n_total   = sum(r.n_predictions for r in m_reports)
@@ -935,10 +1000,12 @@ def parse_args() -> argparse.Namespace:
         description="Physical coherence test for ANP variants and MLP predictions",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("--anp_run",        type=str, default=None, help="Path to dual-target ANP run directory")
-    p.add_argument("--anp_soc_run",    type=str, default=None, help="Path to SoC-only ANP run directory")
-    p.add_argument("--anp_cycle_run",  type=str, default=None, help="Path to Cycle-only ANP run directory")
-    p.add_argument("--mlp_run",        type=str, default=None, help="Path to runs_mlp/<timestamp>/ directory")
+    p.add_argument("--anp_run",              type=str, default=None, help="Path to dual-target ANP run directory")
+    p.add_argument("--anp_soc_run",          type=str, default=None, help="Path to SoC-only ANP run directory")
+    p.add_argument("--anp_cycle_run",        type=str, default=None, help="Path to Cycle-only ANP run directory")
+    p.add_argument("--anp_soc_reduced_run",  type=str, default=None, help="Path to SoC-only ANP run with reduced features")
+    p.add_argument("--anp_cycle_reduced_run",type=str, default=None, help="Path to Cycle-only ANP run with reduced features")
+    p.add_argument("--mlp_run",              type=str, default=None, help="Path to runs_mlp/<timestamp>/ directory")
     p.add_argument("--data_dir",       type=str, default="../csic_real_synth_load/prepared_data")
     p.add_argument("--out_dir",        type=str, default="", help="Output directory (default: ./coherence/)")
     p.add_argument("--all_tasks",      action="store_true", help="Evaluate all 25 tasks instead of val+test only")
@@ -984,17 +1051,19 @@ def main() -> None:
     )
 
     run(
-        anp_run_dir       = Path(args.anp_run)       if args.anp_run       else None,
-        anp_soc_run_dir   = Path(args.anp_soc_run)   if args.anp_soc_run   else None,
-        anp_cycle_run_dir = Path(args.anp_cycle_run) if args.anp_cycle_run else None,
-        mlp_run_dir       = Path(args.mlp_run)       if args.mlp_run       else None,
-        data_dir          = args.data_dir,
-        out_dir           = out_dir,
-        cfg               = cfg,
-        all_tasks         = args.all_tasks,
-        specialist_id     = args.specialist_id,
-        plot_violations   = not args.no_plots,
-        plot_clean        = args.plot_clean,
+        anp_run_dir              = Path(args.anp_run)              if args.anp_run              else None,
+        anp_soc_run_dir          = Path(args.anp_soc_run)          if args.anp_soc_run          else None,
+        anp_cycle_run_dir        = Path(args.anp_cycle_run)        if args.anp_cycle_run        else None,
+        anp_soc_reduced_run_dir  = Path(args.anp_soc_reduced_run)  if args.anp_soc_reduced_run  else None,
+        anp_cycle_reduced_run_dir= Path(args.anp_cycle_reduced_run)if args.anp_cycle_reduced_run else None,
+        mlp_run_dir              = Path(args.mlp_run)              if args.mlp_run              else None,
+        data_dir        = args.data_dir,
+        out_dir         = out_dir,
+        cfg             = cfg,
+        all_tasks       = args.all_tasks,
+        specialist_id   = args.specialist_id,
+        plot_violations = not args.no_plots,
+        plot_clean      = args.plot_clean,
     )
 
 
