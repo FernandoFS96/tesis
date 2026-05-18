@@ -128,7 +128,7 @@ PLOT_AXIS_LABEL_SIZE = 18
 PLOT_TICK_LABEL_SIZE = 16
 PLOT_LEGEND_SIZE     = 12
 PLOT_TEXT_SIZE       = 16
-PLOT_TITLE_SIZE      = 18
+PLOT_TITLE_SIZE      = 16
 PLOT_SHOW_TITLES     = False
 
 # ══════════════════════════════════════════════════════════════════════════════

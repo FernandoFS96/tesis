@@ -2,49 +2,49 @@ Most critical sensors (leave-one-out ΔMAE, descending):
 ============================================================
 
 ANP (basic):
-  #1  Sensor 9  ΔMAE=+26.8791 m
-  #2  Sensor 0  ΔMAE=+21.7677 m
-  #3  Sensor 4  ΔMAE=+20.7702 m
-  #4  Sensor 5  ΔMAE=+17.9419 m
-  #5  Sensor 6  ΔMAE=+16.3017 m
-  #6  Sensor 7  ΔMAE=+14.9658 m
-  #7  Sensor 2  ΔMAE=+14.8962 m
-  #8  Sensor 8  ΔMAE=+14.1783 m
-  #9  Sensor 1  ΔMAE=+13.5142 m
-  #10  Sensor 3  ΔMAE=+7.5019 m
+  #1  Sensor 9  ΔMAE=+26.4956 m
+  #2  Sensor 0  ΔMAE=+21.9761 m
+  #3  Sensor 4  ΔMAE=+19.8768 m
+  #4  Sensor 5  ΔMAE=+18.5530 m
+  #5  Sensor 6  ΔMAE=+17.1130 m
+  #6  Sensor 7  ΔMAE=+15.0934 m
+  #7  Sensor 2  ΔMAE=+14.8415 m
+  #8  Sensor 8  ΔMAE=+14.6386 m
+  #9  Sensor 1  ΔMAE=+13.4138 m
+  #10  Sensor 3  ΔMAE=+7.2862 m
 
 RANP (basic):
-  #1  Sensor 3  ΔMAE=+20.9818 m
-  #2  Sensor 2  ΔMAE=+18.1570 m
-  #3  Sensor 8  ΔMAE=+13.0145 m
-  #4  Sensor 4  ΔMAE=+12.1195 m
-  #5  Sensor 5  ΔMAE=+11.6448 m
-  #6  Sensor 0  ΔMAE=+10.9162 m
-  #7  Sensor 1  ΔMAE=+10.5689 m
-  #8  Sensor 6  ΔMAE=+9.0837 m
-  #9  Sensor 9  ΔMAE=+8.9654 m
-  #10  Sensor 7  ΔMAE=+7.6850 m
+  #1  Sensor 3  ΔMAE=+20.0213 m
+  #2  Sensor 2  ΔMAE=+17.9857 m
+  #3  Sensor 8  ΔMAE=+12.1054 m
+  #4  Sensor 4  ΔMAE=+11.7887 m
+  #5  Sensor 5  ΔMAE=+11.6268 m
+  #6  Sensor 0  ΔMAE=+10.7213 m
+  #7  Sensor 1  ΔMAE=+9.8437 m
+  #8  Sensor 9  ΔMAE=+8.5452 m
+  #9  Sensor 6  ΔMAE=+8.2103 m
+  #10  Sensor 7  ΔMAE=+7.0400 m
 
 ANP (masked/Optuna):
-  #1  Sensor 9  ΔMAE=+1.3776 m
-  #2  Sensor 2  ΔMAE=+0.7836 m
-  #3  Sensor 6  ΔMAE=+0.7572 m
-  #4  Sensor 5  ΔMAE=+0.7461 m
-  #5  Sensor 8  ΔMAE=+0.5527 m
-  #6  Sensor 1  ΔMAE=+0.5524 m
-  #7  Sensor 3  ΔMAE=+0.5104 m
-  #8  Sensor 4  ΔMAE=+0.1089 m
-  #9  Sensor 0  ΔMAE=+0.1018 m
-  #10  Sensor 7  ΔMAE=-0.2543 m
+  #1  Sensor 9  ΔMAE=+1.2861 m
+  #2  Sensor 6  ΔMAE=+0.6410 m
+  #3  Sensor 2  ΔMAE=+0.6179 m
+  #4  Sensor 8  ΔMAE=+0.5883 m
+  #5  Sensor 1  ΔMAE=+0.5488 m
+  #6  Sensor 5  ΔMAE=+0.5194 m
+  #7  Sensor 3  ΔMAE=+0.4591 m
+  #8  Sensor 4  ΔMAE=+0.0278 m
+  #9  Sensor 0  ΔMAE=+0.0019 m
+  #10  Sensor 7  ΔMAE=-0.0821 m
 
 RANP (masked/Optuna):
-  #1  Sensor 1  ΔMAE=+0.8816 m
-  #2  Sensor 2  ΔMAE=+0.7066 m
-  #3  Sensor 6  ΔMAE=+0.4170 m
-  #4  Sensor 0  ΔMAE=+0.3699 m
-  #5  Sensor 9  ΔMAE=+0.3442 m
-  #6  Sensor 5  ΔMAE=+0.3359 m
-  #7  Sensor 3  ΔMAE=+0.2728 m
-  #8  Sensor 7  ΔMAE=+0.2374 m
-  #9  Sensor 4  ΔMAE=+0.2025 m
-  #10  Sensor 8  ΔMAE=-0.6843 m
+  #1  Sensor 1  ΔMAE=+0.8300 m
+  #2  Sensor 2  ΔMAE=+0.6812 m
+  #3  Sensor 6  ΔMAE=+0.3694 m
+  #4  Sensor 9  ΔMAE=+0.3490 m
+  #5  Sensor 5  ΔMAE=+0.3111 m
+  #6  Sensor 0  ΔMAE=+0.3030 m
+  #7  Sensor 4  ΔMAE=+0.2521 m
+  #8  Sensor 3  ΔMAE=+0.2485 m
+  #9  Sensor 7  ΔMAE=+0.2102 m
+  #10  Sensor 8  ΔMAE=-0.7404 m
