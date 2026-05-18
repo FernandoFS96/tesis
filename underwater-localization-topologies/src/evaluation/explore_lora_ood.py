@@ -55,7 +55,8 @@ Usage
   --model-types anp \
   --lora-targets lora_det_full,lora_det_last \
   --ranks 4,8,16 --alpha-ratios 1.0,2.0 \
-  --n-traj 100,200,all --device cuda
+  --n-traj 100,200,all --device cuda \
+  --skip-existing
 
 
   python explore_lora_ood.py \
@@ -65,7 +66,8 @@ Usage
   --model-types ranp \
   --lora-targets lora_anp_base,lora_rnn_out,lora_full \
   --ranks 4,8,16 --alpha-ratios 1.0,2.0 \
-  --n-traj 100,200,all --device cuda
+  --n-traj 100,200,all --device cuda \
+  --skip-existing
 
 Notes
 -----
@@ -135,6 +137,15 @@ TARGET_COLORS = {
     "lora_rnn_out":  "#8e44ad",
     "lora_full":     "#c0392b",
 }
+
+# --- Global plotting controls (match finetune_ood.py) ---
+PLOT_AXIS_LABEL_SIZE = 18
+PLOT_TICK_LABEL_SIZE = 16
+PLOT_LEGEND_SIZE     = 14
+PLOT_TEXT_SIZE       = 16
+PLOT_TITLE_SIZE      = 18
+# If False, plot titles will be omitted
+PLOT_SHOW_TITLES     = False
 
 # =============================================================================
 # LoRA implementation
@@ -784,7 +795,7 @@ def plot_lora_mae_vs_ntraj(
     alpha_ratios:  List[float],
     save_path:     Path,
 ) -> None:
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=(16, 8))
     ticks  = list(range(len(n_traj_values)))
     labels = [str(n) for n in n_traj_values]
 
@@ -814,19 +825,42 @@ def plot_lora_mae_vs_ntraj(
 
     ax.set_xticks(ticks)
     ax.set_xticklabels(labels)
-    ax.set_xlabel("N trajectories for fine-tuning", fontsize=11)
-    ax.set_ylabel("MAE (m)", fontsize=11)
-    ax.set_title(
-        f"LoRA MAE vs data budget\n"
-        f"target={TARGET_LABELS[lora_target]} | ctx={int(context_frac*100)}%",
-        fontsize=11,
-    )
-    ax.legend(fontsize=8, ncol=2)
+    ax.set_xlabel("N trajectories for fine-tuning", fontsize=PLOT_AXIS_LABEL_SIZE)
+    ax.set_ylabel("MAE (m)", fontsize=PLOT_AXIS_LABEL_SIZE)
+    if PLOT_SHOW_TITLES:
+        ax.set_title(
+            f"LoRA MAE vs data budget\n"
+            f"target={TARGET_LABELS[lora_target]} | ctx={int(context_frac*100)}%",
+            fontsize=PLOT_TITLE_SIZE,
+        )
+    ax.legend(fontsize=PLOT_LEGEND_SIZE, ncol=2)
     ax.grid(alpha=0.3)
-    ax.set_ylim(bottom=0)
+    ax.tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
+    # Adjust y-axis bottom to be closer to the Oracle (with a small margin)
+    try:
+        y_min_vals: list = []
+        for rank in ranks:
+            for ar in alpha_ratios:
+                alpha = rank * ar
+                for n in n_traj_values:
+                    mae = results.get((lora_target, rank, alpha, str(n)), {}).get(
+                        context_frac, float("nan")
+                    )
+                    if np.isfinite(mae):
+                        y_min_vals.append(mae)
+        
+        if y_min_vals:
+            min_all    = min(y_min_vals)
+            gap        = ood - oracle
+            bottom_ref = min(min_all, oracle)
+            margin     = max(0.05 * gap, 0.1) if gap > 0 else 0.1
+            y_bottom   = max(0.0, bottom_ref - margin)
+            ax.set_ylim(bottom=y_bottom)
+    except Exception:
+        ax.set_ylim(bottom=0)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
-    fig.savefig(save_path, dpi=160)
+    fig.savefig(save_path, dpi=300)
     plt.close(fig)
     print(f"  [plot] {save_path}")
 
@@ -848,7 +882,7 @@ def plot_lora_gap_closed(
     if gap <= 0:
         return
 
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=(16, 8))
     ticks  = list(range(len(n_traj_values)))
     labels = [str(n) for n in n_traj_values]
 
@@ -875,18 +909,20 @@ def plot_lora_gap_closed(
 
     ax.set_xticks(ticks)
     ax.set_xticklabels(labels)
-    ax.set_xlabel("N trajectories", fontsize=11)
-    ax.set_ylabel("% OoD gap closed", fontsize=11)
-    ax.set_title(
-        f"LoRA gap closure\n"
-        f"target={TARGET_LABELS[lora_target]} | ctx={int(context_frac*100)}%",
-        fontsize=11,
-    )
-    ax.legend(fontsize=8, ncol=2)
+    ax.set_xlabel("N trajectories", fontsize=PLOT_AXIS_LABEL_SIZE)
+    ax.set_ylabel("% OoD gap closed", fontsize=PLOT_AXIS_LABEL_SIZE)
+    if PLOT_SHOW_TITLES:
+        ax.set_title(
+            f"LoRA gap closure\n"
+            f"target={TARGET_LABELS[lora_target]} | ctx={int(context_frac*100)}%",
+            fontsize=PLOT_TITLE_SIZE,
+        )
+    ax.legend(fontsize=PLOT_LEGEND_SIZE, ncol=2)
     ax.grid(alpha=0.3)
+    ax.tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
-    fig.savefig(save_path, dpi=160)
+    fig.savefig(save_path, dpi=300)
     plt.close(fig)
     print(f"  [plot] {save_path}")
 
@@ -910,12 +946,18 @@ def plot_lora_heatmap(
         return
 
     n_panels = len(alpha_ratios)
-    fig, axes = plt.subplots(1, n_panels,
-                             figsize=(max(7, 2.5*len(n_traj_values)) * n_panels, 4),
-                             squeeze=False)
+    # Use GridSpec to allocate space for heatmaps and colorbar separately
+    import matplotlib.gridspec as gridspec
+    fig = plt.figure(figsize=(max(7, 2.5*len(n_traj_values)) * n_panels + 1.5, 4))
+    gs = gridspec.GridSpec(1, n_panels + 1, figure=fig, width_ratios=[1.0]*n_panels + [0.03],
+                           wspace=0.18, hspace=0.3)
 
+    axes = [fig.add_subplot(gs[0, i]) for i in range(n_panels)]
+    cbar_ax = fig.add_subplot(gs[0, n_panels])
+
+    im_last = None  # store last image for shared colorbar
     for panel_idx, ar in enumerate(alpha_ratios):
-        ax  = axes[0, panel_idx]
+        ax  = axes[panel_idx]
         mat = np.full((len(ranks), len(n_traj_values)), np.nan)
         for ri, rank in enumerate(ranks):
             alpha = rank * ar
@@ -926,13 +968,14 @@ def plot_lora_heatmap(
                 if np.isfinite(mae):
                     mat[ri, ni] = 100.0 * (ood - mae) / gap
 
-        im = ax.imshow(mat, cmap="RdYlGn", vmin=0, vmax=100, aspect="auto")
+        im_last = ax.imshow(mat, cmap="RdYlGn", vmin=0, vmax=100, aspect="auto")
         ax.set_xticks(range(len(n_traj_values)))
-        ax.set_xticklabels([str(n) for n in n_traj_values], fontsize=9)
+        ax.set_xticklabels([str(n) for n in n_traj_values], fontsize=PLOT_TICK_LABEL_SIZE)
         ax.set_yticks(range(len(ranks)))
-        ax.set_yticklabels([f"r={r}" for r in ranks], fontsize=9)
-        ax.set_xlabel("N trajectories", fontsize=10)
-        ax.set_title(f"α/r = {ar:.1f}", fontsize=10)
+        ax.set_yticklabels([f"r={r}" for r in ranks], fontsize=PLOT_TICK_LABEL_SIZE, rotation=45)
+        ax.set_xlabel("N trajectories", fontsize=PLOT_AXIS_LABEL_SIZE)
+        if PLOT_SHOW_TITLES:
+            ax.set_title(f"α/r = {ar:.1f}", fontsize=PLOT_TITLE_SIZE)
 
         for ri in range(len(ranks)):
             for ni in range(len(n_traj_values)):
@@ -940,18 +983,25 @@ def plot_lora_heatmap(
                 color = "black" if 20 < mat[ri,ni] < 80 else "white" \
                         if np.isfinite(mat[ri,ni]) else "gray"
                 ax.text(ni, ri, txt, ha="center", va="center",
-                        fontsize=8, color=color)
+                    fontsize=PLOT_TEXT_SIZE, color=color)
 
-        fig.colorbar(im, ax=ax, fraction=0.035, pad=0.02, label="% gap closed")
+    # single shared colorbar in dedicated axes
+    if im_last is not None:
+        cbar = fig.colorbar(im_last, cax=cbar_ax, label="% gap closed")
+        try:
+            cbar.ax.tick_params(labelsize=PLOT_TICK_LABEL_SIZE)
+            cbar.set_label('% gap closed', fontsize=PLOT_AXIS_LABEL_SIZE)
+        except Exception:
+            pass
 
-    axes[0, 0].set_ylabel("LoRA rank", fontsize=10)
-    fig.suptitle(
-        f"LoRA gap closure heatmap — {TARGET_LABELS[lora_target]} | ctx={int(context_frac*100)}%",
-        fontsize=11,
-    )
-    fig.tight_layout()
+    axes[0].set_ylabel("LoRA rank", fontsize=PLOT_AXIS_LABEL_SIZE)
+    if PLOT_SHOW_TITLES:
+        fig.suptitle(
+            f"LoRA gap closure heatmap — {TARGET_LABELS[lora_target]} | ctx={int(context_frac*100)}%",
+            fontsize=PLOT_TITLE_SIZE,
+        )
     save_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(save_path, dpi=160)
+    fig.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close(fig)
     print(f"  [plot] {save_path}")
 
@@ -971,7 +1021,7 @@ def plot_lora_pareto(
     ood    = ood_by_frac[context_frac]
     oracle = oracle_by_frac[context_frac]
 
-    fig, ax = plt.subplots(figsize=(10, 7))
+    fig, ax = plt.subplots(figsize=(16, 8))
     ax.axhline(ood,    color="#e74c3c", ls="--", lw=1.2, alpha=0.75, label="OoD baseline")
     ax.axhline(oracle, color="#2c3e50", ls="--", lw=1.2, alpha=0.75, label="Oracle")
 
@@ -997,20 +1047,22 @@ def plot_lora_pareto(
                     linewidth=1.5, markersize=7)
             for x, y, lbl in zip(xs, ys, lbls):
                 ax.annotate(lbl, (x, y), textcoords="offset points",
-                            xytext=(4, 4), fontsize=7, alpha=0.85)
+                            xytext=(4, 4), fontsize=PLOT_TEXT_SIZE, alpha=0.85)
             color_idx += 1
 
-    ax.set_xlabel("Fine-tuning time (s)", fontsize=11)
-    ax.set_ylabel(f"MAE (m) — ctx={int(context_frac*100)}%", fontsize=11)
-    ax.set_title(
-        f"LoRA Pareto: time vs. quality\n{TARGET_LABELS[lora_target]}",
-        fontsize=11,
-    )
-    ax.legend(fontsize=8, ncol=2)
+    ax.set_xlabel("Fine-tuning time (s)", fontsize=PLOT_AXIS_LABEL_SIZE)
+    ax.set_ylabel(f"MAE (m) — ctx={int(context_frac*100)}%", fontsize=PLOT_AXIS_LABEL_SIZE)
+    if PLOT_SHOW_TITLES:
+        ax.set_title(
+            f"LoRA Pareto: time vs. quality\n{TARGET_LABELS[lora_target]}",
+            fontsize=PLOT_TITLE_SIZE,
+        )
+    ax.legend(fontsize=PLOT_LEGEND_SIZE, ncol=2)
     ax.grid(alpha=0.3)
+    ax.tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
-    fig.savefig(save_path, dpi=160)
+    fig.savefig(save_path, dpi=300)
     plt.close(fig)
     print(f"  [plot] {save_path}")
 
