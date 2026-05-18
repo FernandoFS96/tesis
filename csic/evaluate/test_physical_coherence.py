@@ -38,7 +38,7 @@ Usage:
         --anp_soc_run         ../train/runs/anp_SoC/20260512_114601 \
         --anp_cycle_run       ../train/runs/anp_Cycle/20260512_114703 \
         --anp_soc_reduced_run   ../train/runs/anp_SoC_reduced/20260513_110544 \
-        --anp_cycle_reduced_run ../train/runs/anp_Cycle_reduced/20260513_114323 \
+        --anp_cycle_reduced_run ../train/runs/anp_Cycle_reduced/20260514_122442 \
         --data_dir            ../csic_real_synth_load/prepared_data
 
 Location: csic/validation/test_physical_coherence.py
