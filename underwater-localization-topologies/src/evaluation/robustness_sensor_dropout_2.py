@@ -123,6 +123,14 @@ MODEL_STYLES  = {
 HOLDOUT_FRAC  = 0.20   # fraction of trajectory reserved for target evaluation
 FIXED_CTX_FRAC = 0.40  # default context fraction used in E2/E3/E4
 
+# --- Global plotting controls ---
+PLOT_AXIS_LABEL_SIZE = 18
+PLOT_TICK_LABEL_SIZE = 16
+PLOT_LEGEND_SIZE     = 12
+PLOT_TEXT_SIZE       = 16
+PLOT_TITLE_SIZE      = 18
+PLOT_SHOW_TITLES     = False
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Data utilities
 # ══════════════════════════════════════════════════════════════════════════════
@@ -497,13 +505,19 @@ def run_e1_oracle(models, test_data, y_mean, y_std, x_means_SP,
                      label=lbl, color=col, linestyle=sty, linewidth=2)
 
     run_label = f"  (n_runs={n_runs})" if n_runs > 1 else ""
-    axes[0].set_xlabel("Context fraction"); axes[0].set_ylabel("MAE (m)")
-    axes[0].set_title(f"E1 – Oracle MAE vs Context Fraction{run_label}")
-    axes[0].legend(); axes[0].grid(True, alpha=0.3)
+    axes[0].set_xlabel("Context fraction", fontsize=PLOT_AXIS_LABEL_SIZE)
+    axes[0].set_ylabel("MAE (m)", fontsize=PLOT_AXIS_LABEL_SIZE)
+    if PLOT_SHOW_TITLES:
+        axes[0].set_title(f"E1 – Oracle MAE vs Context Fraction{run_label}", fontsize=PLOT_TITLE_SIZE)
+    axes[0].legend(fontsize=PLOT_LEGEND_SIZE); axes[0].grid(True, alpha=0.3)
+    axes[0].tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
 
-    axes[1].set_xlabel("Context fraction"); axes[1].set_ylabel("Mean predicted σ (m)")
-    axes[1].set_title("E1 – Predicted uncertainty vs Context Fraction")
-    axes[1].legend(); axes[1].grid(True, alpha=0.3)
+    axes[1].set_xlabel("Context fraction", fontsize=PLOT_AXIS_LABEL_SIZE)
+    axes[1].set_ylabel("Mean predicted σ (m)", fontsize=PLOT_AXIS_LABEL_SIZE)
+    if PLOT_SHOW_TITLES:
+        axes[1].set_title("E1 – Predicted uncertainty vs Context Fraction", fontsize=PLOT_TITLE_SIZE)
+    axes[1].legend(fontsize=PLOT_LEGEND_SIZE); axes[1].grid(True, alpha=0.3)
+    axes[1].tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
 
     plt.tight_layout()
     fig.savefig(out_dir / "e1_oracle_ctx_sweep.png", dpi=150)
@@ -584,10 +598,13 @@ def run_e2_random_dropout(models, test_data, y_mean, y_std, x_means_SP,
                         color=MODEL_COLORS.get(name), alpha=0.12)
     ax.axvline(x=NUM_SENSORS, color="black", linestyle=":", alpha=0.5, label="All sensors (oracle)")
     ax.invert_xaxis()
-    ax.set_xlabel("Number of active sensors"); ax.set_ylabel("MAE (m)")
-    ax.set_title(f"E2 – Degradation vs Active Sensors"
-                 f" (ctx={ctx_frac:.0%}, n_draws={n_draws}{run_label})")
-    ax.legend(); ax.grid(True, alpha=0.3)
+    ax.set_xlabel("Number of active sensors", fontsize=PLOT_AXIS_LABEL_SIZE)
+    ax.set_ylabel("MAE (m)", fontsize=PLOT_AXIS_LABEL_SIZE)
+    if PLOT_SHOW_TITLES:
+        ax.set_title(f"E2 – Degradation vs Active Sensors"
+                     f" (ctx={ctx_frac:.0%}, n_draws={n_draws}{run_label})", fontsize=PLOT_TITLE_SIZE)
+    ax.legend(fontsize=PLOT_LEGEND_SIZE); ax.grid(True, alpha=0.3)
+    ax.tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
     plt.tight_layout()
     fig.savefig(out_dir / "e2_random_dropout_mae.png", dpi=150)
     plt.close(fig)
@@ -599,9 +616,12 @@ def run_e2_random_dropout(models, test_data, y_mean, y_std, x_means_SP,
                 label=MODEL_LABELS.get(name, name),
                 color=MODEL_COLORS.get(name), linestyle=MODEL_STYLES.get(name), linewidth=2)
     ax.invert_xaxis()
-    ax.set_xlabel("Number of active sensors"); ax.set_ylabel("Mean predicted σ (m)")
-    ax.set_title(f"E2 – Calibration: predicted uncertainty vs Active Sensors{run_label}")
-    ax.legend(); ax.grid(True, alpha=0.3)
+    ax.set_xlabel("Number of active sensors", fontsize=PLOT_AXIS_LABEL_SIZE)
+    ax.set_ylabel("Mean predicted σ (m)", fontsize=PLOT_AXIS_LABEL_SIZE)
+    if PLOT_SHOW_TITLES:
+        ax.set_title(f"E2 – Calibration: predicted uncertainty vs Active Sensors{run_label}", fontsize=PLOT_TITLE_SIZE)
+    ax.legend(fontsize=PLOT_LEGEND_SIZE); ax.grid(True, alpha=0.3)
+    ax.tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
     plt.tight_layout()
     fig.savefig(out_dir / "e2_random_dropout_uncertainty.png", dpi=150)
     plt.close(fig)
@@ -696,10 +716,13 @@ def run_e3_sensor_importance(models, test_data, y_mean, y_std, x_means_SP,
     for name in models:
         axes[0].axhline(oracle_mae[name], linestyle="--",
                         color=MODEL_COLORS.get(name), alpha=0.5, linewidth=1)
-    axes[0].set_xticks(x); axes[0].set_xticklabels([f"S{s}" for s in sensor_ids])
-    axes[0].set_xlabel("Active sensor"); axes[0].set_ylabel("MAE (m)")
-    axes[0].set_title("E3a – Single-sensor MAE (lower = more informative)")
-    axes[0].legend(fontsize=8); axes[0].grid(axis="y", alpha=0.3)
+    axes[0].set_xticks(x); axes[0].set_xticklabels([f"S{s}" for s in sensor_ids], fontsize=PLOT_TICK_LABEL_SIZE)
+    axes[0].set_xlabel("Active sensor", fontsize=PLOT_AXIS_LABEL_SIZE)
+    axes[0].set_ylabel("MAE (m)", fontsize=PLOT_AXIS_LABEL_SIZE)
+    if PLOT_SHOW_TITLES:
+        axes[0].set_title("E3a – Single-sensor MAE (lower = more informative)", fontsize=PLOT_TITLE_SIZE)
+    axes[0].legend(fontsize=PLOT_LEGEND_SIZE); axes[0].grid(axis="y", alpha=0.3)
+    axes[0].tick_params(axis="y", labelsize=PLOT_TICK_LABEL_SIZE)
 
     # ── Plot E3b: leave-one-out ΔMAE (bar chart with error bars) ─────────────
     for i, name in enumerate(models):
@@ -708,10 +731,13 @@ def run_e3_sensor_importance(models, test_data, y_mean, y_std, x_means_SP,
                     capsize=3, label=MODEL_LABELS.get(name, name),
                     color=MODEL_COLORS.get(name), alpha=0.8)
     axes[1].axhline(0, color="black", linewidth=0.8)
-    axes[1].set_xticks(x); axes[1].set_xticklabels([f"S{s}" for s in sensor_ids])
-    axes[1].set_xlabel("Removed sensor"); axes[1].set_ylabel("ΔMAE vs oracle (m)")
-    axes[1].set_title("E3b – Leave-one-out ΔMAE (higher = more critical)")
-    axes[1].legend(fontsize=8); axes[1].grid(axis="y", alpha=0.3)
+    axes[1].set_xticks(x); axes[1].set_xticklabels([f"S{s}" for s in sensor_ids], fontsize=PLOT_TICK_LABEL_SIZE)
+    axes[1].set_xlabel("Removed sensor", fontsize=PLOT_AXIS_LABEL_SIZE)
+    axes[1].set_ylabel("ΔMAE vs oracle (m)", fontsize=PLOT_AXIS_LABEL_SIZE)
+    if PLOT_SHOW_TITLES:
+        axes[1].set_title("E3b – Leave-one-out ΔMAE (higher = more critical)", fontsize=PLOT_TITLE_SIZE)
+    axes[1].legend(fontsize=PLOT_LEGEND_SIZE); axes[1].grid(axis="y", alpha=0.3)
+    axes[1].tick_params(axis="y", labelsize=PLOT_TICK_LABEL_SIZE)
 
     if n_runs > 1:
         fig.suptitle(f"n_runs={n_runs}", fontsize=9, y=1.01)
@@ -921,9 +947,12 @@ def run_e4_spatial_dropout(models, test_data, y_mean, y_std, x_means_SP, topolog
                                     color=col, alpha=0.15)
 
         mode_label = mode_name.replace("_", " ").title()
-        ax.set_xlabel("Sensors removed"); ax.set_ylabel("MAE (m)")
-        ax.set_title(f"E4 – Spatial Dropout [{topology}] – {mode_label}{run_label}")
-        ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
+        ax.set_xlabel("Sensors removed", fontsize=PLOT_AXIS_LABEL_SIZE)
+        ax.set_ylabel("MAE (m)", fontsize=PLOT_AXIS_LABEL_SIZE)
+        if PLOT_SHOW_TITLES:
+            ax.set_title(f"E4 – Spatial Dropout [{topology}] – {mode_label}{run_label}", fontsize=PLOT_TITLE_SIZE)
+        ax.legend(fontsize=12); ax.grid(True, alpha=0.3)
+        ax.tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
         plt.tight_layout()
         fig.savefig(out_dir / f"e4_{mode_name}_mae.png", dpi=150)
         plt.close(fig)
@@ -1170,16 +1199,20 @@ def run_e5_finetune(models, train_data, val_data, test_data,
                 ax2 = ax.twinx()
                 ax2.plot(tl, color="steelblue", alpha=alpha * 0.5,
                          label="Train loss" if ri == 0 else "_")
-            ax.set_xlabel("Epoch"); ax.set_ylabel("Val MAE (m)")
-            ax2.set_ylabel("Train loss")
+            ax.set_xlabel("Epoch", fontsize=PLOT_AXIS_LABEL_SIZE)
+            ax.set_ylabel("Val MAE (m)", fontsize=PLOT_AXIS_LABEL_SIZE)
+            ax2.set_ylabel("Train loss", fontsize=PLOT_AXIS_LABEL_SIZE)
             seed_info = f"  ({n_runs} seeds: {ft_mae_mean:.3f}±{ft_mae_std:.3f} m)"
-            ax.set_title(f"E5 Fine-tuning: {name} n_traj={n_traj}{seed_info}")
+            if PLOT_SHOW_TITLES:
+                ax.set_title(f"E5 Fine-tuning: {name} n_traj={n_traj}{seed_info}", fontsize=PLOT_TITLE_SIZE)
+            ax.tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
+            ax2.tick_params(axis="y", labelsize=PLOT_TICK_LABEL_SIZE)
             handles1, labels1 = ax.get_legend_handles_labels()
             if labels1:
-                ax.legend(loc="upper right")
+                ax.legend(loc="upper right", fontsize=PLOT_LEGEND_SIZE)
             handles2, labels2 = ax2.get_legend_handles_labels()
             if labels2:
-                ax2.legend(loc="center right")
+                ax2.legend(loc="center right", fontsize=PLOT_LEGEND_SIZE)
             plt.tight_layout()
             fig.savefig(curve_dir / "finetune_curve.png", dpi=150)
             plt.close(fig)
@@ -1210,13 +1243,29 @@ def run_e5_finetune(models, train_data, val_data, test_data,
                             color=MODEL_COLORS.get(name), alpha=0.15)
 
     run_label = f"  (n_runs={n_runs})" if n_runs > 1 else ""
-    ax.set_xlabel("Fine-tuning trajectories (n_traj)")
-    ax.set_ylabel("MAE (m)")
-    ax.set_title(f"E5 – Fine-tuning adaptation (removed: {critical_sensors}){run_label}")
+    ax.set_xlabel("Fine-tuning trajectories (n_traj)", fontsize=PLOT_AXIS_LABEL_SIZE)
+    ax.set_ylabel("MAE (m)", fontsize=PLOT_AXIS_LABEL_SIZE)
+    if PLOT_SHOW_TITLES:
+        ax.set_title(f"E5 – Fine-tuning adaptation (removed: {critical_sensors}){run_label}", fontsize=PLOT_TITLE_SIZE)
     handles, labels = ax.get_legend_handles_labels()
     if labels:
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=PLOT_LEGEND_SIZE)
     ax.grid(True, alpha=0.3)
+    ax.tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
+    # Adjust y-axis bottom to be closer to the best FT result (with a small margin)
+    try:
+        y_min_vals: list = []
+        for name in masked_models:
+            m_arr = np.array(ft_results[name]["mae_mean"])
+            if len(m_arr) > 0 and np.all(np.isfinite(m_arr)):
+                y_min_vals.extend(m_arr.tolist())
+        if y_min_vals:
+            min_val = min(y_min_vals)
+            margin = max(0.05 * (max(y_min_vals) - min_val), 0.1) if len(y_min_vals) > 1 else 0.1
+            y_bottom = max(0.0, min_val - margin)
+            ax.set_ylim(bottom=y_bottom)
+    except Exception:
+        pass
     plt.tight_layout()
     fig.savefig(out_dir / "e5_mae_vs_ntraj.png", dpi=150)
     plt.close(fig)
@@ -1251,9 +1300,12 @@ def plot_cross_topology_summary(all_topology_results: Dict, out_dir: Path):
             ax.plot(k_values, mae, label=topo.capitalize(),
                     color=colors_topo.get(topo, "gray"), linewidth=2)
         ax.invert_xaxis()
-        ax.set_xlabel("Active sensors"); ax.set_ylabel("MAE (m)")
-        ax.set_title(f"E2 Cross-topology comparison – {MODEL_LABELS.get(model_name, model_name)}")
-        ax.legend(); ax.grid(True, alpha=0.3)
+        ax.set_xlabel("Active sensors", fontsize=PLOT_AXIS_LABEL_SIZE)
+        ax.set_ylabel("MAE (m)", fontsize=PLOT_AXIS_LABEL_SIZE)
+        if PLOT_SHOW_TITLES:
+            ax.set_title(f"E2 Cross-topology comparison – {MODEL_LABELS.get(model_name, model_name)}", fontsize=PLOT_TITLE_SIZE)
+        ax.legend(fontsize=PLOT_LEGEND_SIZE); ax.grid(True, alpha=0.3)
+        ax.tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
         plt.tight_layout()
         fig.savefig(out_dir / f"cross_topology_e2_{model_name}.png", dpi=150)
         plt.close(fig)
