@@ -2,9 +2,7 @@
 """
 finetune_ood.py
 ===============
-Fine-tunes Optuna-optimized ANP/RANP models trained on high-variance data
-towards a low-variance (OoD) target domain, comparing multiple parameter-
-efficient strategies and data budgets.
+Fine-tunes Optuna-optimized ANP/RANP models trained on high-variance data towards a low-variance (OoD) target domain, comparing multiple parameter-efficient strategies and data budgets.
 
 Scenario
 --------
@@ -103,10 +101,8 @@ Notes
 -----
 - Uses existing val split for early-stopping; test split for final evaluation.
 - Normalization stats recomputed from lowvar training data (target domain).
-- Each strategy × n_traj combination starts from a fresh deep-copy of the
-  source (highvar) model, so runs are fully independent.
-- The --skip-existing flag skips configs that already have a saved checkpoint,
-  allowing restartable runs.
+- Each strategy × n_traj combination starts from a fresh deep-copy of the source (highvar) model, so runs are fully independent.
+- The --skip-existing flag skips configs that already have a saved checkpoint, allowing restartable runs.
 """
 
 from __future__ import annotations
@@ -170,16 +166,25 @@ STRATEGY_COLORS = {
     "rnn_full_decoder": "#e74c3c",
 }
 STRATEGY_LABELS = {
-    "decoder_heads":    "Heads only  (mean+var proj.)",
-    "decoder_full":     "Full Decoder",
-    "decoder_det_last": "Full Decoder + Det.Enc. last cross-attn",
-    "decoder_det_full": "Full Decoder + Full Det.Enc.",
-    "decoder_lat_last": "Full Decoder + Lat.Enc. μ/σ heads",
+    "decoder_heads":    "Heads only  (μ/σ proj.)",
+    "decoder_full":     "Full Dec.",
+    "decoder_det_last": "Full Dec. + Det.Enc. last cross-attn",
+    "decoder_det_full": "Full Dec. + Full Det.Enc.",
+    "decoder_lat_last": "Full Dec. + Lat.Enc. μ/σ heads",
     # RANP-specific strategies (touch TemporalEncoder)
-    "rnn_proj_only":    "RANP: RNN input_proj + LayerNorm",
-    "rnn_proj_decoder": "RANP: RNN input_proj + LayerNorm + Full Decoder",
-    "rnn_full_decoder": "RANP: Full TemporalEncoder + Full Decoder",
+    "rnn_proj_only":    "RNN input_proj + LayerNorm",
+    "rnn_proj_decoder": "RNN input_proj + LayerNorm + Full Dec.",
+    "rnn_full_decoder": "Full Temp.Enc. + Full Dec.",
 }
+
+# --- Global plotting controls (tweak these to change all plot fonts/titles) ---
+PLOT_AXIS_LABEL_SIZE = 18
+PLOT_TICK_LABEL_SIZE = 16
+PLOT_LEGEND_SIZE     = 14
+PLOT_TEXT_SIZE       = 16
+PLOT_TITLE_SIZE      = 18
+# If False, plot titles will be omitted
+PLOT_SHOW_TITLES     = False
 
 # =============================================================================
 # Data utilities
@@ -668,6 +673,9 @@ def plot_mae_vs_ntraj(
         alpha=0.07, color="#e74c3c"
     )
 
+    # collect per-strategy minima (mean - std) to determine a sensible y-bottom
+    y_min_vals: list = []
+
     for strategy in strategies:
         y     = np.array([
             mae_results.get((strategy, str(n)), {}).get(context_frac, float("nan"))
@@ -677,6 +685,13 @@ def plot_mae_vs_ntraj(
             mae_std_results.get((strategy, str(n)), {}).get(context_frac, 0.0)
             for n in n_traj_values
         ], dtype=float)
+        # record the (mean - std) minima to know how low plots reach
+        try:
+            diff = y - y_std
+            if np.any(np.isfinite(diff)):
+                y_min_vals.append(float(np.nanmin(diff[np.isfinite(diff)])))
+        except Exception:
+            pass
         ax.plot(
             ticks, y, marker="o",
             color=STRATEGY_COLORS[strategy],
@@ -690,15 +705,34 @@ def plot_mae_vs_ntraj(
 
     ax.set_xticks(ticks)
     ax.set_xticklabels(labels)
-    ax.set_xlabel("N trajectories for fine-tuning", fontsize=11)
-    ax.set_ylabel("MAE  (m)  —  inverse holdout", fontsize=11)
-    ax.set_title(
-        f"MAE vs. data budget   |   ctx = {int(context_frac*100)}%",
-        fontsize=12
-    )
-    ax.legend(fontsize=9, loc="upper right")
+    ax.set_xlabel("N trajectories for fine-tuning", fontsize=PLOT_AXIS_LABEL_SIZE)
+    ax.set_ylabel("MAE  (m)  —  inverse holdout", fontsize=PLOT_AXIS_LABEL_SIZE)
+    if PLOT_SHOW_TITLES:
+        ax.set_title(
+            f"MAE vs. data budget   |   ctx = {int(context_frac*100)}%",
+            fontsize=PLOT_TITLE_SIZE
+        )
+    ax.legend(fontsize=PLOT_LEGEND_SIZE, loc="upper right")
     ax.grid(alpha=0.3)
-    ax.set_ylim(bottom=0)
+    ax.tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
+    # Adjust y-axis bottom to be closer to the Oracle (with a small margin)
+    try:
+        if np.isfinite(oracle):
+            min_all = float(np.nanmin(y_min_vals)) if y_min_vals else float(oracle)
+            # prefer oracle as reference but allow values below it
+            bottom_ref = min(min_all, float(oracle))
+            # margin scaled by gap (ood - oracle) when available, otherwise absolute
+            if np.isfinite(ood) and np.isfinite(oracle) and (ood - oracle) > 0:
+                delta = float(ood - oracle)
+                margin = max(0.05 * delta, 0.1)
+            else:
+                margin = 0.1
+            y_bottom = max(0.0, bottom_ref - margin)
+            ax.set_ylim(bottom=y_bottom)
+        else:
+            ax.set_ylim(bottom=0)
+    except Exception:
+        ax.set_ylim(bottom=0)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
     fig.savefig(save_path, dpi=160)
@@ -751,15 +785,17 @@ def plot_gap_closed(
 
     ax.set_xticks(ticks)
     ax.set_xticklabels(labels)
-    ax.set_xlabel("N trajectories for fine-tuning", fontsize=11)
-    ax.set_ylabel("% of OoD gap closed", fontsize=11)
-    ax.set_title(
-        f"Gap closure  |  ctx = {int(context_frac*100)}%"
-        f"  (gap = {gap:.2f} m)",
-        fontsize=12
-    )
-    ax.legend(fontsize=9)
+    ax.set_xlabel("N trajectories for fine-tuning", fontsize=PLOT_AXIS_LABEL_SIZE)
+    ax.set_ylabel("% of OoD gap closed", fontsize=PLOT_AXIS_LABEL_SIZE)
+    if PLOT_SHOW_TITLES:
+        ax.set_title(
+            f"Gap closure  |  ctx = {int(context_frac*100)}%"
+            f"  (gap = {gap:.2f} m)",
+            fontsize=PLOT_TITLE_SIZE
+        )
+    ax.legend(fontsize=PLOT_LEGEND_SIZE)
     ax.grid(alpha=0.3)
+    ax.tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
     fig.savefig(save_path, dpi=160)
@@ -787,11 +823,13 @@ def plot_time_vs_ntraj(
 
     ax.set_xticks(ticks)
     ax.set_xticklabels(labels)
-    ax.set_xlabel("N trajectories for fine-tuning", fontsize=11)
-    ax.set_ylabel("Fine-tuning time (s)", fontsize=11)
-    ax.set_title("Fine-tuning time vs. data budget", fontsize=12)
-    ax.legend(fontsize=9)
+    ax.set_xlabel("N trajectories for fine-tuning", fontsize=PLOT_AXIS_LABEL_SIZE)
+    ax.set_ylabel("Fine-tuning time (s)", fontsize=PLOT_AXIS_LABEL_SIZE)
+    if PLOT_SHOW_TITLES:
+        ax.set_title("Fine-tuning time vs. data budget", fontsize=PLOT_TITLE_SIZE)
+    ax.legend(fontsize=PLOT_LEGEND_SIZE)
     ax.grid(alpha=0.3)
+    ax.tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
     fig.savefig(save_path, dpi=160)
@@ -831,13 +869,15 @@ def plot_pareto(
                 linewidth=1.5, markersize=7)
         for x, y, lbl in zip(xs, ys, lbls):
             ax.annotate(lbl, (x, y), textcoords="offset points",
-                        xytext=(4, 4), fontsize=7, alpha=0.85)
+                        xytext=(4, 4), fontsize=PLOT_TEXT_SIZE, alpha=0.85)
 
-    ax.set_xlabel("Fine-tuning time (s)", fontsize=11)
-    ax.set_ylabel(f"MAE (m) — ctx = {int(context_frac*100)}%", fontsize=11)
-    ax.set_title("Pareto frontier: time vs. quality", fontsize=12)
-    ax.legend(fontsize=9)
+    ax.set_xlabel("Fine-tuning time (s)", fontsize=PLOT_AXIS_LABEL_SIZE)
+    ax.set_ylabel(f"MAE (m) — ctx = {int(context_frac*100)}%", fontsize=PLOT_AXIS_LABEL_SIZE)
+    if PLOT_SHOW_TITLES:
+        ax.set_title("Pareto frontier: time vs. quality", fontsize=PLOT_TITLE_SIZE)
+    ax.legend(fontsize=PLOT_LEGEND_SIZE)
     ax.grid(alpha=0.3)
+    ax.tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
     fig.savefig(save_path, dpi=160)
@@ -875,14 +915,16 @@ def plot_context_sweep(
                 label=STRATEGY_LABELS[strategy],
                 linewidth=2, markersize=6)
 
-    ax.set_xlabel("Context fraction (%)", fontsize=11)
-    ax.set_ylabel("MAE  (m)", fontsize=11)
-    ax.set_title(
-        f"MAE vs. context fraction  |  n_traj = {n_traj_highlight}",
-        fontsize=12
-    )
-    ax.legend(fontsize=9)
+    ax.set_xlabel("Context fraction (%)", fontsize=PLOT_AXIS_LABEL_SIZE)
+    ax.set_ylabel("MAE  (m)", fontsize=PLOT_AXIS_LABEL_SIZE)
+    if PLOT_SHOW_TITLES:
+        ax.set_title(
+            f"MAE vs. context fraction  |  n_traj = {n_traj_highlight}",
+            fontsize=PLOT_TITLE_SIZE
+        )
+    ax.legend(fontsize=PLOT_LEGEND_SIZE)
     ax.grid(alpha=0.3)
+    ax.tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
     ax.set_ylim(bottom=0)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
@@ -926,11 +968,12 @@ def plot_finetune_curves(
                     label=STRATEGY_LABELS[strategy],
                     linewidth=1.6, alpha=0.9)
 
-        ax.set_title(f"n_traj = {n}", fontsize=10)
-        ax.set_xlabel("Epoch", fontsize=10)
+        ax.set_title(f"n_traj = {n}", fontsize=PLOT_TITLE_SIZE if PLOT_SHOW_TITLES else PLOT_TITLE_SIZE)
+        ax.set_xlabel("Epoch", fontsize=PLOT_AXIS_LABEL_SIZE)
         ax.grid(alpha=0.3)
+        ax.tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
 
-    axes[0].set_ylabel("Val MAE (m)", fontsize=11)
+    axes[0].set_ylabel("Val MAE (m)", fontsize=PLOT_AXIS_LABEL_SIZE)
 
     handles = (
         [Line2D([0], [0], color=STRATEGY_COLORS[s], lw=2, label=STRATEGY_LABELS[s])
@@ -940,8 +983,9 @@ def plot_finetune_curves(
             Line2D([0], [0], color="#2c3e50", lw=1.5, ls="--", label="Oracle"),
         ]
     )
-    fig.legend(handles=handles, loc="upper right", fontsize=8, frameon=True)
-    fig.suptitle("Fine-tuning curves — val MAE over epochs", fontsize=12)
+    fig.legend(handles=handles, loc="upper right", fontsize=PLOT_LEGEND_SIZE, frameon=True)
+    if PLOT_SHOW_TITLES:
+        fig.suptitle("Fine-tuning curves — val MAE over epochs", fontsize=PLOT_TITLE_SIZE)
     fig.tight_layout(rect=[0, 0, 0.82, 1])
     save_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(save_path, dpi=160)
@@ -975,21 +1019,28 @@ def plot_summary_heatmap(
     ax.set_xticks(range(len(n_traj_values)))
     ax.set_xticklabels([str(n) for n in n_traj_values])
     ax.set_yticks(range(len(strategies)))
-    ax.set_yticklabels([STRATEGY_LABELS[s] for s in strategies], fontsize=9)
-    ax.set_xlabel("N trajectories", fontsize=11)
-    ax.set_title(
-        f"% of OoD gap closed  |  ctx = {int(context_frac*100)}%\n"
-        f"(gap = {gap:.2f} m;  OoD = {ood_mae:.2f} m;  oracle = {oracle_mae:.2f} m)",
-        fontsize=11
-    )
+    ax.set_yticklabels([STRATEGY_LABELS[s] for s in strategies], fontsize=PLOT_TICK_LABEL_SIZE)
+    ax.set_xlabel("N trajectories", fontsize=PLOT_AXIS_LABEL_SIZE)
+    if PLOT_SHOW_TITLES:
+        ax.set_title(
+            f"% of OoD gap closed  |  ctx = {int(context_frac*100)}%\n"
+            f"(gap = {gap:.2f} m;  OoD = {ood_mae:.2f} m;  oracle = {oracle_mae:.2f} m)",
+            fontsize=PLOT_TITLE_SIZE
+        )
     for i in range(len(strategies)):
         for j in range(len(n_traj_values)):
-            txt = f"{mat[i,j]:.0f}%" if np.isfinite(mat[i, j]) else "—"
-            ax.text(j, i, txt, ha="center", va="center", fontsize=8,
+                txt = f"{mat[i,j]:.0f}%" if np.isfinite(mat[i, j]) else "—"
+                ax.text(j, i, txt, ha="center", va="center", fontsize=PLOT_TEXT_SIZE,
                     color="black" if 20 < mat[i, j] < 80 else "white"
                     if np.isfinite(mat[i, j]) else "gray")
 
-    fig.colorbar(im, ax=ax, fraction=0.03, pad=0.02, label="% gap closed")
+    cbar = fig.colorbar(im, ax=ax, fraction=0.03, pad=0.02, label="% gap closed")
+    try:
+        cbar.ax.tick_params(labelsize=PLOT_TICK_LABEL_SIZE)
+        cbar.set_label('% gap closed', fontsize=PLOT_AXIS_LABEL_SIZE)
+    except Exception:
+        pass
+    ax.tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
     fig.tight_layout()
     save_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(save_path, dpi=160)
