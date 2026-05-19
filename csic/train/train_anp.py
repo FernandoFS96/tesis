@@ -36,7 +36,8 @@ Usage:
         python train_anp.py \
             --data_dir ../csic_real_synth_load/prepared_data \
             --target_col Cycle \
-            --reduced_features
+            --reduced_features \
+            --aggregate_by_cycle \
 
     # Evaluate a saved checkpoint
         python train_anp.py --eval_only --ckpt ./runs/20260501_120000/best.pt
@@ -125,6 +126,10 @@ class Config:
     # When True, filters X to the compact RF-identified feature set for target_col.
     # Only affects when target_col is 'SoC (%)' or 'Cycle'. Ignored when target_col='all'.
     use_reduced_features: bool = False
+    # When True, aggregates EIS measurements to one representative point per cycle.
+    # Context and target windows then operate at cycle-level (1 row per cycle) instead of measurement-level (30 rows per cycle). 
+    # Only meaningful for Cycle-target models, for SoC the intra-cycle variation is informative.
+    aggregate_by_cycle: bool = False
 
     # ── Model ─────────────────────────────────────────────────────────────────
     num_hidden: int = 128   # Hidden dimension for all encoders and decoder
@@ -167,12 +172,20 @@ class Config:
 
     @property
     def ctx_rows(self) -> int:
-        """Number of context rows = ctx_cycles × measurements_per_cycle."""
+        """
+        Context window in rows. Cycle-level if aggregate_by_cycle=True, measurement-level otherwise.
+        """
+        if self.aggregate_by_cycle:
+            return self.ctx_cycles   # 1 row per cycle after aggregation
         return self.ctx_cycles * self.measurements_per_cycle
 
     @property
     def tgt_rows(self) -> int:
-        """Number of target rows = tgt_cycles × measurements_per_cycle."""
+        """
+        Number of target rows = tgt_cycles × measurements_per_cycle.
+        """
+        if self.aggregate_by_cycle:
+            return self.tgt_cycles   # 1 row per cycle after aggregation
         return self.tgt_cycles * self.measurements_per_cycle
 
 
@@ -237,7 +250,24 @@ def train(cfg: Config) -> tuple:
             data["denorm_values"][k] = {
                 cfg.target_col: data["denorm_values"][k][cfg.target_col]
             }
+    # ── Cycle-level aggregation (optional, for Cycle-target models) ───
+    if cfg.aggregate_by_cycle:
+        from train_utils import aggregate_by_cycle as _agg
+        print(f"\n🔄  Aggregating measurements by cycle...")
+        data["normalized_synth_datasets"] = [
+            _agg(X, y) for X, y in data["normalized_synth_datasets"]
+        ]
+        real_X, real_y = data["normalized_real_dataset"]
+        data["normalized_real_dataset"] = _agg(real_X, real_y)
 
+        # input_dim doesn't change — features are the same, just averaged
+        # ctx_rows and tgt_rows already reflect aggregation via Config properties
+        n_cycles = len(data["normalized_synth_datasets"][0][0])
+        print(f"   Dataset size: {n_cycles} rows/task  "
+              f"(was ~{n_cycles * cfg.measurements_per_cycle})")
+        print(f"   ctx_rows = {cfg.ctx_rows}  "
+          f"tgt_rows = {cfg.tgt_rows}  (cycle-level)")
+    # ── Target columns and dimensions ─────────────────────────────────────────────
     target_cols    = list(data["normalized_synth_datasets"][0][1].columns)
     cfg.output_dim = len(target_cols)
     cfg.input_dim  = data["normalized_synth_datasets"][0][0].shape[1]
@@ -481,6 +511,24 @@ def eval_only(cfg: Config) -> None:
             data["denorm_values"][k] = {
                 cfg.target_col: data["denorm_values"][k][cfg.target_col]
             }
+    
+    # ── Cycle-level aggregation (optional, for Cycle-target models) ───
+    if cfg.aggregate_by_cycle:
+        from train_utils import aggregate_by_cycle as _agg
+        print(f"\n🔄  Aggregating measurements by cycle...")
+        data["normalized_synth_datasets"] = [
+            _agg(X, y) for X, y in data["normalized_synth_datasets"]
+        ]
+        real_X, real_y = data["normalized_real_dataset"]
+        data["normalized_real_dataset"] = _agg(real_X, real_y)
+
+        # input_dim doesn't change — features are the same, just averaged
+        # ctx_rows and tgt_rows already reflect aggregation via Config properties
+        n_cycles = len(data["normalized_synth_datasets"][0][0])
+        print(f"   Dataset size: {n_cycles} rows/task  "
+              f"(was ~{n_cycles * cfg.measurements_per_cycle})")
+        print(f"   ctx_rows = {cfg.ctx_rows}  "
+              f"tgt_rows = {cfg.tgt_rows}  (cycle-level)")
 
     target_cols    = list(data["normalized_synth_datasets"][0][1].columns)
     cfg.output_dim = len(target_cols)
@@ -532,7 +580,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--data_dir",       type=str,   default=None)
     p.add_argument("--run_dir",        type=str,   default="")
     p.add_argument("--target_col",     type=str, default="all", choices=["all", "SoC (%)", "Cycle"], help="Target a predecir: 'all' entrena ambos, o uno solo")
-    p.add_argument( "--reduced_features", action="store_true", dest="use_reduced_features", help=("Filter X to the compact RF-identified feature set for the selected target_col. No effect when target_col='all'."),)
+    p.add_argument("--reduced_features", action="store_true", dest="use_reduced_features", help=("Filter X to the compact RF-identified feature set for the selected target_col. No effect when target_col='all'."),)
+    p.add_argument("--aggregate_by_cycle", action="store_true", help=("Average EIS measurements per cycle before training. Reduces context/target from measurement-level (1800 rows) to cycle-level (60 rows). Recommended for Cycle-target models to eliminate intra-cycle SoC variation from the input."),)
     p.add_argument("--num_hidden",     type=int,   default=128)
     p.add_argument("--ctx_cycles",     type=int,   default=60)
     p.add_argument("--tgt_cycles",     type=int,   default=60)
@@ -565,6 +614,7 @@ def main() -> None:
         run_dir                = args.run_dir,
         target_col             = args.target_col,
         use_reduced_features   = args.use_reduced_features,
+        aggregate_by_cycle     = args.aggregate_by_cycle,
         num_hidden             = args.num_hidden,
         ctx_cycles             = args.ctx_cycles,
         tgt_cycles             = args.tgt_cycles,

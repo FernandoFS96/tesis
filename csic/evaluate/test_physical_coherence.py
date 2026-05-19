@@ -52,7 +52,7 @@ import json
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import matplotlib
 matplotlib.use("Agg")
@@ -78,6 +78,7 @@ from train.train_utils import (
     REDUCED_FEATURE_SETS,
     get_feature_indices,
     filter_x,
+    aggregate_by_cycle,
 )
 
 from models.anp import LatentModel
@@ -169,7 +170,7 @@ def load_anp_model(
     all_target_cols:  List[str],
     device:           torch.device,
     label:            str = "ANP",
-) -> Optional[Tuple[str, nn.Module, List[str], Optional[List[str]]]]:
+) -> Optional[Tuple[str, nn.Module, List[str], Optional[List[str]], Dict[str, Any]]]:
     """
     Load an ANP checkpoint and detect which targets and features it was trained on.
 
@@ -177,8 +178,9 @@ def load_anp_model(
     Infers model_input_dim directly from checkpoint weight shapes, robust to missing 'use_reduced_features' field in config.json.
 
     Returns:
-        (label, model, model_target_cols, feature_cols) or None if not found.
+        (label, model, model_target_cols, feature_cols, agg_cfg) or None if not found.
         feature_cols is None for full-feature models, or a list of column names for reduced-feature models.
+        agg_cfg is a dict with aggregation configuration for cycle-level models.
     """
     ckpt_path = run_dir / "best.pt"
     cfg_path  = run_dir / "config.json"
@@ -225,34 +227,48 @@ def load_anp_model(
     else:
         model_input_dim = input_dim  # fallback: assume full features
 
-    # Determine feature_cols for X filtering during evaluation
+    # ── Feature cols (reduced feature models) ─────────────────────────────────
     if model_input_dim == input_dim:
-        feature_cols = None          # full feature set — no filtering needed
+        feature_cols = None
     else:
         feature_cols = REDUCED_FEATURE_SETS.get(target_col)
         if feature_cols is None:
             raise ValueError(
                 f"'{label}' has input_dim={model_input_dim} (not {input_dim}), "
-                f"but REDUCED_FEATURE_SETS has no entry for target_col='{target_col}'. "
-                f"Add the reduced feature list to REDUCED_FEATURE_SETS in train_utils.py."
+                f"but REDUCED_FEATURE_SETS has no entry for target_col='{target_col}'."
             )
         if len(feature_cols) != model_input_dim:
             raise ValueError(
                 f"'{label}': checkpoint input_dim={model_input_dim} but "
-                f"REDUCED_FEATURE_SETS['{target_col}'] has {len(feature_cols)} features. "
-                f"These must match — check REDUCED_FEATURE_SETS in train_utils.py."
+                f"REDUCED_FEATURE_SETS['{target_col}'] has {len(feature_cols)} features."
             )
+
+    # ── Aggregation config (cycle-level models) ────────────────────────────────
+    aggregate    = cfg_data.get("aggregate_by_cycle", False) if cfg_path.exists() else False
+    ctx_cycles   = cfg_data.get("ctx_cycles",  60) if cfg_path.exists() else 60
+    tgt_cycles   = cfg_data.get("tgt_cycles",  60) if cfg_path.exists() else 60
+    meas_p_cycle = cfg_data.get("measurements_per_cycle", 30) if cfg_path.exists() else 30
+
+    model_ctx_rows = ctx_cycles if aggregate else ctx_cycles * meas_p_cycle
+    model_tgt_rows = tgt_cycles if aggregate else tgt_cycles * meas_p_cycle
+
+    agg_cfg = {
+        "aggregate": aggregate,
+        "ctx_rows":  model_ctx_rows,
+        "tgt_rows":  model_tgt_rows,
+    }
 
     model = LatentModel(num_hidden=num_hidden, input_dim=model_input_dim,
                         output_dim=output_dim, attn_dropout=attn_dropout)
-    model.load_state_dict(raw["model"])   # reuse already-loaded raw dict
+    model.load_state_dict(raw["model"])
     model.eval().to(device)
 
     val_mae  = raw.get("val_MAE", raw.get("val_loss", "?"))
     feat_str = f"reduced({model_input_dim})" if feature_cols else f"all({input_dim})"
+    agg_str  = f"  agg=cycle" if aggregate else ""
     print(f"  ✓  {label:<22} targets={model_target_cols}  "
-          f"num_hidden={num_hidden}  features={feat_str}  val_MAE={val_mae}")
-    return (label, model, model_target_cols, feature_cols)
+          f"features={feat_str}{agg_str}  val_MAE={val_mae}")
+    return (label, model, model_target_cols, feature_cols, agg_cfg)
 
 
 def load_mlp(ckpt_path: Path, input_dim: int, output_dim: int,
@@ -601,6 +617,21 @@ def plot_comparison_coherence(
             if np.all(np.isnan(p)):
                 continue
 
+            # Handle cycle-aggregated models whose predictions have fewer rows
+            # than the measurement-level ground truth (e.g. 60 vs 1800).
+            # Upsample by repeating each cycle value for all its measurements,
+            # producing a step-function that aligns with the x-axis.
+            n_true = len(x)
+            n_pred = len(p)
+            if n_pred != n_true:
+                if n_pred < n_true:
+                    # Upsample: repeat each value ceil(n_true/n_pred) times, trim
+                    repeats = int(np.ceil(n_true / n_pred))
+                    p = np.repeat(p, repeats)[:n_true]
+                else:
+                    # Downsample: slice (shouldn't happen in practice)
+                    p = p[:n_true]
+
             # Violation summary for legend
             if report and "SoC" in col:
                 n_viol = report.soc_below_min + report.soc_above_max
@@ -732,28 +763,34 @@ def run(
     x_col_names = list(data["normalized_synth_datasets"][0][0].columns)
 
     # ── Load models ───────────────────────────────────────────────────────────
-    # Each entry: (label, model, type, model_target_cols, feature_cols)
-    # feature_cols: list of X column names for reduced models, None for full
-    models_to_test: List[Tuple[str, nn.Module, str, List[str], Optional[List[str]]]] = []
+    # Each entry: (label, model, type, model_target_cols, feature_cols, agg_cfg)
+    #   feature_cols : X column subset for reduced models, None for full-feature
+    #   agg_cfg      : dict with 'aggregate', 'ctx_rows', 'tgt_rows'
+    _EMPTY_AGG = {"aggregate": False,
+                  "ctx_rows":  cfg.ctx_rows,
+                  "tgt_rows":  cfg.tgt_rows}
+    models_to_test: List[Tuple[str, nn.Module, str, List[str], Optional[List[str]], Dict]] = []
 
     if anp_run_dir is not None:
         anp = load_anp_model(anp_run_dir, input_dim, target_cols, device, label="ANP")
         if anp:
-            models_to_test.append((anp[0], anp[1], "anp", anp[2], anp[3]))
+            models_to_test.append((anp[0], anp[1], "anp", anp[2], anp[3], anp[4]))
 
     if anp_soc_run_dir is not None:
         anp_soc = load_anp_model(
             anp_soc_run_dir, input_dim, target_cols, device, label="ANP-SoC"
         )
         if anp_soc:
-            models_to_test.append((anp_soc[0], anp_soc[1], "anp", anp_soc[2], anp_soc[3]))
+            models_to_test.append((anp_soc[0], anp_soc[1], "anp",
+                                    anp_soc[2], anp_soc[3], anp_soc[4]))
 
     if anp_cycle_run_dir is not None:
         anp_cyc = load_anp_model(
             anp_cycle_run_dir, input_dim, target_cols, device, label="ANP-Cycle"
         )
         if anp_cyc:
-            models_to_test.append((anp_cyc[0], anp_cyc[1], "anp", anp_cyc[2], anp_cyc[3]))
+            models_to_test.append((anp_cyc[0], anp_cyc[1], "anp",
+                                    anp_cyc[2], anp_cyc[3], anp_cyc[4]))
 
     if anp_soc_reduced_run_dir is not None:
         anp_soc_r = load_anp_model(
@@ -762,7 +799,7 @@ def run(
         )
         if anp_soc_r:
             models_to_test.append((anp_soc_r[0], anp_soc_r[1], "anp",
-                                    anp_soc_r[2], anp_soc_r[3]))
+                                    anp_soc_r[2], anp_soc_r[3], anp_soc_r[4]))
 
     if anp_cycle_reduced_run_dir is not None:
         anp_cyc_r = load_anp_model(
@@ -771,7 +808,7 @@ def run(
         )
         if anp_cyc_r:
             models_to_test.append((anp_cyc_r[0], anp_cyc_r[1], "anp",
-                                    anp_cyc_r[2], anp_cyc_r[3]))
+                                    anp_cyc_r[2], anp_cyc_r[3], anp_cyc_r[4]))
 
     if mlp_run_dir is not None:
         cfg_path = mlp_run_dir / "config.json"
@@ -785,20 +822,38 @@ def run(
         dr = load_mlp(mlp_run_dir / "dr_mlp" / "best.pt",
                       input_dim, output_dim, device, neurons, dropout)
         if dr:
-            models_to_test.append(("DR-MLP", dr, "mlp", target_cols, None))
+            models_to_test.append(("DR-MLP", dr, "mlp", target_cols, None, _EMPTY_AGG))
 
         if specialist_id is not None:
             spec_path = mlp_run_dir / f"specialist_{specialist_id:02d}" / "best.pt"
             spec = load_mlp(spec_path, input_dim, output_dim, device, neurons, dropout)
             if spec:
                 models_to_test.append((f"Specialist_{specialist_id:02d}", spec, "mlp",
-                                        target_cols, None))
+                                        target_cols, None, _EMPTY_AGG))
 
     if not models_to_test:
         print("\n  ⚠  No models loaded — check paths and try again.")
         return
 
-    print(f"\n  Models loaded: {[m for m, _, _, _, _ in models_to_test]}")
+    print(f"\n  Models loaded: {[m for m, _, _, _, _, _ in models_to_test]}")
+
+    # ── Pre-compute cycle-level aggregated tasks_data (lazy) ──────────────────
+    # Only built if at least one model uses aggregate_by_cycle=True.
+    needs_agg = any(m[5].get("aggregate", False) for m in models_to_test)
+    if needs_agg:
+        print("\n  🔄  Pre-computing cycle-level aggregated windows...")
+        tasks_data_agg = []
+        for i in task_ids:
+            X, y = sort_task_by_cycle(*data["normalized_synth_datasets"][i])
+            X_a, y_a = aggregate_by_cycle(X, y)
+            X_ctx_a, y_ctx_a, X_tgt_a, y_tgt_a = extract_window(
+                X_a, y_a, cfg.ctx_cycles, cfg.tgt_cycles   # 1 row per cycle
+            )
+            tasks_data_agg.append((task_label(i), X_ctx_a, y_ctx_a, X_tgt_a, y_tgt_a))
+        print(f"     ctx={cfg.ctx_cycles} rows  tgt={cfg.tgt_cycles} rows "
+              f"(cycle-level, 1 row/cycle)")
+    else:
+        tasks_data_agg = tasks_data   # unused alias — avoids NameError
 
     # ── Run coherence checks ──────────────────────────────────────────────────
     print(f"\n🔬  Running coherence checks...\n")
@@ -812,18 +867,20 @@ def run(
     task_reports:     Dict[str, Dict[str, ViolationReport]] = {}
     task_true_dn:     Dict[str, np.ndarray] = {}
 
-    for m_label, model, m_type, m_target_cols, feat_cols in models_to_test:
-        feat_idx = get_feature_indices(x_col_names, feat_cols)
+    for m_label, model, m_type, m_target_cols, feat_cols, agg_cfg in models_to_test:
+        feat_idx  = get_feature_indices(x_col_names, feat_cols)
+        # Route to cycle-level windows if the model used aggregate_by_cycle
+        m_tasks   = tasks_data_agg if agg_cfg.get("aggregate") else tasks_data
         print(f"  ── {m_label} ─────────────────────────────────────")
-        for t_label, X_ctx, y_ctx, X_tgt, y_tgt in tasks_data:
+        for t_label, X_ctx, y_ctx, X_tgt, y_tgt in m_tasks:
 
             # Predict in normalized space (NaN for unmodelled targets)
             if m_type == "anp":
                 pred_norm = predict_anp(
                     model,
-                    filter_x(X_ctx, feat_idx),   # filter X to model's features
+                    filter_x(X_ctx, feat_idx),
                     y_ctx,
-                    filter_x(X_tgt, feat_idx),   # filter X to model's features
+                    filter_x(X_tgt, feat_idx),
                     device,
                     target_cols, m_target_cols
                 )
@@ -945,7 +1002,7 @@ def run(
                  f"mono_threshold = {cfg.mono_threshold}%")
     lines.append("=" * 70)
 
-    for m_label in [m for m, _, _, _, _ in models_to_test]:
+    for m_label in [m for m, _, _, _, _, _ in models_to_test]:
         m_reports = [r for r in all_reports if r.model_label == m_label]
         n_tasks   = len(m_reports)
         n_total   = sum(r.n_predictions for r in m_reports)

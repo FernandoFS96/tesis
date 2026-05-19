@@ -6,22 +6,22 @@ Thresholds: SoC ∈ [0.0, 100.0]%  spike > 30.0%  mono_threshold = 10.0%
 ── ANP (8 tasks, 14,400 predictions) ──
 Violation type                         Count   % of preds
 ---------------------------------------------------------
-  SoC below 0%                           621         4.31%
+  SoC below 0%                           694         4.82%
   SoC above 100%                          60         0.42%
   SoC spike (>30%/step)                    0         0.00%
   SoC trend not decreasing                 0         0.00%
-  Cycle negative                        1972        13.69%
+  Cycle negative                        2082        14.46%
   Cycle trend decreasing                   0         0.00%
   Tasks with any violation                 8 / 8 tasks
 
   SoC predicted range across all tasks:
-    Global min: -1.65%  Global max: 103.35%  (valid: [0, 100]%)
+    Global min: -1.42%  Global max: 105.12%  (valid: [0, 100]%)
 
 ── ANP-SoC (8 tasks, 14,400 predictions) ──
 Violation type                         Count   % of preds
 ---------------------------------------------------------
-  SoC below 0%                          1184         8.22%
-  SoC above 100%                          40         0.28%
+  SoC below 0%                          1290         8.96%
+  SoC above 100%                          35         0.24%
   SoC spike (>30%/step)                    0         0.00%
   SoC trend not decreasing                 0         0.00%
   Cycle negative                           0         0.00%
@@ -29,7 +29,7 @@ Violation type                         Count   % of preds
   Tasks with any violation                 8 / 8 tasks
 
   SoC predicted range across all tasks:
-    Global min: -5.86%  Global max: 102.14%  (valid: [0, 100]%)
+    Global min: -9.93%  Global max: 101.87%  (valid: [0, 100]%)
 
 ── ANP-Cycle (8 tasks, 14,400 predictions) ──
 Violation type                         Count   % of preds
@@ -38,7 +38,7 @@ Violation type                         Count   % of preds
   SoC above 100%                           0         0.00%
   SoC spike (>30%/step)                    0         0.00%
   SoC trend not decreasing                 0         0.00%
-  Cycle negative                         334         2.32%
+  Cycle negative                         339         2.35%
   Cycle trend decreasing                   0         0.00%
   Tasks with any violation                 3 / 8 tasks
 
@@ -47,18 +47,18 @@ Violation type                         Count   % of preds
 ── ANP-SoC-red (8 tasks, 14,400 predictions) ──
 Violation type                         Count   % of preds
 ---------------------------------------------------------
-  SoC below 0%                            31         0.22%
+  SoC below 0%                            29         0.20%
   SoC above 100%                         120         0.83%
   SoC spike (>30%/step)                    0         0.00%
   SoC trend not decreasing                 0         0.00%
   Cycle negative                           0         0.00%
   Cycle trend decreasing                   0         0.00%
-  Tasks with any violation                 4 / 8 tasks
+  Tasks with any violation                 3 / 8 tasks
 
   SoC predicted range across all tasks:
-    Global min: -0.71%  Global max: 101.87%  (valid: [0, 100]%)
+    Global min: -0.72%  Global max: 101.23%  (valid: [0, 100]%)
 
-── ANP-Cycle-red (8 tasks, 14,400 predictions) ──
+── ANP-Cycle-red (8 tasks, 480 predictions) ──
 Violation type                         Count   % of preds
 ---------------------------------------------------------
   SoC below 0%                             0         0.00%

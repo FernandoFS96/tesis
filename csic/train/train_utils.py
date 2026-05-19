@@ -748,6 +748,59 @@ def apply_feature_reduction(
 
     return updated_data
 
+def aggregate_by_cycle(
+    X: pd.DataFrame,
+    y: pd.DataFrame,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Aggregate EIS measurements to one representative point per cycle.
+
+    Replaces the ~30 rows per cycle with a single row whose features are the column-wise mean across all measurements in that cycle.
+    This eliminates the intra-cycle SoC variation from the input, leaving only the inter-cycle degradation signal in X.
+
+    Target aggregation:
+        - Cycle: constant within each group → mean equals cycle number
+        - SoC(%): mean SoC of the cycle (represents average charge state)
+
+    Args:
+        X: Feature DataFrame (T, D), cycle-sorted, without Cycle column.
+        y: Target DataFrame  (T, O), must contain 'Cycle' column.
+
+    Returns:
+        X_agg (n_cycles, D) and y_agg (n_cycles, O) — one row per cycle.
+
+    Raises:
+        ValueError: if 'Cycle' is not present in y.
+    """
+    if "Cycle" not in y.columns:
+        raise ValueError(
+            "aggregate_by_cycle requires 'Cycle' in y. "
+            "Ensure target_col includes Cycle or is 'all'."
+        )
+
+    cycle_ids = y["Cycle"].values
+
+    # X: mean of all EIS measurements within each cycle
+    X_work = X.copy()
+    X_work["_cycle_key"] = cycle_ids
+    X_agg = (
+        X_work.groupby("_cycle_key", sort=True)
+              .mean()
+              .reset_index(drop=True)
+    )
+
+    # y: mean per cycle (Cycle target is constant within group,
+    #    SoC target becomes mean SoC of the cycle)
+    y_work = y.copy()
+    y_work["_cycle_key"] = cycle_ids
+    y_agg = (
+        y_work.groupby("_cycle_key", sort=True)
+              .mean()
+              .reset_index(drop=True)
+    )
+
+    return X_agg, y_agg
+
 def get_feature_indices(
     x_col_names:  List[str],
     feature_cols: Optional[List[str]],

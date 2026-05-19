@@ -22,14 +22,16 @@ specialist_15              24.062    206.475     44.987    168.528     52.884   
 specialist_16              25.165    139.104     13.800    151.062     11.059    239.362
 specialist_17              24.013    261.828     18.051    146.540     10.654    203.997
 dr_mlp                      3.160     33.186      3.551     36.772      5.082     49.691
-anp                         2.249      9.201      1.084     25.621      2.838     70.063  ← ANP dual
-anp_soc                     0.665        N/A      0.747        N/A      4.136        N/A  ← ANP SoC-only
-anp_cycle                     N/A      5.765        N/A      7.763        N/A     35.753  ← ANP Cycle-only
-anp_soc_reduced             0.666        N/A      0.679        N/A      0.951        N/A
-anp_cycle_reduced             N/A     14.966        N/A     14.870        N/A     16.331
+anp                         2.156      9.698      1.115     24.474      1.976     70.086  ← ANP dual
+anp_soc                     0.669        N/A      0.828        N/A      4.366        N/A  ← ANP SoC-only
+anp_cycle                     N/A      5.490        N/A      7.495        N/A     34.453  ← ANP Cycle-only
+anp_soc_reduced             0.674        N/A      0.662        N/A      0.947        N/A  ← ANP SoC-only (reduced)
+anp_cycle_reduced             N/A     10.173        N/A      8.727        N/A     13.590  ← ANP Cycle-only (reduced)
 -----------------------------------------------------------------------------------------------
 AVG Specialists            25.040    176.403     40.403    272.706     45.225    419.593
 DR-MLP                      3.160     33.186      3.551     36.772      5.082     49.691
-ANP (dual)                  2.249      9.201      1.084     25.621      2.838     70.063
-ANP (SoC-only)              0.665        N/A      0.747        N/A      4.136        N/A
-ANP (Cycle-only)              N/A      5.765        N/A      7.763        N/A     35.753
+ANP (dual)                  2.156      9.698      1.115     24.474      1.976     70.086
+ANP (SoC-only)              0.669        N/A      0.828        N/A      4.366        N/A
+ANP (Cycle-only)              N/A      5.490        N/A      7.495        N/A     34.453
+ANP (SoC reduced)           0.674        N/A      0.662        N/A      0.947        N/A
+ANP (Cycle reduced)           N/A     10.173        N/A      8.727        N/A     13.590
