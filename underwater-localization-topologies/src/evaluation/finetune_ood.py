@@ -166,23 +166,23 @@ STRATEGY_COLORS = {
     "rnn_full_decoder": "#e74c3c",
 }
 STRATEGY_LABELS = {
-    "decoder_heads":    "Heads only  (μ/σ proj.)",
-    "decoder_full":     "Full Dec.",
-    "decoder_det_last": "Full Dec. + Det.Enc. last cross-attn",
-    "decoder_det_full": "Full Dec. + Full Det.Enc.",
-    "decoder_lat_last": "Full Dec. + Lat.Enc. μ/σ heads",
+    "decoder_heads":    "Dec. heads",
+    "decoder_full":     "Dec. Full",
+    "decoder_det_last": "Dec. + Det.Enc. last",
+    "decoder_det_full": "Dec. + Full Det.Enc.",
+    "decoder_lat_last": "Dec. + Lat.Enc. last",
     # RANP-specific strategies (touch TemporalEncoder)
-    "rnn_proj_only":    "RNN input_proj + LayerNorm",
-    "rnn_proj_decoder": "RNN input_proj + LayerNorm + Full Dec.",
-    "rnn_full_decoder": "Full Temp.Enc. + Full Dec.",
+    "rnn_proj_only":    "RNN Proj. Only",
+    "rnn_proj_decoder": "RNN Proj. + Dec. Full",
+    "rnn_full_decoder": "Temp. Enc. + Dec. Full.",
 }
 
 # --- Global plotting controls (tweak these to change all plot fonts/titles) ---
-PLOT_AXIS_LABEL_SIZE = 18
-PLOT_TICK_LABEL_SIZE = 16
+PLOT_AXIS_LABEL_SIZE = 20
+PLOT_TICK_LABEL_SIZE = 18
 PLOT_LEGEND_SIZE     = 14
-PLOT_TEXT_SIZE       = 16
-PLOT_TITLE_SIZE      = 18
+PLOT_TEXT_SIZE       = 18
+PLOT_TITLE_SIZE      = 20
 # If False, plot titles will be omitted
 PLOT_SHOW_TITLES     = False
 

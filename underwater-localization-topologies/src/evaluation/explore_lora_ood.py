@@ -123,11 +123,11 @@ RANP_LORA_TARGETS = ["lora_anp_base", "lora_rnn_out", "lora_full"]
 ALL_LORA_TARGETS  = ANP_LORA_TARGETS + RANP_LORA_TARGETS
 
 TARGET_LABELS = {
-    "lora_det_full": "LoRA: Full Det.Enc. + Full Decoder",
-    "lora_det_last": "LoRA: Det.Enc. last cross-attn + Full Decoder",
-    "lora_anp_base": "LoRA (RANP): Full Det.Enc. + Full Decoder",
-    "lora_rnn_out":  "LoRA (RANP): RNN output correction + Full Decoder",
-    "lora_full":     "LoRA (RANP): Det.Enc. + RNN correction + Full Decoder",
+    "lora_det_full": "LoRA: Dec. Full + Det.Enc. Full",
+    "lora_det_last": "LoRA: Dec. Full + Det.Enc. last",
+    "lora_anp_base": "LoRA (RANP): Dec. Full + Full Det.Enc.",
+    "lora_rnn_out":  "LoRA (RANP): RNN output + Dec. Full",
+    "lora_full":     "LoRA (RANP): RNN output + Det.Enc. + Dec. Full",
 }
 
 TARGET_COLORS = {
@@ -139,11 +139,11 @@ TARGET_COLORS = {
 }
 
 # --- Global plotting controls (match finetune_ood.py) ---
-PLOT_AXIS_LABEL_SIZE = 18
-PLOT_TICK_LABEL_SIZE = 16
+PLOT_AXIS_LABEL_SIZE = 20
+PLOT_TICK_LABEL_SIZE = 18
 PLOT_LEGEND_SIZE     = 14
-PLOT_TEXT_SIZE       = 16
-PLOT_TITLE_SIZE      = 18
+PLOT_TEXT_SIZE       = 18
+PLOT_TITLE_SIZE      = 20
 # If False, plot titles will be omitted
 PLOT_SHOW_TITLES     = False
 
