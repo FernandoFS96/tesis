@@ -1,0 +1,26 @@
+pred_task,ctx_task,matched,target,mae
+val_01,val_01,True,SoC (%),0.4530525167222572
+val_01,val_02,False,SoC (%),2.0657307531525033
+val_01,val_03,False,SoC (%),9.251728774441787
+val_01,val_04,False,SoC (%),4.143039871361725
+val_01,val_05,False,SoC (%),2.488006724995946
+val_02,val_01,False,SoC (%),4.6919798174600835
+val_02,val_02,True,SoC (%),0.6164407139752774
+val_02,val_03,False,SoC (%),2.827741744997157
+val_02,val_04,False,SoC (%),7.303722288907434
+val_02,val_05,False,SoC (%),6.354180313351778
+val_03,val_01,False,SoC (%),8.476955903821459
+val_03,val_02,False,SoC (%),7.702121394167314
+val_03,val_03,True,SoC (%),0.8088196930920966
+val_03,val_04,False,SoC (%),9.771012061078853
+val_03,val_05,False,SoC (%),8.953922142618541
+val_04,val_01,False,SoC (%),10.676976858724354
+val_04,val_02,False,SoC (%),12.111053001744471
+val_04,val_03,False,SoC (%),13.035512161628102
+val_04,val_04,True,SoC (%),0.8326651209457708
+val_04,val_05,False,SoC (%),6.378086694438621
+val_05,val_01,False,SoC (%),2.928382173953745
+val_05,val_02,False,SoC (%),6.636929965454334
+val_05,val_03,False,SoC (%),8.80047311391974
+val_05,val_04,False,SoC (%),2.9558526764170083
+val_05,val_05,True,SoC (%),0.6343260197430531
