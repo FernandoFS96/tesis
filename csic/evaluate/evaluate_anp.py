@@ -34,8 +34,7 @@ Five evaluation tests (controllable via --tests):
     TEST 5 — Cross-task context robustness
         Predict task i using context from task j != i.
 
-Inference uses n_passes stochastic forward passes (default 5) averaged
-via the law of total variance to reduce the ANP's inherent stochasticity.
+Inference uses n_passes stochastic forward passes (default 5) averaged via the law of total variance to reduce the ANP's inherent stochasticity.
 
 Usage:
     python evaluate_anp.py \
@@ -363,9 +362,8 @@ def predict_mi(
     """
     Run inference for a ModelInfo, handling X/y filtering and output expansion.
 
-    Filters X to mi.feat_idx and y_ctx to mi.target_idx before the forward
-    pass, then expands results to all_target_cols shape with NaN for targets
-    the model does not predict.
+    Filters X to mi.feat_idx and y_ctx to mi.target_idx before the forward pass, 
+    then expands results to all_target_cols shape with NaN for targets the model does not predict.
 
     Returns:
         mean (Nt, len(all_target_cols)) and std (Nt, len(all_target_cols)).
@@ -800,8 +798,7 @@ def run_for_model(
     """
     Run all selected tests for a single ModelInfo.
 
-    Automatically selects cycle-aggregated task data for models trained
-    with aggregate_by_cycle=True.
+    Automatically selects cycle-aggregated task data for models trained with aggregate_by_cycle=True.
 
     Args:
         tasks_raw:  Measurement-level task data (Nc×MEAS, ...).
@@ -975,30 +972,18 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     # Model paths
-    p.add_argument("--anp_run",              type=str, default=None,
-                   help="ANP dual-target run directory")
-    p.add_argument("--anp_soc_run",          type=str, default=None,
-                   help="ANP SoC-only run directory")
-    p.add_argument("--anp_cycle_run",        type=str, default=None,
-                   help="ANP Cycle-only run directory")
-    p.add_argument("--anp_soc_reduced_run",  type=str, default=None,
-                   help="ANP SoC-only reduced-features run directory")
-    p.add_argument("--anp_cycle_reduced_run",type=str, default=None,
-                   help="ANP Cycle-only reduced-features run directory "
-                        "(auto-detects aggregate_by_cycle from config.json)")
+    p.add_argument("--anp_run", type=str, default=None, help="ANP dual-target run directory")
+    p.add_argument("--anp_soc_run", type=str, default=None, help="ANP SoC-only run directory")
+    p.add_argument("--anp_cycle_run", type=str, default=None, help="ANP Cycle-only run directory")
+    p.add_argument("--anp_soc_reduced_run", type=str, default=None, help="ANP SoC-only reduced-features run directory")
+    p.add_argument("--anp_cycle_reduced_run",type=str, default=None, help="ANP Cycle-only reduced-features run directory (auto-detects aggregate_by_cycle from config.json)")
     # Data and output
-    p.add_argument("--data_dir",  type=str,
-                   default="../csic_real_synth_load/prepared_data")
-    p.add_argument("--out_dir",   type=str, default="",
-                   help="Base output directory (default: ./anp_eval/)")
+    p.add_argument("--data_dir", type=str, default="../csic_real_synth_load/prepared_data")
+    p.add_argument("--out_dir", type=str, default="", help="Base output directory (default: ./anp_eval/)")
     # Evaluation settings
-    p.add_argument("--tests",    type=int, nargs="+", default=[1, 2, 3, 4, 5],
-                   help="Tests to run (1-5)")
-    p.add_argument("--split",    type=str, default="val",
-                   choices=["train", "val", "test", "all"],
-                   help="Task split to evaluate")
-    p.add_argument("--n_passes", type=int, default=5,
-                   help="Stochastic forward passes to average per prediction")
+    p.add_argument("--tests", type=int, nargs="+", default=[1, 2, 3, 4, 5], help="Tests to run (1-5)")
+    p.add_argument("--split",    type=str, default="val", choices=["train", "val", "test", "all"], help="Task split to evaluate")
+    p.add_argument("--n_passes", type=int, default=5, help="Stochastic forward passes to average per prediction")
     # Task split config
     p.add_argument("--train_ids", type=int, nargs="+", default=list(range(17)))
     p.add_argument("--val_ids",   type=int, nargs="+", default=list(range(17, 22)))

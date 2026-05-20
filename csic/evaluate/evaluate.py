@@ -249,8 +249,7 @@ def load_anp_model(
     label:            str = "anp",
 ) -> Optional[Tuple[str, nn.Module, List[str], Optional[List[str]], Dict]]:
     """
-    Load an ANP checkpoint and detect which targets, features, and aggregation
-    strategy it was trained on. Works transparently for:
+    Load an ANP checkpoint and detect which targets, features, and aggregation strategy it was trained on. Works for:
         - Dual-target / single-target models (output_dim detection)
         - Full-feature / reduced-feature models (input_dim from checkpoint)
         - Measurement-level / cycle-level aggregated models (aggregate_by_cycle)
@@ -550,8 +549,7 @@ def plot_bar_comparison(
     out_dir:     Path,
 ) -> None:
     """
-    Grouped bar chart: average MAE per model for train / val / test splits.
-    One figure for SoC, one for Cycle.
+    Grouped bar chart: average MAE per model for train / val / test splits. One figure for SoC, one for Cycle.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -951,8 +949,7 @@ def run(
 # ==============================================================================
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Unified validation — Specialist MLPs, DR-MLP and ANP variants",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    p = argparse.ArgumentParser(description="Unified validation — Specialist MLPs, DR-MLP and ANP variants",formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--mlp_run", type=str, required=True, help="Path to the runs_mlp/<timestamp>/ directory")
     p.add_argument("--anp_run", type=str, default=None, help="Path to the dual-target ANP run directory (optional)")

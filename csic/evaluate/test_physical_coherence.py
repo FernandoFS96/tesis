@@ -303,7 +303,8 @@ def predict_anp(
     Run ANP inference.
 
     Filters y_ctx to the model's trained targets before the forward pass.
-    Returns predictions expanded to (Nt, len(all_target_cols)) with NaN for any target the model does not predict, so downstream checks can treat all models uniformly.
+    Returns predictions expanded to (Nt, len(all_target_cols)) with NaN for any target the model does not predict, 
+    so downstream checks can treat all models uniformly.
 
     Args:
         all_target_cols:   All targets present in the data.
@@ -617,10 +618,8 @@ def plot_comparison_coherence(
             if np.all(np.isnan(p)):
                 continue
 
-            # Handle cycle-aggregated models whose predictions have fewer rows
-            # than the measurement-level ground truth (e.g. 60 vs 1800).
-            # Upsample by repeating each cycle value for all its measurements,
-            # producing a step-function that aligns with the x-axis.
+            # Handle cycle-aggregated models whose predictions have fewer rows than the measurement-level ground truth (e.g. 60 vs 1800).
+            # Upsample by repeating each cycle value for all its measurements, producing a step-function that aligns with the x-axis.
             n_true = len(x)
             n_pred = len(p)
             if n_pred != n_true:
