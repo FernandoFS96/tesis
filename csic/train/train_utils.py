@@ -830,3 +830,110 @@ def get_feature_indices(
 def filter_x(X: np.ndarray, feat_idx: Optional[List[int]]) -> np.ndarray:
     """Return X[:, feat_idx] if feat_idx is not None, else X unchanged."""
     return X if feat_idx is None else X[:, feat_idx]
+
+@torch.no_grad()
+def enrich_with_soc_predictions(
+    tasks_raw:        List[Tuple[pd.DataFrame, pd.DataFrame]],
+    tasks_agg:        List[Tuple[pd.DataFrame, pd.DataFrame]],
+    anp_soc_model:    nn.Module,
+    soc_feat_cols:    Optional[List[str]],
+    device:           torch.device,
+    ctx_cycles:       int = 60,
+    meas_per_cycle:   int = 30,
+) -> List[Tuple[pd.DataFrame, pd.DataFrame]]:
+    """
+    Enrich cycle-aggregated tasks with per-cycle SoC statistics predicted
+    by a pre-trained ANP-SoC model.
+
+    For each task, the ANP-SoC model predicts SoC for every measurement row
+    using the first ctx_cycles cycles as context (prior path — no target_y).
+    Four statistics are computed per cycle from those predictions and appended
+    as new columns to the cycle-aggregated X DataFrame:
+
+        soc_pred_mean  — mean predicted SoC across the cycle's measurements
+        soc_pred_min   — minimum predicted SoC (depth of discharge)
+        soc_pred_max   — maximum predicted SoC (top of charge)
+        soc_pred_range — soc_pred_max − soc_pred_min (amplitude)
+
+    These features give the ANP-Cycle explicit information about the charge
+    regime of each cycle, separating the intra-cycle SoC variation from the
+    inter-cycle degradation signal.
+
+    Args:
+        tasks_raw:      Measurement-level tasks [(X_df, y_df), ...].
+                        X_df: (T, D), y_df: (T, O) with 'Cycle' column.
+        tasks_agg:      Cycle-aggregated tasks [(X_agg, y_agg), ...].
+                        X_agg: (N_cycles, D), y_agg: (N_cycles, O).
+        anp_soc_model:  Loaded ANP-SoC LatentModel in eval mode.
+        soc_feat_cols:  X column names used by ANP-SoC (None = all columns).
+        device:         Torch device.
+        ctx_cycles:     Context window size in cycles.
+        meas_per_cycle: Measurements per cycle.
+
+    Returns:
+        Enriched cycle-aggregated tasks [(X_enriched, y_agg), ...]
+        where X_enriched has 4 extra columns.
+    """
+    from models.anp import LatentModel   # local import — avoids circular deps
+
+    ctx_rows = ctx_cycles * meas_per_cycle
+    enriched = []
+
+    for task_idx, ((X_raw, y_raw), (X_agg, y_agg)) in enumerate(
+        zip(tasks_raw, tasks_agg)
+    ):
+        T = len(X_raw)
+
+        # Context: first ctx_cycles cycles at measurement level
+        ctx_end  = min(ctx_rows, T)
+        X_ctx_df = X_raw.iloc[:ctx_end]
+        y_ctx_df = y_raw.iloc[:ctx_end]
+
+        # Filter X to ANP-SoC feature set if it used reduced features
+        if soc_feat_cols is not None:
+            X_ctx_np = X_ctx_df[soc_feat_cols].values.astype(np.float32)
+            X_all_np = X_raw[soc_feat_cols].values.astype(np.float32)
+        else:
+            X_ctx_np = X_ctx_df.values.astype(np.float32)
+            X_all_np = X_raw.values.astype(np.float32)
+
+        # y_ctx: only SoC column (ANP-SoC is single-target)
+        soc_col_name = "SoC (%)"
+        y_ctx_np = y_ctx_df[[soc_col_name]].values.astype(np.float32)
+
+        # Run ANP-SoC inference for ALL rows (prior path)
+        ctx_x = torch.tensor(X_ctx_np).unsqueeze(0).to(device)
+        ctx_y = torch.tensor(y_ctx_np).unsqueeze(0).to(device)
+        tgt_x = torch.tensor(X_all_np).unsqueeze(0).to(device)
+        soc_mean, _, _, _, _ = anp_soc_model(ctx_x, ctx_y, tgt_x, target_y=None)
+        soc_pred = soc_mean.squeeze(0).cpu().numpy()[:, 0]  # (T,)
+
+        # Compute per-cycle statistics
+        # Use ground truth Cycle column from y_raw to group rows
+        cycle_ids = y_raw["Cycle"].values
+        stats_rows = []
+        for cyc in sorted(set(cycle_ids)):
+            mask = cycle_ids == cyc
+            p    = soc_pred[mask]
+            stats_rows.append({
+                "soc_pred_mean":  float(p.mean()),
+                "soc_pred_min":   float(p.min()),
+                "soc_pred_max":   float(p.max()),
+                "soc_pred_range": float(p.max() - p.min()),
+            })
+        stats_df = pd.DataFrame(stats_rows).reset_index(drop=True)
+
+        # Concatenate with cycle-aggregated X
+        X_enriched = pd.concat(
+            [X_agg.reset_index(drop=True), stats_df],
+            axis=1
+        )
+        enriched.append((X_enriched, y_agg))
+
+        if (task_idx + 1) % 5 == 0 or task_idx == 0:
+            print(f"     enriched {task_idx+1}/{len(tasks_raw)} tasks  "
+                  f"(soc_pred range: [{soc_pred.min():.2f}, {soc_pred.max():.2f}])")
+
+    print(f"     new X shape: {enriched[0][0].shape}  "
+          f"(+4 soc_pred columns)")
+    return enriched
