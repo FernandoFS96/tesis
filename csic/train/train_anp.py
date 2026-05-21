@@ -492,6 +492,10 @@ def train(cfg: Config) -> tuple:
     # All fields including enrich_soc_predictions and anp_soc_run_dir are saved
     # so evaluate scripts can auto-detect the model configuration via config.json.
     cfg_dict = asdict(cfg)
+    # Resolver anp_soc_run_dir a path absoluto para que los scripts de evaluación
+    # puedan encontrarlo independientemente del directorio de trabajo
+    if cfg_dict.get("anp_soc_run_dir"):
+        cfg_dict["anp_soc_run_dir"] = str(Path(cfg_dict["anp_soc_run_dir"]).resolve())
     cfg_dict.update({
         "target_cols": target_cols,
         "n_params":    n_params,

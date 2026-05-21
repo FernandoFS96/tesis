@@ -2,7 +2,6 @@
 evaluate.py
 ==============================================================================
 Unified validation script: compares all models on all tasks.
-
 Loads:
     - 17 Specialist MLPs    (from --mlp_run/specialist_XX/best.pt)
     - 1  DR-MLP             (from --mlp_run/dr_mlp/best.pt)
@@ -467,7 +466,18 @@ def eval_anp(
 # PLOTTING
 # ==============================================================================
 
-_DPI = 150
+_DPI = 300
+
+# Global plotting style controls.
+# Increase these values to make labels, legends, and annotations larger.
+PLOT_TICK_FONTSIZE = 10
+PLOT_AXIS_LABEL_FONTSIZE = 14
+PLOT_TITLE_FONTSIZE = 16
+PLOT_LEGEND_FONTSIZE = 12
+PLOT_CELL_FONTSIZE = 9
+PLOT_COLORBAR_FONTSIZE = 12
+PLOT_SEPARATOR_LINEWIDTH = 4
+PLOT_HIGHLIGHT_LINEWIDTH = 5
 
 
 def plot_heatmaps(
@@ -478,6 +488,10 @@ def plot_heatmaps(
     """Save MAE heatmaps for SoC and Cycle (all models × all tasks)."""
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    def drop_empty_rows(df: pd.DataFrame) -> pd.DataFrame:
+        """Remove models that do not contribute any finite value to this metric."""
+        return df.loc[~df.isna().all(axis=1)]
+
     # Vertical separator column index (after last train task)
     train_count = sum(1 for c in df_soc.columns if c.startswith("train_"))
 
@@ -485,10 +499,11 @@ def plot_heatmaps(
         (df_soc,   "MAE SoC (%)",  "YlOrRd", "mae_soc_heatmap.png"),
         (df_cycle, "MAE Cycle",    "YlOrRd", "mae_cycle_heatmap.png"),
     ]:
+        df = drop_empty_rows(df)
         n_models = len(df)
         n_tasks  = len(df.columns)
-        fig_h    = max(5, n_models * 0.45)
-        fig_w    = max(10, n_tasks * 0.6)
+        fig_h    = max(5, n_models * 0.55)
+        fig_w    = max(10, n_tasks * 0.8)
 
         fig, ax = plt.subplots(figsize=(fig_w, fig_h))
         vals = df.values.astype(float)
@@ -497,9 +512,9 @@ def plot_heatmaps(
 
         # Axes labels
         ax.set_xticks(range(n_tasks))
-        ax.set_xticklabels(df.columns, rotation=45, ha="right", fontsize=8)
+        ax.set_xticklabels(df.columns, rotation=45, ha="right", fontsize=PLOT_TICK_FONTSIZE)
         ax.set_yticks(range(n_models))
-        ax.set_yticklabels(df.index, fontsize=8)
+        ax.set_yticklabels(df.index, fontsize=PLOT_TICK_FONTSIZE)
 
         # Annotate cells
         for r in range(n_models):
@@ -507,7 +522,7 @@ def plot_heatmaps(
                 v = vals[r, c]
                 if not np.isnan(v):
                     ax.text(c, r, f"{v:.2f}", ha="center", va="center",
-                            fontsize=6, color="black")
+                            fontsize=PLOT_CELL_FONTSIZE, color="black")
 
         # Highlight best (minimum) value per column with green box
         for c in range(n_tasks):
@@ -516,27 +531,29 @@ def plot_heatmaps(
                 min_row = np.nanargmin(col_vals)
                 rect = matplotlib.patches.Rectangle(
                     (c - 0.5, min_row - 0.5), 1, 1,
-                    linewidth=2.5, edgecolor='lime', facecolor='none'
+                    linewidth=PLOT_HIGHLIGHT_LINEWIDTH, edgecolor='lime', facecolor='none'
                 )
                 ax.add_patch(rect)
 
         # Vertical separator between train / val / test
         if train_count > 0:
-            ax.axvline(train_count - 0.5, color="white", linewidth=2)
+            ax.axvline(train_count - 0.5, color="white", linewidth=PLOT_SEPARATOR_LINEWIDTH)
         val_count = sum(1 for c in df.columns if c.startswith("val_"))
         if val_count > 0:
-            ax.axvline(train_count + val_count - 0.5, color="white", linewidth=2)
+            ax.axvline(train_count + val_count - 0.5, color="white", linewidth=PLOT_SEPARATOR_LINEWIDTH)
 
         # Horizontal separator before first ANP row
         anp_labels = {"anp", "anp_soc", "anp_cycle"}
         anp_rows   = [i for i, m in enumerate(df.index) if m in anp_labels]
         if anp_rows:
-            ax.axhline(min(anp_rows) - 0.5, color="white", linewidth=2)
+            ax.axhline(min(anp_rows) - 0.5, color="white", linewidth=PLOT_SEPARATOR_LINEWIDTH)
 
-        plt.colorbar(im, ax=ax, label=metric, shrink=0.8)
+        cbar = plt.colorbar(im, ax=ax, shrink=0.8)
+        cbar.ax.tick_params(labelsize=PLOT_TICK_FONTSIZE)
+        cbar.set_label(metric, fontsize=PLOT_COLORBAR_FONTSIZE)
         ax.set_title(f"{metric} — all models × all tasks\n"
                      f"(train | val | test columns separated by white lines)",
-                     fontweight="bold")
+                 fontweight="bold", fontsize=PLOT_TITLE_FONTSIZE)
         fig.tight_layout()
         fig.savefig(out_dir / fname, dpi=_DPI, bbox_inches="tight")
         plt.close(fig)
@@ -553,29 +570,34 @@ def plot_bar_comparison(
     """
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    train_cols = [c for c in df_soc.columns if c.startswith("train_")]
-    val_cols   = [c for c in df_soc.columns if c.startswith("val_")]
-    test_cols  = [c for c in df_soc.columns if c.startswith("test_")]
-
-    models = list(df_soc.index)
-    x      = np.arange(len(models))
-    width  = 0.25
-
-    # Color palette: specialists grey, DR-MLP orange, ANP variants in blue tones
-    def bar_color(label: str) -> str:
-        if label == "anp":          return "#1C7293"   # teal  — dual-target
-        if label == "anp_soc":      return "#028090"   # darker teal — SoC only
-        if label == "anp_cycle":    return "#21295C"   # navy  — Cycle only
-        if label == "dr_mlp":       return "#D4860A"   # amber
-        return "#9AB8C8"                               # grey  — specialists
-
-    colors = [bar_color(m) for m in models]
+    def drop_empty_rows(df: pd.DataFrame) -> pd.DataFrame:
+        """Remove models that do not contribute any finite value to this metric."""
+        return df.loc[~df.isna().all(axis=1)]
 
     for df, metric, fname in [
         (df_soc,   "MAE SoC (%)",  "bar_soc.png"),
         (df_cycle, "MAE Cycle",    "bar_cycle.png"),
     ]:
-        fig, ax = plt.subplots(figsize=(max(12, len(models) * 0.7), 5))
+        df = drop_empty_rows(df)
+        train_cols = [c for c in df.columns if c.startswith("train_")]
+        val_cols   = [c for c in df.columns if c.startswith("val_")]
+        test_cols  = [c for c in df.columns if c.startswith("test_")]
+
+        models = list(df.index)
+        x      = np.arange(len(models))
+        width  = 0.25
+
+        # Color palette: specialists grey, DR-MLP orange, ANP variants in blue tones
+        def bar_color(label: str) -> str:
+            if label == "anp":          return "#1C7293"   # teal  — dual-target
+            if label == "anp_soc":      return "#028090"   # darker teal — SoC only
+            if label == "anp_cycle":    return "#21295C"   # navy  — Cycle only
+            if label == "dr_mlp":       return "#D4860A"   # amber
+            return "#9AB8C8"                               # grey  — specialists
+
+        colors = [bar_color(m) for m in models]
+
+        fig, ax = plt.subplots(figsize=(max(12, len(models) * 0.8), 5))
 
         for k, (split_cols, split_label, offset) in enumerate([
             (train_cols, "Train", -width),
@@ -592,11 +614,12 @@ def plot_bar_comparison(
                           edgecolor="white", linewidth=0.5)
 
         ax.set_xticks(x)
-        ax.set_xticklabels(models, rotation=45, ha="right", fontsize=8)
-        ax.set_ylabel(metric)
+        ax.set_xticklabels(models, rotation=45, ha="right", fontsize=PLOT_TICK_FONTSIZE)
+        ax.set_ylabel(metric, fontsize=PLOT_AXIS_LABEL_FONTSIZE)
         ax.set_title(f"Average {metric} by model and split "
-                     f"(grey=specialist, orange=DR-MLP, blue=ANP)")
-        ax.legend()
+                 f"(grey=specialist, orange=DR-MLP, blue=ANP)",
+                 fontsize=PLOT_TITLE_FONTSIZE)
+        ax.legend(fontsize=PLOT_LEGEND_FONTSIZE)
         ax.grid(True, axis="y", alpha=0.3)
         fig.tight_layout()
         fig.savefig(out_dir / fname, dpi=_DPI, bbox_inches="tight")
@@ -743,7 +766,7 @@ def run(
     if anp_soc_reduced_run_dir is not None:
         anp_soc_r = load_anp_model(
             anp_soc_reduced_run_dir, input_dim, target_cols,
-            device, label="anp_soc_reduced"
+            device, label="anp_soc_red"
         )
         if anp_soc_r:
             all_models.append((anp_soc_r[0], anp_soc_r[1], "anp",
@@ -753,7 +776,7 @@ def run(
     if anp_cycle_reduced_run_dir is not None:
         anp_cyc_r = load_anp_model(
             anp_cycle_reduced_run_dir, input_dim, target_cols,
-            device, label="anp_cycle_reduced"
+            device, label="anp_cycle_red"
         )
         if anp_cyc_r:
             all_models.append((anp_cyc_r[0], anp_cyc_r[1], "anp",
@@ -888,8 +911,8 @@ def run(
         if   m_label == "anp":                anp_tag = "  ← ANP dual"
         elif m_label == "anp_soc":            anp_tag = "  ← ANP SoC-only"
         elif m_label == "anp_cycle":          anp_tag = "  ← ANP Cycle-only"
-        elif m_label == "anp_soc_reduced":    anp_tag = "  ← ANP SoC-only (reduced)"
-        elif m_label == "anp_cycle_reduced":  anp_tag = "  ← ANP Cycle-only (reduced)"
+        elif m_label == "anp_soc_red":    anp_tag = "  ← ANP SoC-only (reduced)"
+        elif m_label == "anp_cycle_red":  anp_tag = "  ← ANP Cycle-only (reduced)"
         lines.append(
             f"{m_label:<22}"
             f" {fmt(avg(m_label, train_labels, soc_col))}"
@@ -920,8 +943,8 @@ def run(
         ("ANP (dual)",               ["anp"]                if "anp"                in model_labels_ordered else []),
         ("ANP (SoC-only)",           ["anp_soc"]            if "anp_soc"            in model_labels_ordered else []),
         ("ANP (Cycle-only)",         ["anp_cycle"]          if "anp_cycle"          in model_labels_ordered else []),
-        ("ANP (SoC reduced)",        ["anp_soc_reduced"]    if "anp_soc_reduced"    in model_labels_ordered else []),
-        ("ANP (Cycle reduced)",      ["anp_cycle_reduced"]  if "anp_cycle_reduced"  in model_labels_ordered else []),
+        ("ANP (SoC reduced)",        ["anp_soc_red"]    if "anp_soc_red"    in model_labels_ordered else []),
+        ("ANP (Cycle reduced)",      ["anp_cycle_red"]  if "anp_cycle_red"  in model_labels_ordered else []),
     ]:
         if not group_models:
             continue

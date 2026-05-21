@@ -33,13 +33,13 @@ Output (saved to --out_dir):
 
 Usage:
     python test_physical_coherence.py \
+        --data_dir            ../csic_real_synth_load/prepared_data \
         --mlp_run             ../train/runs_mlp/20260511_121741 \
+        --anp_soc_reduced_run   ../train/optuna_results/anp_soc_reduced/trial_031 \
+        --anp_cycle_reduced_run ../train/runs/anp_Cycle_reduced_agg_enriched/20260521_124941 \
         --anp_run             ../train/runs/anp_all/20260512_124715 \
         --anp_soc_run         ../train/runs/anp_SoC/20260512_114601 \
         --anp_cycle_run       ../train/runs/anp_Cycle/20260512_114703 \
-        --anp_soc_reduced_run   ../train/optuna_results/anp_soc_reduced/trial_031 \
-        --anp_cycle_reduced_run ../train/runs/anp_Cycle_reduced/20260519_122631 \
-        --data_dir            ../csic_real_synth_load/prepared_data
 
 Location: csic/validation/test_physical_coherence.py
 ==============================================================================
@@ -75,6 +75,7 @@ from train.train_utils import (
     load_prepared_data,
     validate_targets,
     sort_task_by_cycle,
+    enrich_with_soc_predictions, 
     REDUCED_FEATURE_SETS,
     get_feature_indices,
     filter_x,
@@ -192,7 +193,7 @@ def load_anp_model(
     num_hidden   = 128
     attn_dropout = 0.1
     target_col   = "all"
-
+    cfg_data     = {}
     if cfg_path.exists():
         with cfg_path.open() as f:
             cfg_data = json.load(f)
@@ -234,13 +235,18 @@ def load_anp_model(
         feature_cols = REDUCED_FEATURE_SETS.get(target_col)
         if feature_cols is None:
             raise ValueError(
-                f"'{label}' has input_dim={model_input_dim} (not {input_dim}), "
+                f"'{label}' has input_dim={model_input_dim} (data={input_dim}), "
                 f"but REDUCED_FEATURE_SETS has no entry for target_col='{target_col}'."
             )
-        if len(feature_cols) != model_input_dim:
+        enrich       = cfg_data.get("enrich_soc_predictions", False)
+        n_soc_extra  = 4 if enrich else 0   # soc_pred_mean/min/max/range
+        expected_dim = len(feature_cols) + n_soc_extra
+        if expected_dim != model_input_dim:
             raise ValueError(
                 f"'{label}': checkpoint input_dim={model_input_dim} but "
-                f"REDUCED_FEATURE_SETS['{target_col}'] has {len(feature_cols)} features."
+                f"REDUCED_FEATURE_SETS['{target_col}'] has {len(feature_cols)} features"
+                + (f" + 4 SoC enrichment = {expected_dim}" if enrich else "")
+                + ". Check REDUCED_FEATURE_SETS in train_utils.py."
             )
 
     # ── Aggregation config (cycle-level models) ────────────────────────────────
@@ -252,10 +258,14 @@ def load_anp_model(
     model_ctx_rows = ctx_cycles if aggregate else ctx_cycles * meas_p_cycle
     model_tgt_rows = tgt_cycles if aggregate else tgt_cycles * meas_p_cycle
 
+    enrich      = cfg_data.get("enrich_soc_predictions", False)
+    soc_run_dir = cfg_data.get("anp_soc_run_dir", "")
     agg_cfg = {
-        "aggregate": aggregate,
-        "ctx_rows":  model_ctx_rows,
-        "tgt_rows":  model_tgt_rows,
+        "aggregate":   aggregate,
+        "enrich":      enrich,
+        "soc_run_dir": soc_run_dir,
+        "ctx_rows":    model_ctx_rows,
+        "tgt_rows":    model_tgt_rows,
     }
 
     model = LatentModel(num_hidden=num_hidden, input_dim=model_input_dim,
@@ -468,6 +478,20 @@ def check_coherence(
 # PLOTTING
 # ==============================================================================
 
+# Global plotting style controls for `test_physical_coherence.py`.
+# Tweak these to scale titles, labels, legends and figure sizes.
+PLOT_DPI = 300
+PLOT_FIG_WIDTH = 16
+PLOT_FIG_HEIGHT_PER_TARGET = 6
+PLOT_HSPACE = 0.25
+PLOT_TICK_FONTSIZE = 12
+PLOT_AXIS_LABEL_FONTSIZE = 14
+PLOT_TITLE_FONTSIZE = 16
+PLOT_LEGEND_FONTSIZE = 14
+PLOT_CELL_FONTSIZE = 9
+PLOT_COLORBAR_FONTSIZE = 14
+PLOT_SEPARATOR_LINEWIDTH = 4
+PLOT_HIGHLIGHT_LINEWIDTH = 5
 def plot_violation_example(
     pred_dn:     np.ndarray,
     true_dn:     np.ndarray,
@@ -488,8 +512,8 @@ def plot_violation_example(
         out_path:    Path where the PNG will be saved.
     """
     n_targets = len(target_cols)
-    fig = plt.figure(figsize=(13, 4 * n_targets))
-    gs  = gridspec.GridSpec(n_targets, 1, figure=fig, hspace=0.45)
+    fig = plt.figure(figsize=(PLOT_FIG_WIDTH, PLOT_FIG_HEIGHT_PER_TARGET * n_targets))
+    gs  = gridspec.GridSpec(n_targets, 1, figure=fig, hspace=PLOT_HSPACE)
 
     x = np.arange(len(pred_dn))
 
@@ -527,8 +551,8 @@ def plot_violation_example(
                 for si in spike_idx:
                     ax.axvspan(si, si + 1, alpha=0.25, color="#C0392B")
 
-        ax.set_ylabel(col)
-        ax.set_xlabel("Target row index")
+        ax.set_ylabel(col, fontsize=PLOT_AXIS_LABEL_FONTSIZE)
+        ax.set_xlabel("Target row index", fontsize=PLOT_AXIS_LABEL_FONTSIZE)
         ax.set_title(
             f"{report.model_label} — {report.task_label} — {col}\n"
             f"Range violations: {report.soc_below_min + report.soc_above_max}  "
@@ -537,17 +561,18 @@ def plot_violation_example(
             if "SoC" in col else
             f"{report.model_label} — {report.task_label} — {col}\n"
             f"Negative: {report.cycle_negative}  "
-            f"Not monotone: {report.cycle_not_monotone}"
+            f"Not monotone: {report.cycle_not_monotone}",
+            fontsize=PLOT_TITLE_FONTSIZE
         )
-        ax.legend(fontsize=8, loc="upper right")
+        ax.legend(fontsize=PLOT_LEGEND_FONTSIZE, loc="upper right")
         ax.grid(True, alpha=0.25)
 
     fig.suptitle(
         f"Physical coherence — {report.model_label} on {report.task_label}",
-        fontsize=13, fontweight="bold",
+        fontsize=PLOT_TITLE_FONTSIZE, fontweight="bold",
     )
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    fig.savefig(out_path, dpi=PLOT_DPI, bbox_inches="tight")
     plt.close(fig)
 
 def plot_comparison_coherence(
@@ -589,8 +614,8 @@ def plot_comparison_coherence(
     n_targets  = len(target_cols)
     task_label = next(iter(reports.values())).task_label
 
-    fig = plt.figure(figsize=(14, 4 * n_targets))
-    gs  = gridspec.GridSpec(n_targets, 1, figure=fig, hspace=0.50)
+    fig = plt.figure(figsize=(PLOT_FIG_WIDTH, PLOT_FIG_HEIGHT_PER_TARGET * n_targets))
+    gs  = gridspec.GridSpec(n_targets, 1, figure=fig, hspace=PLOT_HSPACE + 0.05)
 
     x = np.arange(len(true_dn))
 
@@ -657,10 +682,10 @@ def plot_comparison_coherence(
                                s=30, zorder=5, edgecolors="black",
                                linewidths=0.4)
 
-        ax.set_ylabel(col)
-        ax.set_xlabel("Target row index")
-        ax.set_title(f"{task_label} — {col}")
-        ax.legend(fontsize=8, loc="upper right")
+        ax.set_ylabel(col, fontsize=PLOT_AXIS_LABEL_FONTSIZE)
+        ax.set_xlabel("Target row index", fontsize=PLOT_AXIS_LABEL_FONTSIZE)
+        ax.set_title(f"{task_label} — {col}", fontsize=PLOT_TITLE_FONTSIZE)
+        ax.legend(fontsize=PLOT_LEGEND_FONTSIZE, loc="upper right")
         ax.grid(True, alpha=0.25)
 
     # Build violation summary for suptitle
@@ -674,10 +699,10 @@ def plot_comparison_coherence(
     fig.suptitle(
         f"Physical coherence comparison — {task_label}\n"
         + "  |  ".join(summary_parts),
-        fontsize=12, fontweight="bold",
+        fontsize=PLOT_TITLE_FONTSIZE, fontweight="bold",
     )
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    #fig.tight_layout()
+    fig.savefig(out_path, dpi=PLOT_DPI, bbox_inches="tight")
     plt.close(fig)
 
 # ==============================================================================
@@ -853,6 +878,96 @@ def run(
               f"(cycle-level, 1 row/cycle)")
     else:
         tasks_data_agg = tasks_data   # unused alias — avoids NameError
+    
+    # Pre-compute SoC-enriched tasks (only if an enriched model is loaded)
+    needs_enrich = any(m[5].get("enrich", False) for m in models_to_test)
+    if needs_enrich:
+        # Find the first enriched model to get its soc_run_dir
+        soc_run_dir_str = next(
+            m[5]["soc_run_dir"] for m in models_to_test if m[5].get("enrich")
+        )
+        if not soc_run_dir_str:
+            print("  ⚠  enrich=True but no soc_run_dir in config — skipping enrichment")
+            tasks_data_enriched = tasks_data_agg if needs_agg else tasks_data
+        else:
+            print("\n  🔬  Pre-computing SoC-enriched cycle-level tasks...")
+
+            # Load the ANP-SoC model (reuse _load_anp_soc_model from train_anp)
+            soc_run = Path(soc_run_dir_str)
+            soc_ckpt = soc_run / "best.pt"
+            soc_cfg_path = soc_run / "config.json"
+
+            soc_num_hidden, soc_attn_dropout, soc_feat_cols = 128, 0.1, None
+            if soc_cfg_path.exists():
+                with soc_cfg_path.open() as f:
+                    soc_cfg_data = json.load(f)
+                soc_num_hidden   = (soc_cfg_data.get("num_hidden")
+                                    or soc_cfg_data.get("params", {}).get("num_hidden", 128))
+                soc_attn_dropout = soc_cfg_data.get("attn_dropout", 0.1)
+                soc_target_col   = soc_cfg_data.get("target_col", "SoC (%)")
+                if soc_cfg_data.get("use_reduced_features", False):
+                    soc_feat_cols = REDUCED_FEATURE_SETS.get(soc_target_col)
+
+            raw_soc     = torch.load(soc_ckpt, map_location="cpu")
+            lat_key_soc = next(
+                (k for k in raw_soc["model"]
+                 if "latent_encoder.input_projection.linear_layer.weight" in k), None
+            )
+            soc_input_dim = (raw_soc["model"][lat_key_soc].shape[1] - 1
+                             if lat_key_soc else input_dim)
+
+            soc_model = LatentModel(num_hidden=soc_num_hidden,
+                                    input_dim=soc_input_dim, output_dim=1,
+                                    attn_dropout=soc_attn_dropout)
+            soc_model.load_state_dict(raw_soc["model"])
+            soc_model.eval().to(device)
+            print(f"     ANP-SoC loaded: {soc_run.name}  "
+                  f"(input_dim={soc_input_dim}  "
+                  f"features={'reduced' if soc_feat_cols else 'all'})")
+
+            # Build raw and aggregated task lists for enrichment
+            tasks_raw_list = []
+            tasks_agg_list = []
+            enriched_entry = next(m for m in models_to_test if m[5].get("enrich"))
+            eis_feat_cols  = enriched_entry[4]   # feat_cols from the 6-tuple
+
+            for i in task_ids:
+                X_df, y_df = sort_task_by_cycle(*data["normalized_synth_datasets"][i])
+                tasks_raw_list.append((X_df, y_df))
+                X_a, y_a = aggregate_by_cycle(X_df, y_df)
+                if eis_feat_cols is not None:
+                    X_a = X_a[eis_feat_cols]    # 202 → 13 Cycle features
+                tasks_agg_list.append((X_a, y_a))
+
+            enriched_list = enrich_with_soc_predictions(
+                tasks_raw     = tasks_raw_list,
+                tasks_agg     = tasks_agg_list,
+                anp_soc_model = soc_model,
+                soc_feat_cols = soc_feat_cols,
+                device        = device,
+                ctx_cycles    = cfg.ctx_cycles,
+                meas_per_cycle= cfg.measurements_per_cycle,
+            )
+
+            del soc_model
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            # Build tasks_data_enriched in the same format as tasks_data
+            ctx_e = cfg.ctx_cycles
+            tgt_e = cfg.tgt_cycles
+            tasks_data_enriched = []
+            for i, (X_e, y_e) in zip(task_ids, enriched_list):
+                X_ctx_e = X_e.values[:ctx_e].astype(np.float32)
+                y_ctx_e = y_e.values[:ctx_e].astype(np.float32)
+                X_tgt_e = X_e.values[ctx_e:ctx_e+tgt_e].astype(np.float32)
+                y_tgt_e = y_e.values[ctx_e:ctx_e+tgt_e].astype(np.float32)
+                tasks_data_enriched.append((task_label(i), X_ctx_e, y_ctx_e,
+                                            X_tgt_e, y_tgt_e))
+            print(f"     ✓  {len(tasks_data_enriched)} enriched tasks  "
+                  f"(X shape: {X_ctx_e.shape})")
+    else:
+        tasks_data_enriched = tasks_data   # unused alias
 
     # ── Run coherence checks ──────────────────────────────────────────────────
     print(f"\n🔬  Running coherence checks...\n")
@@ -867,9 +982,17 @@ def run(
     task_true_dn:     Dict[str, np.ndarray] = {}
 
     for m_label, model, m_type, m_target_cols, feat_cols, agg_cfg in models_to_test:
-        feat_idx  = get_feature_indices(x_col_names, feat_cols)
+        if agg_cfg.get("enrich"):
+            feat_idx = None   # tasks_data_enriched already has exactly 17 columns
+        else:
+            feat_idx = get_feature_indices(x_col_names, feat_cols)
         # Route to cycle-level windows if the model used aggregate_by_cycle
-        m_tasks   = tasks_data_agg if agg_cfg.get("aggregate") else tasks_data
+        if agg_cfg.get("enrich"):
+            m_tasks = tasks_data_enriched
+        elif agg_cfg.get("aggregate"):
+            m_tasks = tasks_data_agg
+        else:
+            m_tasks = tasks_data
         print(f"  ── {m_label} ─────────────────────────────────────")
         for t_label, X_ctx, y_ctx, X_tgt, y_tgt in m_tasks:
 
