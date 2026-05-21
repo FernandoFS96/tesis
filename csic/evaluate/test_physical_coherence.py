@@ -37,9 +37,10 @@ Usage:
         --mlp_run             ../train/runs_mlp/20260511_121741 \
         --anp_soc_reduced_run   ../train/optuna_results/anp_soc_reduced/trial_031 \
         --anp_cycle_reduced_run ../train/runs/anp_Cycle_reduced_agg_enriched/20260521_124941 \
+        --plot_clean \
+        --anp_cycle_run       ../train/runs/anp_Cycle/20260512_114703 \
         --anp_run             ../train/runs/anp_all/20260512_124715 \
         --anp_soc_run         ../train/runs/anp_SoC/20260512_114601 \
-        --anp_cycle_run       ../train/runs/anp_Cycle/20260512_114703 \
 
 Location: csic/validation/test_physical_coherence.py
 ==============================================================================
@@ -492,6 +493,8 @@ PLOT_CELL_FONTSIZE = 9
 PLOT_COLORBAR_FONTSIZE = 14
 PLOT_SEPARATOR_LINEWIDTH = 4
 PLOT_HIGHLIGHT_LINEWIDTH = 5
+PLOT_ZOOM_WINDOW_FRACTION = 0.20
+PLOT_ZOOM_PANEL_HSPACE = 0.35
 def plot_violation_example(
     pred_dn:     np.ndarray,
     true_dn:     np.ndarray,
@@ -702,6 +705,146 @@ def plot_comparison_coherence(
         fontsize=PLOT_TITLE_FONTSIZE, fontweight="bold",
     )
     #fig.tight_layout()
+    fig.savefig(out_path, dpi=PLOT_DPI, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_soc_zoom_comparison(
+    preds_dn:    Dict[str, np.ndarray],
+    true_dn:     np.ndarray,
+    reports:     Dict[str, ViolationReport],
+    target_cols: List[str],
+    cfg:         CoherenceConfig,
+    out_path:    Path,
+) -> None:
+    """Plot three SoC-only zoom panels for the start, middle, and end of the trajectory."""
+    if "SoC (%)" not in target_cols:
+        return
+
+    soc_idx = target_cols.index("SoC (%)")
+
+    MODEL_COLORS = {
+        "ANP":       "#1C7293",
+        "ANP-SoC":   "#028090",
+        "ANP-Cycle": "#21295C",
+        "DR-MLP":    "#D4860A",
+        "Specialist_01": "#237A3D",
+    }
+    DEFAULT_COLORS = ["#8E44AD", "#E74C3C", "#16A085"]
+    model_labels   = list(preds_dn.keys())
+
+    def model_color(label: str) -> str:
+        if label in MODEL_COLORS:
+            return MODEL_COLORS[label]
+        idx = model_labels.index(label) % len(DEFAULT_COLORS)
+        return DEFAULT_COLORS[idx]
+
+    def prepare_model_series(model_label: str) -> np.ndarray:
+        p = preds_dn[model_label][:, soc_idx]
+        if np.all(np.isnan(p)):
+            return p
+
+        n_true = len(true_dn)
+        n_pred = len(p)
+        if n_pred != n_true:
+            if n_pred < n_true:
+                repeats = int(np.ceil(n_true / n_pred))
+                p = np.repeat(p, repeats)[:n_true]
+            else:
+                p = p[:n_true]
+        return p
+
+    def zoom_slices(n_points: int) -> List[Tuple[str, slice]]:
+        window = max(20, int(round(n_points * PLOT_ZOOM_WINDOW_FRACTION)))
+        window = min(window, n_points)
+        start_slice = slice(0, window)
+
+        mid_center = n_points // 2
+        mid_start = max(0, mid_center - window // 2)
+        mid_end = min(n_points, mid_start + window)
+        mid_start = max(0, mid_end - window)
+        middle_slice = slice(mid_start, mid_end)
+
+        end_start = max(0, n_points - window)
+        end_slice = slice(end_start, n_points)
+
+        return [
+            ("Inicio", start_slice),
+            ("Mitad", middle_slice),
+            ("Final", end_slice),
+        ]
+
+    task_label = next(iter(reports.values())).task_label
+    model_series = {m_label: prepare_model_series(m_label) for m_label in preds_dn}
+    x_full = np.arange(len(true_dn))
+
+    fig = plt.figure(figsize=(PLOT_FIG_WIDTH, PLOT_FIG_HEIGHT_PER_TARGET * 3))
+    gs  = gridspec.GridSpec(3, 1, figure=fig, hspace=PLOT_ZOOM_PANEL_HSPACE)
+
+    for row, (panel_label, panel_slice) in enumerate(zoom_slices(len(true_dn))):
+        ax = fig.add_subplot(gs[row])
+        x = x_full[panel_slice]
+        true_soc = true_dn[panel_slice, soc_idx]
+
+        ax.plot(x, true_soc, color="#9AB8C8", linewidth=1.5,
+                alpha=0.8, label="Ground truth", zorder=2)
+        ax.axhline(cfg.soc_min, color="#C0392B", linestyle="--",
+                   linewidth=1.0, alpha=0.5,
+                   label=f"Bounds [{cfg.soc_min}, {cfg.soc_max}%]")
+        ax.axhline(cfg.soc_max, color="#C0392B", linestyle="--",
+                   linewidth=1.0, alpha=0.5)
+
+        all_values = [true_soc]
+        for m_label, p_full in model_series.items():
+            if np.all(np.isnan(p_full)):
+                continue
+
+            p = p_full[panel_slice]
+            all_values.append(p)
+
+            report = reports.get(m_label)
+            if report:
+                n_viol = report.soc_below_min + report.soc_above_max
+                viol_str = f" [⚠ {n_viol} range viol.]" if n_viol > 0 else " [✓ clean]"
+            else:
+                viol_str = ""
+
+            ax.plot(x, p, color=model_color(m_label), linewidth=1.6,
+                    label=f"{m_label}{viol_str}", zorder=3)
+
+            below = p < cfg.soc_min
+            above = p > cfg.soc_max
+            if below.any():
+                ax.scatter(x[below], p[below], color=model_color(m_label), marker="v",
+                           s=30, zorder=5, edgecolors="black", linewidths=0.4)
+            if above.any():
+                ax.scatter(x[above], p[above], color=model_color(m_label), marker="^",
+                           s=30, zorder=5, edgecolors="black", linewidths=0.4)
+
+        finite_vals = np.concatenate([v[np.isfinite(v)] for v in all_values if np.any(np.isfinite(v))])
+        if finite_vals.size > 0:
+            y_min = float(np.nanmin(finite_vals))
+            y_max = float(np.nanmax(finite_vals))
+            pad = max(1.0, 0.08 * (y_max - y_min if y_max > y_min else 1.0))
+            ax.set_ylim(y_min - pad, y_max + pad)
+
+        ax.set_xlim(x[0], x[-1])
+        ax.set_ylabel("SoC (%)", fontsize=PLOT_AXIS_LABEL_FONTSIZE)
+        ax.set_xlabel("Target row index", fontsize=PLOT_AXIS_LABEL_FONTSIZE)
+        ax.set_title(f"{task_label} — SoC zoom ({panel_label})", fontsize=PLOT_TITLE_FONTSIZE)
+        ax.legend(fontsize=PLOT_LEGEND_FONTSIZE, loc="upper right", ncol=2)
+        ax.grid(True, alpha=0.25)
+
+    summary_parts = []
+    for m_label, rep in reports.items():
+        summary_parts.append(f"{m_label}: ⚠" if rep.has_any_violation() else f"{m_label}: ✓")
+
+    fig.suptitle(
+        f"SoC zoom comparison — {task_label}\n"
+        + "  |  ".join(summary_parts),
+        fontsize=PLOT_TITLE_FONTSIZE, fontweight="bold",
+    )
+    fig.tight_layout()
     fig.savefig(out_path, dpi=PLOT_DPI, bbox_inches="tight")
     plt.close(fig)
 
@@ -1087,6 +1230,15 @@ def run(
                 cfg         = cfg,
                 out_path    = comp_dir / f"comparison_{t_label}.png",
             )
+            if "SoC (%)" in target_cols:
+                plot_soc_zoom_comparison(
+                    preds_dn    = task_predictions[t_label],
+                    true_dn     = task_true_dn[t_label],
+                    reports     = task_reports[t_label],
+                    target_cols = target_cols,
+                    cfg         = cfg,
+                    out_path    = comp_dir / f"comparison_soc_zoom_{t_label}.png",
+                )
     print(f"  ✓  Comparison plots → {comp_dir}")
 
     # ── Build summary CSV ─────────────────────────────────────────────────────

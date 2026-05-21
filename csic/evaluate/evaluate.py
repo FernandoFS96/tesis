@@ -3,38 +3,44 @@ evaluate.py
 ==============================================================================
 Unified validation script: compares all models on all tasks.
 Loads:
-    - 17 Specialist MLPs    (from --mlp_run/specialist_XX/best.pt)
-    - 1  DR-MLP             (from --mlp_run/dr_mlp/best.pt)
-    - 1  ANP dual-target    (from --anp_run,       predicts SoC% + Cycle)
-    - 1  ANP SoC-only       (from --anp_soc_run,   predicts SoC% only)
-    - 1  ANP Cycle-only     (from --anp_cycle_run, predicts Cycle only)
+    - 17 Specialist MLPs       (from --mlp_run/specialist_XX/best.pt)
+    - 1  DR-MLP                (from --mlp_run/dr_mlp/best.pt)
+    - 1  ANP dual-target       (from --anp_run)
+    - 1  ANP SoC-only          (from --anp_soc_run)
+    - 1  ANP Cycle-only        (from --anp_cycle_run)
+    - 1  ANP SoC-only reduced  (from --anp_soc_reduced_run)
+    - 1  ANP Cycle-only reduced (from --anp_cycle_reduced_run)
+      May be aggregated (aggregate_by_cycle) and/or SoC-enriched (enrich_soc_predictions). Both are auto-detected from config.json.
 
-Single-target ANP models are evaluated on both targets: the target they were trained on is reported normally; the target they did not predict is NaN.
-This allows a fair side-by-side comparison in the same table and heatmaps.
+All model variants are handled transparently:
+    - Single-target models predict only their trained target; the other is NaN.
+    - Reduced-feature models filter X to their feature set automatically.
+    - Cycle-aggregated models use cycle-level windows (1 row/cycle).
+    - SoC-enriched models get per-cycle SoC statistics prepended to X.
 
-Evaluation protocol (identical for all models):
-    - Context window : first ctx_cycles × meas_per_cycle rows (default 1 800)
-    - Target window  : next  tgt_cycles × meas_per_cycle rows (default 1 800)
-    - Tasks evaluated: all 25 synthetic datasets (17 train + 5 val + 3 test)
+Evaluation protocol (identical for all non-aggregated models):
+    - Context : first ctx_cycles × meas_per_cycle rows (default 1 800)
+    - Target  : next  tgt_cycles × meas_per_cycle rows (default 1 800)
+    - Tasks   : all 25 synthetic datasets (17 train + 5 val + 3 test)
 
-Outputs (saved to --out_dir, default ./validation/<timestamp>/):
-    mae_SoC_pct.csv          — MAE SoC (%) for all models × all tasks
-    mae_Cycle.csv            — MAE Cycle for all models × all tasks
-    mae_comparison.csv       — combined wide-format table
-    mae_soc_heatmap.png      — heatmap SoC
-    mae_cycle_heatmap.png    — heatmap Cycle
-    bar_comparison.png       — grouped bar chart (avg per split)
-    summary.txt              — human-readable summary table
+Outputs (saved to --out_dir, default ./validation/results/):
+    mae_SoC_pct.csv          MAE SoC(%) for all models × all tasks
+    mae_Cycle.csv            MAE Cycle  for all models × all tasks
+    mae_comparison.csv       Combined wide-format table
+    mae_soc_heatmap.png      Heatmap SoC
+    mae_cycle_heatmap.png    Heatmap Cycle
+    bar_soc.png / bar_cycle.png   Grouped bar charts per split
+    summary.txt              Human-readable summary table
 
 Usage:
     python evaluate.py \
-        --mlp_run           ../train/runs_mlp/20260511_121741 \
-        --anp_run           ../train/runs/anp_all/20260512_124715 \
-        --anp_soc_run       ../train/runs/anp_SoC/20260512_114601 \
-        --anp_cycle_run     ../train/runs/anp_Cycle/20260512_114703 \
-        --anp_soc_reduced_run   ../train/optuna_results/anp_soc_reduced/trial_031 \
-        --anp_cycle_reduced_run ../train/runs/anp_Cycle_reduced/20260519_122631 \
-        --data_dir          ../csic_real_synth_load/prepared_data
+        --mlp_run              ../train/runs_mlp/20260511_121741 \
+        --anp_run              ../train/runs/anp_all/20260512_124715 \
+        --anp_soc_run          ../train/runs/anp_SoC/20260512_114601 \
+        --anp_cycle_run        ../train/runs/anp_Cycle_reduced/20260519_122631 \
+        --anp_soc_reduced_run  ../train/optuna_results/anp_soc_reduced/trial_031 \
+        --anp_cycle_reduced_run ../train/runs/anp_Cycle_reduced_agg_enriched/20260521_124941 \
+        --data_dir             ../csic_real_synth_load/prepared_data
 
 Location: csic/validation/evaluate.py
 ==============================================================================
@@ -58,11 +64,10 @@ import pandas as pd
 import torch
 import torch.nn as nn
 
-# ── Resolve package root so imports work regardless of CWD ───────────────────
-_VAL_DIR   = Path(__file__).resolve().parent          # csic/validation/
-_CSIC_ROOT = _VAL_DIR.parent                          # csic/
+# ── Resolve package root ──────────────────────────────────────────────────────
+_VAL_DIR   = Path(__file__).resolve().parent
+_CSIC_ROOT = _VAL_DIR.parent
 _TRAIN_DIR = _CSIC_ROOT / "train"
-
 for _p in [str(_CSIC_ROOT), str(_TRAIN_DIR)]:
     if _p not in sys.path:
         sys.path.insert(0, _p)
@@ -75,18 +80,17 @@ from train.train_utils import (
     get_feature_indices,
     filter_x,
     aggregate_by_cycle,
+    enrich_with_soc_predictions,   # ← new
 )
 
-# Import model architectures
 try:
     from models.anp import LatentModel
 except ImportError:
     from models.anp import LatentModel
 
 try:
-    from train.train_mlp import MLP as _TrainMLP #type: ignore 
+    from train.train_mlp import MLP as _TrainMLP  # type: ignore
 except ImportError:
-    # Inline MLP definition as fallback (same architecture as train_mlp.py)
     import torch.nn.init as init
 
     class _TrainMLP(nn.Module):
@@ -117,41 +121,38 @@ MLP = _TrainMLP
 # ==============================================================================
 
 def extract_window(
-    X:        pd.DataFrame,
-    y:        pd.DataFrame,
-    ctx_rows: int,
-    tgt_rows: int,
+    X: pd.DataFrame, y: pd.DataFrame,
+    ctx_rows: int, tgt_rows: int,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Extract context and target row windows from a cycle-sorted task."""
-    T       = len(X)
-    ctx_end = min(ctx_rows, T)
-    tgt_end = min(ctx_end + tgt_rows, T)
-    X_arr   = X.values.astype(np.float32)
-    y_arr   = y.values.astype(np.float32)
-    return X_arr[:ctx_end], y_arr[:ctx_end], X_arr[ctx_end:tgt_end], y_arr[ctx_end:tgt_end]
+    T = len(X); ctx_end = min(ctx_rows, T); tgt_end = min(ctx_end + tgt_rows, T)
+    Xa = X.values.astype(np.float32); ya = y.values.astype(np.float32)
+    return Xa[:ctx_end], ya[:ctx_end], Xa[ctx_end:tgt_end], ya[ctx_end:tgt_end]
+
+
+def extract_window_np(
+    X: np.ndarray, y: np.ndarray,
+    ctx_rows: int, tgt_rows: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Same as extract_window but for already-converted numpy arrays."""
+    T = len(X); ctx_end = min(ctx_rows, T); tgt_end = min(ctx_end + tgt_rows, T)
+    return X[:ctx_end], y[:ctx_end], X[ctx_end:tgt_end], y[ctx_end:tgt_end]
 
 
 def compute_mae(
-    pred:          np.ndarray,
-    true:          np.ndarray,
-    denorm_values: dict,
-    target_cols:   List[str],
+    pred: np.ndarray, true: np.ndarray,
+    denorm_values: dict, target_cols: List[str],
 ) -> Dict[str, float]:
     """Denormalized MAE per target column. Clips SoC predictions to [0, 100]."""
     result = {}
     for i, col in enumerate(target_cols):
         m = denorm_values["y_mean"].get(col, 0.0)
         s = denorm_values["y_std"].get(col, 1.0)
-        
-        # Denormalize predictions
-        pred_denorm = pred[:, i] * s + m
-        true_denorm = true[:, i] * s + m
-        
-        # Clip SoC predictions to [0, 100] since it's a battery percentage
+        pred_dn = pred[:, i] * s + m
+        true_dn = true[:, i] * s + m
         if col == "SoC (%)":
-            pred_denorm = np.clip(pred_denorm, 0.0, 100.0)
-        
-        result[col] = float(np.abs(pred_denorm - true_denorm).mean())
+            pred_dn = np.clip(pred_dn, 0.0, 100.0)
+        result[col] = float(np.abs(pred_dn - true_dn).mean())
     return result
 
 
@@ -160,44 +161,21 @@ def compute_mae(
 # ==============================================================================
 
 def load_mlp_specialists(
-    mlp_run_dir: Path,
-    input_dim:   int,
-    output_dim:  int,
-    device:      torch.device,
-    n_specialists: int = 17,
+    mlp_run_dir: Path, input_dim: int, output_dim: int,
+    device: torch.device, n_specialists: int = 17,
 ) -> List[Tuple[str, nn.Module]]:
-    """
-    Load all specialist MLP checkpoints from a runs_mlp directory.
-
-    Searches for specialist_01/best.pt … specialist_NN/best.pt.
-    Also reads config.json to recover the neurons/dropout used during training.
-
-    Args:
-        mlp_run_dir:   Path to a runs_mlp/<timestamp>/ directory.
-        input_dim:     Model input dimension.
-        output_dim:    Model output dimension.
-        device:        Torch device.
-        n_specialists: Expected number of specialists.
-
-    Returns:
-        List of (label, model) tuples, model in eval mode.
-    """
-    # Read training config for architecture params
     cfg_path = mlp_run_dir / "config.json"
     neurons, dropout = 128, 0.1
     if cfg_path.exists():
         with cfg_path.open() as f:
             cfg = json.load(f)
-        neurons = cfg.get("neurons", 128)
-        dropout = cfg.get("dropout", 0.1)
-
+        neurons = cfg.get("neurons", 128); dropout = cfg.get("dropout", 0.1)
     models = []
     for i in range(1, n_specialists + 1):
-        label    = f"specialist_{i:02d}"
+        label = f"specialist_{i:02d}"
         ckpt_path = mlp_run_dir / label / "best.pt"
         if not ckpt_path.exists():
-            print(f"  ⚠  {label}: best.pt not found at {ckpt_path} — skipping")
-            continue
+            print(f"  ⚠  {label}: best.pt not found — skipping"); continue
         model = MLP(input_dim, output_dim, neurons, dropout)
         ckpt  = torch.load(ckpt_path, map_location=device)
         model.load_state_dict(ckpt["model"])
@@ -208,30 +186,18 @@ def load_mlp_specialists(
 
 
 def load_dr_mlp(
-    mlp_run_dir: Path,
-    input_dim:   int,
-    output_dim:  int,
-    device:      torch.device,
+    mlp_run_dir: Path, input_dim: int, output_dim: int,
+    device: torch.device,
 ) -> Optional[Tuple[str, nn.Module]]:
-    """
-    Load the DR-MLP checkpoint from a runs_mlp directory.
-
-    Returns:
-        ('dr_mlp', model) tuple, or None if checkpoint not found.
-    """
-    cfg_path  = mlp_run_dir / "config.json"
+    cfg_path = mlp_run_dir / "config.json"
     neurons, dropout = 128, 0.1
     if cfg_path.exists():
         with cfg_path.open() as f:
             cfg = json.load(f)
-        neurons = cfg.get("neurons", 128)
-        dropout = cfg.get("dropout", 0.1)
-
+        neurons = cfg.get("neurons", 128); dropout = cfg.get("dropout", 0.1)
     ckpt_path = mlp_run_dir / "dr_mlp" / "best.pt"
     if not ckpt_path.exists():
-        print(f"  ⚠  DR-MLP: best.pt not found at {ckpt_path} — skipping")
-        return None
-
+        print(f"  ⚠  DR-MLP: best.pt not found — skipping"); return None
     model = MLP(input_dim, output_dim, neurons, dropout)
     ckpt  = torch.load(ckpt_path, map_location=device)
     model.load_state_dict(ckpt["model"])
@@ -241,32 +207,27 @@ def load_dr_mlp(
 
 
 def load_anp_model(
-    run_dir:          Path,
-    input_dim:        int,
-    all_target_cols:  List[str],
-    device:           torch.device,
-    label:            str = "anp",
+    run_dir:         Path,
+    input_dim:       int,
+    all_target_cols: List[str],
+    device:          torch.device,
+    label:           str = "anp",
 ) -> Optional[Tuple[str, nn.Module, List[str], Optional[List[str]], Dict]]:
     """
-    Load an ANP checkpoint and detect which targets, features, and aggregation strategy it was trained on. Works for:
-        - Dual-target / single-target models (output_dim detection)
-        - Full-feature / reduced-feature models (input_dim from checkpoint)
-        - Measurement-level / cycle-level aggregated models (aggregate_by_cycle)
+    Load an ANP checkpoint and auto-detect its full configuration.
 
-    Args:
-        run_dir:         Path to the run directory containing best.pt.
-        input_dim:       Full dataset input dimension (before any reduction).
-        all_target_cols: All target columns present in the data.
-        device:          Torch device.
-        label:           Display label for console output and result tables.
+    Reads config.json for architecture params and pipeline flags
+    (target_col, use_reduced_features, aggregate_by_cycle,
+    enrich_soc_predictions, anp_soc_run_dir).
+    Infers model_input_dim directly from checkpoint weight shapes —
+    robust to missing config fields.
 
     Returns:
         5-tuple (label, model, model_target_cols, feature_cols, agg_cfg)
-        or None if checkpoint not found.
-            model_target_cols : targets this model predicts
-            feature_cols      : list of X column names for reduced models, None otherwise
-            agg_cfg           : dict with keys 'aggregate' (bool), 'ctx_rows' (int),
-                                'tgt_rows' (int) — controls which window data to use
+        or None if best.pt not found.
+            feature_cols : X column names for reduced models, None for full.
+            agg_cfg      : dict with 'aggregate', 'enrich', 'soc_run_dir',
+                           'ctx_rows', 'tgt_rows'.
     """
     ckpt_path = run_dir / "best.pt"
     cfg_path  = run_dir / "config.json"
@@ -278,7 +239,7 @@ def load_anp_model(
     num_hidden   = 128
     attn_dropout = 0.1
     target_col   = "all"
-    cfg_data     = {}
+    cfg_data     = {}   # always initialised so later .get() calls are safe
 
     if cfg_path.exists():
         with cfg_path.open() as f:
@@ -288,14 +249,13 @@ def load_anp_model(
         attn_dropout = cfg_data.get("attn_dropout", 0.1)
         target_col   = cfg_data.get("target_col", "all")
 
-    # ── Determine which targets this model predicts ───────────────────────────
+    # ── Target columns ────────────────────────────────────────────────────────
     if target_col == "all":
         model_target_cols = all_target_cols
     elif target_col in all_target_cols:
         model_target_cols = [target_col]
     else:
-        # Fallback: infer output_dim from decoder weight shape
-        raw_cpu = torch.load(ckpt_path, map_location="cpu")
+        raw_cpu  = torch.load(ckpt_path, map_location="cpu")
         out_keys = [k for k in raw_cpu["model"]
                     if "mean_projection" in k and "weight" in k]
         out_dim  = raw_cpu["model"][out_keys[0]].shape[0] if out_keys else len(all_target_cols)
@@ -303,69 +263,68 @@ def load_anp_model(
 
     output_dim = len(model_target_cols)
 
-    # ── Robustly infer model_input_dim from checkpoint weight shape ───────────
-    # The latent encoder's input_projection maps (input_dim + output_dim) → num_hidden.
-    # Reading this directly from the checkpoint avoids dependency on config.json flags.
+    # ── Input dim from checkpoint (immune to missing config flags) ─────────────
     raw_cpu = torch.load(ckpt_path, map_location="cpu")
     lat_key = next(
         (k for k in raw_cpu["model"]
          if "latent_encoder.input_projection.linear_layer.weight" in k), None
     )
-    if lat_key:
-        # weight shape: [num_hidden, input_dim + output_dim]
-        model_input_dim = raw_cpu["model"][lat_key].shape[1] - output_dim
-    else:
-        model_input_dim = input_dim   # fallback: assume full feature set
+    model_input_dim = (raw_cpu["model"][lat_key].shape[1] - output_dim
+                       if lat_key else input_dim)
 
-    # ── Determine feature_cols for X filtering ────────────────────────────────
+    # ── Feature cols for X filtering ──────────────────────────────────────────
     if model_input_dim == input_dim:
-        feature_cols = None   # full feature set — no filtering needed
+        feature_cols = None   # full feature set
     else:
         feature_cols = REDUCED_FEATURE_SETS.get(target_col)
         if feature_cols is None:
             raise ValueError(
-                f"'{label}' checkpoint has input_dim={model_input_dim} "
-                f"(data input_dim={input_dim}), but REDUCED_FEATURE_SETS has no "
-                f"entry for target_col='{target_col}'. Add the feature list to "
-                f"REDUCED_FEATURE_SETS in train_utils.py."
+                f"'{label}' checkpoint input_dim={model_input_dim} "
+                f"(data={input_dim}) but REDUCED_FEATURE_SETS has no entry "
+                f"for target_col='{target_col}'."
             )
-        if len(feature_cols) != model_input_dim:
+        # SoC-enriched models add 4 columns on top of the EIS feature set
+        enrich_check = cfg_data.get("enrich_soc_predictions", False)
+        n_extra      = 4 if enrich_check else 0
+        expected_dim = len(feature_cols) + n_extra
+        if expected_dim != model_input_dim:
             raise ValueError(
                 f"'{label}': checkpoint input_dim={model_input_dim} but "
                 f"REDUCED_FEATURE_SETS['{target_col}'] has {len(feature_cols)} "
-                f"features. These must match — check REDUCED_FEATURE_SETS."
+                f"features" + (f" + 4 SoC enrichment = {expected_dim}"
+                               if enrich_check else "")
+                + ". Check REDUCED_FEATURE_SETS in train_utils.py."
             )
 
-    # ── Aggregation config ────────────────────────────────────────────────────
-    # aggregate_by_cycle=True means the model was trained on cycle-averaged data
-    # (1 row per cycle instead of ~30). ctx/tgt window sizes differ accordingly.
-    aggregate    = cfg_data.get("aggregate_by_cycle", False)
-    ctx_cycles_m = cfg_data.get("ctx_cycles",  60)
-    tgt_cycles_m = cfg_data.get("tgt_cycles",  60)
+    # ── Aggregation / enrichment config ───────────────────────────────────────
+    aggregate    = cfg_data.get("aggregate_by_cycle",     False)
+    enrich       = cfg_data.get("enrich_soc_predictions", False)
+    soc_run_dir  = cfg_data.get("anp_soc_run_dir",        "")
+    ctx_cycles_m = cfg_data.get("ctx_cycles",             60)
+    tgt_cycles_m = cfg_data.get("tgt_cycles",             60)
     meas_p_cycle = cfg_data.get("measurements_per_cycle", 30)
 
     model_ctx_rows = ctx_cycles_m if aggregate else ctx_cycles_m * meas_p_cycle
     model_tgt_rows = tgt_cycles_m if aggregate else tgt_cycles_m * meas_p_cycle
 
     agg_cfg = {
-        "aggregate": aggregate,
-        "ctx_rows":  model_ctx_rows,
-        "tgt_rows":  model_tgt_rows,
+        "aggregate":   aggregate,
+        "enrich":      enrich,      # True → use windows_enriched
+        "soc_run_dir": soc_run_dir, # path to ANP-SoC checkpoint
+        "ctx_rows":    model_ctx_rows,
+        "tgt_rows":    model_tgt_rows,
     }
 
-    # ── Instantiate and load model ────────────────────────────────────────────
-    model = LatentModel(
-        num_hidden=num_hidden,
-        input_dim=model_input_dim,
-        output_dim=output_dim,
-        attn_dropout=attn_dropout,
-    )
-    model.load_state_dict(raw_cpu["model"])   # reuse already-loaded dict
+    # ── Build and load model ──────────────────────────────────────────────────
+    model = LatentModel(num_hidden=num_hidden, input_dim=model_input_dim,
+                        output_dim=output_dim, attn_dropout=attn_dropout)
+    model.load_state_dict(raw_cpu["model"])
     model.eval().to(device)
 
     val_mae  = raw_cpu.get("val_MAE", raw_cpu.get("val_loss", "?"))
     feat_str = f"reduced({model_input_dim})" if feature_cols else f"all({input_dim})"
-    agg_str  = "  agg=cycle" if aggregate else ""
+    agg_str  = ("  agg=cycle+SoC" if (aggregate and enrich)
+                else "  agg=cycle" if aggregate else "")
     print(f"  ✓  {label:<22} targets={model_target_cols}  "
           f"features={feat_str}{agg_str}  val_MAE={val_mae}")
     return (label, model, model_target_cols, feature_cols, agg_cfg)
@@ -377,29 +336,9 @@ def load_anp_model(
 
 @torch.no_grad()
 def eval_mlp(
-    model:         nn.Module,
-    X_tgt:         np.ndarray,
-    y_tgt:         np.ndarray,
-    device:        torch.device,
-    denorm_values: dict,
-    target_cols:   List[str],
+    model: nn.Module, X_tgt: np.ndarray, y_tgt: np.ndarray,
+    device: torch.device, denorm_values: dict, target_cols: List[str],
 ) -> Dict[str, float]:
-    """
-    Evaluate an MLP on a target window.
-
-    The MLP receives individual rows and predicts targets directly, no context mechanism.
-
-    Args:
-        model:         MLP in eval mode.
-        X_tgt:         Feature array (Nt, D).
-        y_tgt:         Target array  (Nt, O).
-        device:        Torch device.
-        denorm_values: Denormalization scalers.
-        target_cols:   Target column names.
-
-    Returns:
-        Dict {col: mae} in original units.
-    """
     X_t  = torch.tensor(X_tgt, dtype=torch.float32).to(device)
     pred = model(X_t).cpu().numpy()
     return compute_mae(pred, y_tgt, denorm_values, target_cols)
@@ -407,57 +346,36 @@ def eval_mlp(
 
 @torch.no_grad()
 def eval_anp(
-    model:             nn.Module,
-    X_ctx:             np.ndarray,
-    y_ctx:             np.ndarray,
-    X_tgt:             np.ndarray,
-    y_tgt:             np.ndarray,
-    device:            torch.device,
-    denorm_values:     dict,
-    all_target_cols:   List[str],
+    model: nn.Module,
+    X_ctx: np.ndarray, y_ctx: np.ndarray,
+    X_tgt: np.ndarray, y_tgt: np.ndarray,
+    device: torch.device,
+    denorm_values: dict,
+    all_target_cols: List[str],
     model_target_cols: List[str],
 ) -> Dict[str, float]:
     """
-    Evaluate an ANP on a single task using context → target prediction.
+    Evaluate an ANP on a single task via context → target prediction.
 
-    Handles both dual-target and single-target models transparently:
-    - y_ctx and y_tgt are filtered to the model's trained targets before being passed to the model, so input dimensions always match.
-    - Targets that the model does not predict are returned as NaN, allowing all models to be compared in the same result table.
-
-    Args:
-        model:             ANP LatentModel in eval mode.
-        X_ctx / y_ctx:     Context features and targets (Nc, D/O_all).
-        X_tgt / y_tgt:     Target features and ground truth (Nt, D/O_all).
-        device:            Torch device.
-        denorm_values:     Denormalization scalers (full dict for all targets).
-        all_target_cols:   All targets present in the data.
-        model_target_cols: Subset of targets this model was trained on.
-
-    Returns:
-        Dict {col: mae} for all_target_cols. NaN for unmodelled targets.
+    Filters y_ctx/y_tgt to the model's trained targets before the forward
+    pass. Returns NaN for targets the model does not predict, so all models
+    can be compared in the same result table.
     """
-    # Filter y to only the targets this model knows about
     if model_target_cols != all_target_cols:
-        col_idx   = [all_target_cols.index(c) for c in model_target_cols]
-        y_ctx_m   = y_ctx[:, col_idx]
-        y_tgt_m   = y_tgt[:, col_idx]
+        col_idx = [all_target_cols.index(c) for c in model_target_cols]
+        y_ctx_m = y_ctx[:, col_idx]
+        y_tgt_m = y_tgt[:, col_idx]
     else:
-        y_ctx_m = y_ctx
-        y_tgt_m = y_tgt
+        y_ctx_m = y_ctx; y_tgt_m = y_tgt
 
     ctx_x = torch.tensor(X_ctx,   dtype=torch.float32).unsqueeze(0).to(device)
     ctx_y = torch.tensor(y_ctx_m, dtype=torch.float32).unsqueeze(0).to(device)
     tgt_x = torch.tensor(X_tgt,   dtype=torch.float32).unsqueeze(0).to(device)
-
-    # Prior-only inference (no target_y → realistic deployment scenario)
     pred_mean, _, _, _, _ = model(ctx_x, ctx_y, tgt_x, target_y=None)
-    pred = pred_mean.squeeze(0).cpu().numpy()   # (Nt, O_model)
+    pred = pred_mean.squeeze(0).cpu().numpy()
 
-    # Compute MAE only for the model's targets
     mae_model = compute_mae(pred, y_tgt_m, denorm_values, model_target_cols)
-
-    # Fill full result dict: NaN for targets not predicted by this model
-    result = {col: float("nan") for col in all_target_cols}
+    result    = {col: float("nan") for col in all_target_cols}
     result.update(mae_model)
     return result
 
@@ -467,158 +385,118 @@ def eval_anp(
 # ==============================================================================
 
 _DPI = 300
-
-# Global plotting style controls.
-# Increase these values to make labels, legends, and annotations larger.
-PLOT_TICK_FONTSIZE = 10
+PLOT_TICK_FONTSIZE       = 10
 PLOT_AXIS_LABEL_FONTSIZE = 14
-PLOT_TITLE_FONTSIZE = 16
-PLOT_LEGEND_FONTSIZE = 12
-PLOT_CELL_FONTSIZE = 9
-PLOT_COLORBAR_FONTSIZE = 12
+PLOT_TITLE_FONTSIZE      = 16
+PLOT_LEGEND_FONTSIZE     = 12
+PLOT_CELL_FONTSIZE       = 9
+PLOT_COLORBAR_FONTSIZE   = 12
 PLOT_SEPARATOR_LINEWIDTH = 4
 PLOT_HIGHLIGHT_LINEWIDTH = 5
 
 
-def plot_heatmaps(
-    df_soc:   pd.DataFrame,
-    df_cycle: pd.DataFrame,
-    out_dir:  Path,
-) -> None:
-    """Save MAE heatmaps for SoC and Cycle (all models × all tasks)."""
+def plot_heatmaps(df_soc: pd.DataFrame, df_cycle: pd.DataFrame, out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    def drop_empty_rows(df: pd.DataFrame) -> pd.DataFrame:
-        """Remove models that do not contribute any finite value to this metric."""
+    def drop_empty(df):
         return df.loc[~df.isna().all(axis=1)]
 
-    # Vertical separator column index (after last train task)
     train_count = sum(1 for c in df_soc.columns if c.startswith("train_"))
 
-    for df, metric, cmap, fname in [
-        (df_soc,   "MAE SoC (%)",  "YlOrRd", "mae_soc_heatmap.png"),
-        (df_cycle, "MAE Cycle",    "YlOrRd", "mae_cycle_heatmap.png"),
+    for df, metric, fname in [
+        (df_soc,   "MAE SoC (%)", "mae_soc_heatmap.png"),
+        (df_cycle, "MAE Cycle",   "mae_cycle_heatmap.png"),
     ]:
-        df = drop_empty_rows(df)
-        n_models = len(df)
-        n_tasks  = len(df.columns)
-        fig_h    = max(5, n_models * 0.55)
-        fig_w    = max(10, n_tasks * 0.8)
-
-        fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+        df = drop_empty(df)
+        n_models, n_tasks = len(df), len(df.columns)
+        fig, ax = plt.subplots(figsize=(max(10, n_tasks * 0.8), max(5, n_models * 0.55)))
         vals = df.values.astype(float)
-        im   = ax.imshow(vals, cmap=cmap, aspect="auto",
+        im   = ax.imshow(vals, cmap="YlOrRd", aspect="auto",
                          vmin=np.nanmin(vals), vmax=np.nanpercentile(vals, 95))
-
-        # Axes labels
         ax.set_xticks(range(n_tasks))
-        ax.set_xticklabels(df.columns, rotation=45, ha="right", fontsize=PLOT_TICK_FONTSIZE)
+        ax.set_xticklabels(df.columns, rotation=45, ha="right",
+                           fontsize=PLOT_TICK_FONTSIZE)
         ax.set_yticks(range(n_models))
         ax.set_yticklabels(df.index, fontsize=PLOT_TICK_FONTSIZE)
-
-        # Annotate cells
         for r in range(n_models):
             for c in range(n_tasks):
                 v = vals[r, c]
                 if not np.isnan(v):
                     ax.text(c, r, f"{v:.2f}", ha="center", va="center",
                             fontsize=PLOT_CELL_FONTSIZE, color="black")
-
-        # Highlight best (minimum) value per column with green box
         for c in range(n_tasks):
             col_vals = vals[:, c]
             if not np.all(np.isnan(col_vals)):
                 min_row = np.nanargmin(col_vals)
-                rect = matplotlib.patches.Rectangle(
+                ax.add_patch(matplotlib.patches.Rectangle(
                     (c - 0.5, min_row - 0.5), 1, 1,
-                    linewidth=PLOT_HIGHLIGHT_LINEWIDTH, edgecolor='lime', facecolor='none'
-                )
-                ax.add_patch(rect)
-
-        # Vertical separator between train / val / test
-        if train_count > 0:
-            ax.axvline(train_count - 0.5, color="white", linewidth=PLOT_SEPARATOR_LINEWIDTH)
+                    linewidth=PLOT_HIGHLIGHT_LINEWIDTH, edgecolor="lime",
+                    facecolor="none"))
+        ax.axvline(train_count - 0.5, color="white",
+                   linewidth=PLOT_SEPARATOR_LINEWIDTH)
         val_count = sum(1 for c in df.columns if c.startswith("val_"))
-        if val_count > 0:
-            ax.axvline(train_count + val_count - 0.5, color="white", linewidth=PLOT_SEPARATOR_LINEWIDTH)
-
-        # Horizontal separator before first ANP row
-        anp_labels = {"anp", "anp_soc", "anp_cycle"}
-        anp_rows   = [i for i, m in enumerate(df.index) if m in anp_labels]
+        ax.axvline(train_count + val_count - 0.5, color="white",
+                   linewidth=PLOT_SEPARATOR_LINEWIDTH)
+        anp_rows = [i for i, m in enumerate(df.index) if m in {"anp","anp_soc","anp_cycle"}]
         if anp_rows:
-            ax.axhline(min(anp_rows) - 0.5, color="white", linewidth=PLOT_SEPARATOR_LINEWIDTH)
-
+            ax.axhline(min(anp_rows) - 0.5, color="white",
+                       linewidth=PLOT_SEPARATOR_LINEWIDTH)
         cbar = plt.colorbar(im, ax=ax, shrink=0.8)
         cbar.ax.tick_params(labelsize=PLOT_TICK_FONTSIZE)
         cbar.set_label(metric, fontsize=PLOT_COLORBAR_FONTSIZE)
         ax.set_title(f"{metric} — all models × all tasks\n"
                      f"(train | val | test columns separated by white lines)",
-                 fontweight="bold", fontsize=PLOT_TITLE_FONTSIZE)
+                     fontweight="bold", fontsize=PLOT_TITLE_FONTSIZE)
         fig.tight_layout()
         fig.savefig(out_dir / fname, dpi=_DPI, bbox_inches="tight")
         plt.close(fig)
         print(f"  ✓  {fname}")
 
 
-def plot_bar_comparison(
-    df_soc:      pd.DataFrame,
-    df_cycle:    pd.DataFrame,
-    out_dir:     Path,
-) -> None:
-    """
-    Grouped bar chart: average MAE per model for train / val / test splits. One figure for SoC, one for Cycle.
-    """
+def plot_bar_comparison(df_soc: pd.DataFrame, df_cycle: pd.DataFrame, out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    def drop_empty_rows(df: pd.DataFrame) -> pd.DataFrame:
-        """Remove models that do not contribute any finite value to this metric."""
+    def drop_empty(df):
         return df.loc[~df.isna().all(axis=1)]
 
     for df, metric, fname in [
-        (df_soc,   "MAE SoC (%)",  "bar_soc.png"),
-        (df_cycle, "MAE Cycle",    "bar_cycle.png"),
+        (df_soc,   "MAE SoC (%)", "bar_soc.png"),
+        (df_cycle, "MAE Cycle",   "bar_cycle.png"),
     ]:
-        df = drop_empty_rows(df)
+        df = drop_empty(df)
         train_cols = [c for c in df.columns if c.startswith("train_")]
         val_cols   = [c for c in df.columns if c.startswith("val_")]
         test_cols  = [c for c in df.columns if c.startswith("test_")]
-
         models = list(df.index)
-        x      = np.arange(len(models))
-        width  = 0.25
+        x, width = np.arange(len(models)), 0.25
 
-        # Color palette: specialists grey, DR-MLP orange, ANP variants in blue tones
         def bar_color(label: str) -> str:
-            if label == "anp":          return "#1C7293"   # teal  — dual-target
-            if label == "anp_soc":      return "#028090"   # darker teal — SoC only
-            if label == "anp_cycle":    return "#21295C"   # navy  — Cycle only
-            if label == "dr_mlp":       return "#D4860A"   # amber
-            return "#9AB8C8"                               # grey  — specialists
+            if label == "anp":             return "#1C7293"
+            if label == "anp_soc":         return "#028090"
+            if label == "anp_cycle":       return "#21295C"
+            if label == "anp_soc_red":     return "#2E86AB"
+            if label == "anp_cycle_red":   return "#5C4A72"
+            if label == "dr_mlp":          return "#D4860A"
+            return "#9AB8C8"
 
         colors = [bar_color(m) for m in models]
-
         fig, ax = plt.subplots(figsize=(max(12, len(models) * 0.8), 5))
-
         for k, (split_cols, split_label, offset) in enumerate([
             (train_cols, "Train", -width),
             (val_cols,   "Val",    0),
             (test_cols,  "Test",   width),
         ]):
-            if not split_cols:
-                continue
+            if not split_cols: continue
             avgs = df[split_cols].mean(axis=1).values
-            bars = ax.bar(x + offset, avgs, width,
-                          label=split_label,
-                          color=[c for c in colors],
-                          alpha=[1.0, 0.6, 0.35][k],
-                          edgecolor="white", linewidth=0.5)
-
+            ax.bar(x + offset, avgs, width, label=split_label, color=colors,
+                   alpha=[1.0, 0.6, 0.35][k], edgecolor="white", linewidth=0.5)
         ax.set_xticks(x)
-        ax.set_xticklabels(models, rotation=45, ha="right", fontsize=PLOT_TICK_FONTSIZE)
+        ax.set_xticklabels(models, rotation=45, ha="right",
+                           fontsize=PLOT_TICK_FONTSIZE)
         ax.set_ylabel(metric, fontsize=PLOT_AXIS_LABEL_FONTSIZE)
         ax.set_title(f"Average {metric} by model and split "
-                 f"(grey=specialist, orange=DR-MLP, blue=ANP)",
-                 fontsize=PLOT_TITLE_FONTSIZE)
+                     f"(grey=specialist, orange=DR-MLP, blue=ANP)",
+                     fontsize=PLOT_TITLE_FONTSIZE)
         ax.legend(fontsize=PLOT_LEGEND_FONTSIZE)
         ax.grid(True, axis="y", alpha=0.3)
         fig.tight_layout()
@@ -628,15 +506,15 @@ def plot_bar_comparison(
 
 
 # ==============================================================================
-# MAIN
+# MAIN RUN
 # ==============================================================================
 
 def run(
-    mlp_run_dir:     Path,
-    anp_run_dir:     Optional[Path],
-    anp_soc_run_dir: Optional[Path],
-    anp_cycle_run_dir: Optional[Path],
-    anp_soc_reduced_run_dir: Optional[Path],
+    mlp_run_dir:               Path,
+    anp_run_dir:               Optional[Path],
+    anp_soc_run_dir:           Optional[Path],
+    anp_cycle_run_dir:         Optional[Path],
+    anp_soc_reduced_run_dir:   Optional[Path],
     anp_cycle_reduced_run_dir: Optional[Path],
     data_dir:        str,
     out_dir:         Path,
@@ -647,25 +525,6 @@ def run(
     tgt_cycles:      int,
     meas_per_cycle:  int,
 ) -> None:
-    """
-    Full validation pipeline.
-
-    Evaluates all MLP and ANP variants on every synthetic task and produces comparison tables, heatmaps, and bar charts.
-
-    Args:
-        mlp_run_dir:       Path to runs_mlp/<timestamp>/ directory.
-        anp_run_dir:       Path to dual-target ANP run (None to skip).
-        anp_soc_run_dir:   Path to SoC-only ANP run   (None to skip).
-        anp_cycle_run_dir: Path to Cycle-only ANP run  (None to skip).
-        data_dir:          Path to the directory containing prepared_data.pkl.
-        out_dir:           Output directory for validation results.
-        train_task_ids:    0-based dataset indices used as training tasks.
-        val_task_ids:      0-based dataset indices used as val tasks.
-        test_task_ids:     0-based dataset indices used as test tasks.
-        ctx_cycles:        Context window size in cycles.
-        tgt_cycles:        Target  window size in cycles.
-        meas_per_cycle:    Measurements per cycle in the dataset.
-    """
     out_dir.mkdir(parents=True, exist_ok=True)
     device   = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     ctx_rows = ctx_cycles * meas_per_cycle
@@ -688,17 +547,15 @@ def run(
         "y_mean": data["denorm_values"]["y_mean"],
         "y_std":  data["denorm_values"]["y_std"],
     }
+    x_col_names  = list(data["normalized_synth_datasets"][0][0].columns)
     print(f"   input_dim={input_dim}  output_dim={output_dim}  targets={target_cols}")
 
-    x_col_names = list(data["normalized_synth_datasets"][0][0].columns)
-    # All 25 tasks evaluated
     all_task_ids = list(range(len(data["normalized_synth_datasets"])))
     all_tasks    = [
         sort_task_by_cycle(*data["normalized_synth_datasets"][i])
         for i in all_task_ids
     ]
 
-    # Task labels
     def task_label(i: int) -> str:
         if i in train_task_ids: return f"train_{train_task_ids.index(i)+1:02d}"
         if i in val_task_ids:   return f"val_{val_task_ids.index(i)+1:02d}"
@@ -707,109 +564,144 @@ def run(
 
     task_labels = [task_label(i) for i in all_task_ids]
 
-    # Pre-extract windows for all tasks
-    windows = [
-        extract_window(X, y, ctx_rows, tgt_rows)
-        for X, y in all_tasks
-    ]
+    # Measurement-level windows (shared by non-aggregated models)
+    windows = [extract_window(X, y, ctx_rows, tgt_rows) for X, y in all_tasks]
 
     # ── Load models ───────────────────────────────────────────────────────────
     print("\n📦  Loading models...")
 
-    # Each entry: (label, model, type, model_target_cols, feature_cols, agg_cfg)
-    #   type            ∈ {"mlp", "anp"}
-    #   model_target_cols: targets the model predicts
-    #   feature_cols:   X column subset for reduced models, None for full-feature
-    #   agg_cfg:        dict with 'aggregate', 'ctx_rows', 'tgt_rows'
-    #                   controls which pre-extracted window set to use
-    _EMPTY_AGG = {"aggregate": False, "ctx_rows": ctx_rows, "tgt_rows": tgt_rows}
-    all_models: List[Tuple[str, nn.Module, str, List[str], Optional[List[str]], Dict]] = []
+    # 6-tuple: (label, model, type, model_target_cols, feature_cols, agg_cfg)
+    _EMPTY_AGG = {"aggregate": False, "enrich": False, "soc_run_dir": "",
+                  "ctx_rows": ctx_rows, "tgt_rows": tgt_rows}
+    all_models: List[Tuple[str, nn.Module, str, List[str],
+                           Optional[List[str]], Dict]] = []
 
-    # MLP Specialists
-    specialists = load_mlp_specialists(
-        mlp_run_dir, input_dim, output_dim, device,
-        n_specialists=len(train_task_ids),
-    )
-    for label, model in specialists:
+    for label, model in load_mlp_specialists(
+        mlp_run_dir, input_dim, output_dim, device, len(train_task_ids)
+    ):
         all_models.append((label, model, "mlp", target_cols, None, _EMPTY_AGG))
 
-    # DR-MLP
     dr = load_dr_mlp(mlp_run_dir, input_dim, output_dim, device)
     if dr:
         all_models.append((dr[0], dr[1], "mlp", target_cols, None, _EMPTY_AGG))
 
-    # ANP dual-target
-    if anp_run_dir is not None:
-        anp = load_anp_model(anp_run_dir, input_dim, target_cols, device, label="anp")
-        if anp:
-            all_models.append((anp[0], anp[1], "anp", anp[2], anp[3], anp[4]))
-
-    # ANP SoC-only
-    if anp_soc_run_dir is not None:
-        anp_soc = load_anp_model(
-            anp_soc_run_dir, input_dim, target_cols, device, label="anp_soc"
-        )
-        if anp_soc:
-            all_models.append((anp_soc[0], anp_soc[1], "anp",
-                                anp_soc[2], anp_soc[3], anp_soc[4]))
-
-    # ANP Cycle-only
-    if anp_cycle_run_dir is not None:
-        anp_cyc = load_anp_model(
-            anp_cycle_run_dir, input_dim, target_cols, device, label="anp_cycle"
-        )
-        if anp_cyc:
-            all_models.append((anp_cyc[0], anp_cyc[1], "anp",
-                                anp_cyc[2], anp_cyc[3], anp_cyc[4]))
-
-    # ANP SoC-only — reduced features
-    if anp_soc_reduced_run_dir is not None:
-        anp_soc_r = load_anp_model(
-            anp_soc_reduced_run_dir, input_dim, target_cols,
-            device, label="anp_soc_red"
-        )
-        if anp_soc_r:
-            all_models.append((anp_soc_r[0], anp_soc_r[1], "anp",
-                                anp_soc_r[2], anp_soc_r[3], anp_soc_r[4]))
-
-    # ANP Cycle-only — reduced features (may also use aggregate_by_cycle)
-    if anp_cycle_reduced_run_dir is not None:
-        anp_cyc_r = load_anp_model(
-            anp_cycle_reduced_run_dir, input_dim, target_cols,
-            device, label="anp_cycle_red"
-        )
-        if anp_cyc_r:
-            all_models.append((anp_cyc_r[0], anp_cyc_r[1], "anp",
-                                anp_cyc_r[2], anp_cyc_r[3], anp_cyc_r[4]))
+    for lbl, path in [
+        ("anp",           anp_run_dir),
+        ("anp_soc",       anp_soc_run_dir),
+        ("anp_cycle",     anp_cycle_run_dir),
+        ("anp_soc_red",   anp_soc_reduced_run_dir),
+        ("anp_cycle_red", anp_cycle_reduced_run_dir),
+    ]:
+        if path is None:
+            continue
+        res = load_anp_model(path, input_dim, target_cols, device, label=lbl)
+        if res:
+            all_models.append((res[0], res[1], "anp", res[2], res[3], res[4]))
 
     print(f"\n  Total models loaded: {len(all_models)}")
 
-    # ── Pre-compute cycle-level aggregated windows (lazy) ─────────────────────
-    # Only computed if at least one loaded model used aggregate_by_cycle=True.
-    # Aggregated windows use ctx_cycles / tgt_cycles as row count (1 row/cycle).
+    # ── Pre-compute cycle-level aggregated windows ────────────────────────────
     needs_agg = any(m[5].get("aggregate", False) for m in all_models)
     if needs_agg:
         print("\n  🔄  Pre-computing cycle-level aggregated windows...")
         tasks_agg   = [aggregate_by_cycle(X, y) for X, y in all_tasks]
-        windows_agg = [
-            extract_window(X, y, ctx_cycles, tgt_cycles)
-            for X, y in tasks_agg
-        ]
-        print(f"     ctx_rows={ctx_cycles}  tgt_rows={tgt_cycles}  "
-              f"(1 row per cycle after aggregation)")
+        windows_agg = [extract_window(X, y, ctx_cycles, tgt_cycles)
+                       for X, y in tasks_agg]
+        print(f"     ctx={ctx_cycles} rows  tgt={tgt_cycles} rows  (1 row/cycle)")
     else:
-        windows_agg = windows   # unused alias — avoids NameError in loop
+        windows_agg = windows    # alias — unused if needs_agg is False
+
+    # ── Pre-compute SoC-enriched windows ─────────────────────────────────────
+    needs_enrich = any(m[5].get("enrich", False) for m in all_models)
+    if needs_enrich:
+        soc_run_dir_str = next(
+            m[5]["soc_run_dir"] for m in all_models if m[5].get("enrich")
+        )
+        if not soc_run_dir_str:
+            print("  ⚠  enrich=True but soc_run_dir is empty — skipping enrichment")
+            windows_enriched = windows_agg if needs_agg else windows
+        else:
+            print("\n  🔬  Pre-computing SoC-enriched cycle-level windows...")
+            soc_run      = Path(soc_run_dir_str)
+            soc_ckpt     = soc_run / "best.pt"
+            soc_cfg_path = soc_run / "config.json"
+
+            soc_num_hidden, soc_attn_dropout, soc_feat_cols = 128, 0.1, None
+            if soc_cfg_path.exists():
+                with soc_cfg_path.open() as f:
+                    scd = json.load(f)
+                soc_num_hidden   = (scd.get("num_hidden")
+                                    or scd.get("params", {}).get("num_hidden", 128))
+                soc_attn_dropout = scd.get("attn_dropout", 0.1)
+                soc_target_col   = scd.get("target_col", "SoC (%)")
+                if scd.get("use_reduced_features", False):
+                    soc_feat_cols = REDUCED_FEATURE_SETS.get(soc_target_col)
+
+            raw_soc  = torch.load(soc_ckpt, map_location="cpu")
+            lat_k    = next((k for k in raw_soc["model"]
+                             if "latent_encoder.input_projection.linear_layer.weight" in k), None)
+            soc_idim = (raw_soc["model"][lat_k].shape[1] - 1 if lat_k else input_dim)
+
+            soc_model = LatentModel(num_hidden=soc_num_hidden, input_dim=soc_idim,
+                                    output_dim=1, attn_dropout=soc_attn_dropout)
+            soc_model.load_state_dict(raw_soc["model"])
+            soc_model.eval().to(device)
+            print(f"     ANP-SoC: {soc_run.name}  "
+                  f"(input_dim={soc_idim}  "
+                  f"features={'reduced' if soc_feat_cols else 'all'})")
+
+            # EIS feature set used by the enriched Cycle model (e.g. 13 cols)
+            enriched_entry = next(m for m in all_models if m[5].get("enrich"))
+            eis_feat_cols  = enriched_entry[4]   # feat_cols from the 6-tuple
+
+            tasks_raw_list = []
+            tasks_agg_list = []
+            for X_df, y_df in all_tasks:
+                tasks_raw_list.append((X_df, y_df))
+                X_a, y_a = aggregate_by_cycle(X_df, y_df)
+                if eis_feat_cols is not None:
+                    X_a = X_a[eis_feat_cols]    # 202 → 13 EIS Cycle features
+                tasks_agg_list.append((X_a, y_a))
+
+            enriched_tasks = enrich_with_soc_predictions(
+                tasks_raw     = tasks_raw_list,
+                tasks_agg     = tasks_agg_list,
+                anp_soc_model = soc_model,
+                soc_feat_cols = soc_feat_cols,
+                device        = device,
+                ctx_cycles    = ctx_cycles,
+                meas_per_cycle= meas_per_cycle,
+            )
+
+            del soc_model
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            windows_enriched = [
+                extract_window(X_e, y_e, ctx_cycles, tgt_cycles)
+                for X_e, y_e in enriched_tasks
+            ]
+            print(f"     ✓  {len(windows_enriched)} enriched windows  "
+                  f"(X ctx shape: {windows_enriched[0][0].shape})")
+    else:
+        windows_enriched = windows    # alias — unused
 
     # ── Evaluate all models on all tasks ──────────────────────────────────────
     print("\n📊  Evaluating...\n")
-
-    # results[model_label][task_label] = {col: mae}
     results: Dict[str, Dict[str, Dict[str, float]]] = {}
 
     for m_label, model, m_type, m_target_cols, feat_cols, agg_cfg in all_models:
-        feat_idx  = get_feature_indices(x_col_names, feat_cols)
-        # Route to cycle-level windows if the model used aggregate_by_cycle
-        m_windows = windows_agg if agg_cfg.get("aggregate") else windows
+        # Enriched models: X is already exactly right — no further column filtering
+        if agg_cfg.get("enrich"):
+            feat_idx  = None
+            m_windows = windows_enriched
+        elif agg_cfg.get("aggregate"):
+            feat_idx  = get_feature_indices(x_col_names, feat_cols)
+            m_windows = windows_agg
+        else:
+            feat_idx  = get_feature_indices(x_col_names, feat_cols)
+            m_windows = windows
+
         results[m_label] = {}
         for t_label, (X_ctx, y_ctx, X_tgt, y_tgt) in zip(task_labels, m_windows):
             if m_type == "mlp":
@@ -825,46 +717,36 @@ def run(
                 )
             results[m_label][t_label] = mae
 
-        # Progress summary (NaN-safe)
-        avg_soc = np.nanmean([
-            results[m_label][t].get("SoC (%)", float("nan"))
-            for t in task_labels
-        ])
-        avg_cyc = np.nanmean([
-            results[m_label][t].get("Cycle", float("nan"))
-            for t in task_labels
-        ])
+        avg_soc = np.nanmean([results[m_label][t].get("SoC (%)", float("nan"))
+                              for t in task_labels])
+        avg_cyc = np.nanmean([results[m_label][t].get("Cycle", float("nan"))
+                              for t in task_labels])
         soc_str = f"{avg_soc:.3f}%" if not np.isnan(avg_soc) else "  N/A  "
         cyc_str = f"{avg_cyc:.2f}"  if not np.isnan(avg_cyc) else "  N/A  "
-        print(f"  {m_label:<22}  avg SoC MAE={soc_str}  avg Cycle MAE={cyc_str}")
+        print(f"  {m_label:<24}  avg SoC MAE={soc_str}  avg Cycle MAE={cyc_str}")
 
     # ── Build DataFrames ──────────────────────────────────────────────────────
-    model_labels_ordered = [m for m, _, _, _, _, _ in all_models]
-
+    model_labels_ordered = [m for m, *_ in all_models]
     soc_col   = "SoC (%)" if "SoC (%)" in target_cols else target_cols[0]
     cycle_col = "Cycle"   if "Cycle"   in target_cols else target_cols[-1]
 
     def build_df(col: str) -> pd.DataFrame:
-        rows = {}
-        for m_label in model_labels_ordered:
-            rows[m_label] = {
-                t: results[m_label].get(t, {}).get(col, float("nan"))
-                for t in task_labels
-            }
-        return pd.DataFrame(rows).T  # (models, tasks)
+        return pd.DataFrame({
+            m: {t: results[m].get(t, {}).get(col, float("nan")) for t in task_labels}
+            for m in model_labels_ordered
+        }).T
 
     df_soc   = build_df(soc_col)
     df_cycle = build_df(cycle_col)
 
-    # ── Save CSVs ─────────────────────────────────────────────────────────────
-    def safe(s): return s.replace(" ","_").replace("(","").replace(")","").replace("%","pct")
+    def safe(s):
+        return s.replace(" ","_").replace("(","").replace(")","").replace("%","pct")
 
     df_soc.to_csv(out_dir / f"mae_{safe(soc_col)}.csv")
     df_cycle.to_csv(out_dir / f"mae_{safe(cycle_col)}.csv")
     print(f"\n  ✓  mae_{safe(soc_col)}.csv")
     print(f"  ✓  mae_{safe(cycle_col)}.csv")
 
-    # Combined wide-format CSV
     combined_rows = []
     for m_label in model_labels_ordered:
         row = {"model": m_label}
@@ -888,79 +770,70 @@ def run(
     val_labels   = [t for t in task_labels if t.startswith("val_")]
     test_labels  = [t for t in task_labels if t.startswith("test_")]
 
-    lines = []
-    lines.append("=" * 95)
-    lines.append("VALIDATION SUMMARY — average MAE per split (original units)  |  NaN = target not predicted")
-    lines.append("=" * 95)
-    lines.append(
-        f"\n{'Model':<22} {'Train SoC':>10} {'Train Cyc':>10} "
-        f"{'Val SoC':>9} {'Val Cyc':>9} {'Test SoC':>10} {'Test Cyc':>10}"
-    )
-    lines.append("-" * 95)
-
-    def avg(m_label, labels, col):
-        vals = [results[m_label].get(t, {}).get(col, float("nan")) for t in labels]
-        vals = [v for v in vals if not np.isnan(v)]
+    def avg(m, labels, col):
+        vals = [v for t in labels
+                if not np.isnan(v := results[m].get(t, {}).get(col, float("nan")))]
         return np.mean(vals) if vals else float("nan")
 
-    def fmt(v):
-        return f"{v:>10.3f}" if not np.isnan(v) else f"{'N/A':>10}"
+    def fmt(v): return f"{v:>10.3f}" if not np.isnan(v) else f"{'N/A':>10}"
 
+    lines = ["=" * 95,
+             "VALIDATION SUMMARY — average MAE per split (original units)  |  NaN = target not predicted",
+             "=" * 95,
+             f"\n{'Model':<24} {'Train SoC':>10} {'Train Cyc':>10} "
+             f"{'Val SoC':>9} {'Val Cyc':>9} {'Test SoC':>10} {'Test Cyc':>10}",
+             "-" * 95]
+
+    ANP_TAGS = {
+        "anp":           "  ← ANP dual",
+        "anp_soc":       "  ← ANP SoC-only",
+        "anp_cycle":     "  ← ANP Cycle-only",
+        "anp_soc_red":   "  ← ANP SoC-only (reduced)",
+        "anp_cycle_red": "  ← ANP Cycle-only (reduced)",
+    }
     for m_label in model_labels_ordered:
-        anp_tag = ""
-        if   m_label == "anp":                anp_tag = "  ← ANP dual"
-        elif m_label == "anp_soc":            anp_tag = "  ← ANP SoC-only"
-        elif m_label == "anp_cycle":          anp_tag = "  ← ANP Cycle-only"
-        elif m_label == "anp_soc_red":    anp_tag = "  ← ANP SoC-only (reduced)"
-        elif m_label == "anp_cycle_red":  anp_tag = "  ← ANP Cycle-only (reduced)"
+        tag = ANP_TAGS.get(m_label, "")
         lines.append(
-            f"{m_label:<22}"
+            f"{m_label:<24}"
             f" {fmt(avg(m_label, train_labels, soc_col))}"
             f" {fmt(avg(m_label, train_labels, cycle_col))}"
             f" {fmt(avg(m_label, val_labels, soc_col))}"
             f" {fmt(avg(m_label, val_labels, cycle_col))}"
             f" {fmt(avg(m_label, test_labels, soc_col))}"
             f" {fmt(avg(m_label, test_labels, cycle_col))}"
-            f"{anp_tag}"
+            f"{tag}"
         )
 
-    # Aggregate rows
     lines.append("-" * 95)
     specialist_labels = [m for m in model_labels_ordered if m.startswith("specialist_")]
 
-    def group_avg(model_list, split_labels, col):
-        vals = []
-        for m in model_list:
-            for t in split_labels:
-                v = results[m].get(t, {}).get(col, float("nan"))
-                if not np.isnan(v):
-                    vals.append(v)
+    def group_avg(grp, split_labels, col):
+        vals = [v for m in grp for t in split_labels
+                if not np.isnan(v := results[m].get(t, {}).get(col, float("nan")))]
         return np.mean(vals) if vals else float("nan")
 
-    for group_label, group_models in [
-        ("AVG Specialists",          specialist_labels),
-        ("DR-MLP",                   ["dr_mlp"]             if "dr_mlp"             in model_labels_ordered else []),
-        ("ANP (dual)",               ["anp"]                if "anp"                in model_labels_ordered else []),
-        ("ANP (SoC-only)",           ["anp_soc"]            if "anp_soc"            in model_labels_ordered else []),
-        ("ANP (Cycle-only)",         ["anp_cycle"]          if "anp_cycle"          in model_labels_ordered else []),
-        ("ANP (SoC reduced)",        ["anp_soc_red"]    if "anp_soc_red"    in model_labels_ordered else []),
-        ("ANP (Cycle reduced)",      ["anp_cycle_red"]  if "anp_cycle_red"  in model_labels_ordered else []),
+    for grp_label, grp_models in [
+        ("AVG Specialists",     specialist_labels),
+        ("DR-MLP",              ["dr_mlp"]        if "dr_mlp"        in model_labels_ordered else []),
+        ("ANP (dual)",          ["anp"]            if "anp"           in model_labels_ordered else []),
+        ("ANP (SoC-only)",      ["anp_soc"]        if "anp_soc"       in model_labels_ordered else []),
+        ("ANP (Cycle-only)",    ["anp_cycle"]      if "anp_cycle"     in model_labels_ordered else []),
+        ("ANP (SoC reduced)",   ["anp_soc_red"]    if "anp_soc_red"   in model_labels_ordered else []),
+        ("ANP (Cycle reduced)", ["anp_cycle_red"]  if "anp_cycle_red" in model_labels_ordered else []),
     ]:
-        if not group_models:
-            continue
+        if not grp_models: continue
         lines.append(
-            f"{group_label:<22}"
-            f" {fmt(group_avg(group_models, train_labels, soc_col))}"
-            f" {fmt(group_avg(group_models, train_labels, cycle_col))}"
-            f" {fmt(group_avg(group_models, val_labels, soc_col))}"
-            f" {fmt(group_avg(group_models, val_labels, cycle_col))}"
-            f" {fmt(group_avg(group_models, test_labels, soc_col))}"
-            f" {fmt(group_avg(group_models, test_labels, cycle_col))}"
+            f"{grp_label:<24}"
+            f" {fmt(group_avg(grp_models, train_labels, soc_col))}"
+            f" {fmt(group_avg(grp_models, train_labels, cycle_col))}"
+            f" {fmt(group_avg(grp_models, val_labels, soc_col))}"
+            f" {fmt(group_avg(grp_models, val_labels, cycle_col))}"
+            f" {fmt(group_avg(grp_models, test_labels, soc_col))}"
+            f" {fmt(group_avg(grp_models, test_labels, cycle_col))}"
         )
 
     summary = "\n".join(lines)
     print("\n" + summary)
-
     with open(out_dir / "summary.txt", "w") as f:
         f.write(summary)
     print(f"\n  ✓  summary.txt")
@@ -972,52 +845,48 @@ def run(
 # ==============================================================================
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Unified validation — Specialist MLPs, DR-MLP and ANP variants",formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    p = argparse.ArgumentParser(
+        description="Unified validation — Specialist MLPs, DR-MLP and ANP variants",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("--mlp_run", type=str, required=True, help="Path to the runs_mlp/<timestamp>/ directory")
-    p.add_argument("--anp_run", type=str, default=None, help="Path to the dual-target ANP run directory (optional)")
-    p.add_argument("--anp_soc_run", type=str, default=None, help="Path to the SoC-only ANP run directory (optional)")
-    p.add_argument("--anp_cycle_run", type=str, default=None, help="Path to the Cycle-only ANP run directory (optional)")
-    p.add_argument("--data_dir", type=str, default="../csic_real_synth_load/prepared_data")
-    p.add_argument("--out_dir",  type=str, default="", help="Output directory (default: ./validation/results/)")
-
-    # Evaluation window
+    p.add_argument("--mlp_run",              type=str, required=True)
+    p.add_argument("--anp_run",              type=str, default=None)
+    p.add_argument("--anp_soc_run",          type=str, default=None)
+    p.add_argument("--anp_cycle_run",        type=str, default=None)
+    p.add_argument("--anp_soc_reduced_run",  type=str, default=None)
+    p.add_argument("--anp_cycle_reduced_run",type=str, default=None)
+    p.add_argument("--data_dir",       type=str, default="../csic_real_synth_load/prepared_data")
+    p.add_argument("--out_dir",        type=str, default="")
     p.add_argument("--ctx_cycles",     type=int, default=60)
     p.add_argument("--tgt_cycles",     type=int, default=60)
     p.add_argument("--meas_per_cycle", type=int, default=30)
-
-    # Task split (must match the training run)
-    p.add_argument("--train_ids", type=int, nargs="+", default=list(range(17)))
-    p.add_argument("--val_ids",   type=int, nargs="+", default=list(range(17, 22)))
-    p.add_argument("--test_ids",  type=int, nargs="+", default=list(range(22, 25)))
-
-    p.add_argument("--anp_soc_reduced_run",   type=str, default=None, help="Path to SoC-only ANP run trained with reduced features")
-    p.add_argument("--anp_cycle_reduced_run", type=str, default=None, help="Path to Cycle-only ANP run trained with reduced features")
-
+    p.add_argument("--train_ids",      type=int, nargs="+", default=list(range(17)))
+    p.add_argument("--val_ids",        type=int, nargs="+", default=list(range(17, 22)))
+    p.add_argument("--test_ids",       type=int, nargs="+", default=list(range(22, 25)))
     return p.parse_args()
 
 
 def main() -> None:
     args    = parse_args()
-    out_dir = Path(args.out_dir) if args.out_dir else (
-        Path(__file__).resolve().parent / "results")
-
+    out_dir = (Path(args.out_dir) if args.out_dir
+               else Path(__file__).resolve().parent / "results")
     run(
-        mlp_run_dir       = Path(args.mlp_run),
-        anp_run_dir       = Path(args.anp_run)       if args.anp_run       else None,
-        anp_soc_run_dir   = Path(args.anp_soc_run)   if args.anp_soc_run   else None,
-        anp_cycle_run_dir = Path(args.anp_cycle_run) if args.anp_cycle_run else None,
+        mlp_run_dir               = Path(args.mlp_run),
+        anp_run_dir               = Path(args.anp_run)               if args.anp_run               else None,
+        anp_soc_run_dir           = Path(args.anp_soc_run)           if args.anp_soc_run           else None,
+        anp_cycle_run_dir         = Path(args.anp_cycle_run)         if args.anp_cycle_run         else None,
         anp_soc_reduced_run_dir   = Path(args.anp_soc_reduced_run)   if args.anp_soc_reduced_run   else None,
         anp_cycle_reduced_run_dir = Path(args.anp_cycle_reduced_run) if args.anp_cycle_reduced_run else None,
-        data_dir          = args.data_dir,
-        out_dir           = out_dir,
-        train_task_ids    = args.train_ids,
-        val_task_ids      = args.val_ids,
-        test_task_ids     = args.test_ids,
-        ctx_cycles        = args.ctx_cycles,
-        tgt_cycles        = args.tgt_cycles,
-        meas_per_cycle    = args.meas_per_cycle,
+        data_dir        = args.data_dir,
+        out_dir         = out_dir,
+        train_task_ids  = args.train_ids,
+        val_task_ids    = args.val_ids,
+        test_task_ids   = args.test_ids,
+        ctx_cycles      = args.ctx_cycles,
+        tgt_cycles      = args.tgt_cycles,
+        meas_per_cycle  = args.meas_per_cycle,
     )
+
 
 if __name__ == "__main__":
     main()
