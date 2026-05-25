@@ -97,7 +97,7 @@ MEAS_PER_CYCLE  = 30
 TRAIN_CTX_CYC   = 60
 CONTEXT_SIZES   = [2, 5, 10, 20, 30, 40, 50, 60]
 HORIZON_STEP    = 60   # report MAE every N cycles in Test 2
-DPI             = 150
+DPI             = 300
 
 C_MAIN  = "#1C7293"
 C_VAL   = "#C0392B"
