@@ -1,19 +1,19 @@
 pred_task,ctx_task,matched,target,mae
-test_01,test_01,True,SoC (%),1.5724527385098885
-test_01,test_01,True,Cycle,57.44779389479238
-test_01,test_02,False,SoC (%),3.132799162054991
-test_01,test_02,False,Cycle,84.42814859802125
-test_01,test_03,False,SoC (%),1.6153946808168909
-test_01,test_03,False,Cycle,57.57974412009089
-test_02,test_01,False,SoC (%),2.242107754319443
-test_02,test_01,False,Cycle,64.85959436880736
-test_02,test_02,True,SoC (%),2.0307993306662486
-test_02,test_02,True,Cycle,113.76805562607252
-test_02,test_03,False,SoC (%),1.5283994367085867
-test_02,test_03,False,Cycle,66.90876259659271
-test_03,test_01,False,SoC (%),3.0712410314687633
-test_03,test_01,False,Cycle,76.9253042794328
-test_03,test_02,False,SoC (%),3.2053220651466208
-test_03,test_02,False,Cycle,107.0615298646533
-test_03,test_03,True,SoC (%),2.2228129048839054
-test_03,test_03,True,Cycle,71.56236489651243
+test_01,test_01,True,SoC (%),1.4491485051892605
+test_01,test_01,True,Cycle,56.14295393816065
+test_01,test_02,False,SoC (%),3.3043161414700353
+test_01,test_02,False,Cycle,89.98905821324686
+test_01,test_03,False,SoC (%),1.7609918279227827
+test_01,test_03,False,Cycle,56.28208026115521
+test_02,test_01,False,SoC (%),2.1758681244137863
+test_02,test_01,False,Cycle,65.02673348955082
+test_02,test_02,True,SoC (%),4.158409726204058
+test_02,test_02,True,Cycle,109.62630121104372
+test_02,test_03,False,SoC (%),1.6767754862123323
+test_02,test_03,False,Cycle,67.13749256847164
+test_03,test_01,False,SoC (%),2.97826666699307
+test_03,test_01,False,Cycle,73.97781376587447
+test_03,test_02,False,SoC (%),2.829398586135098
+test_03,test_02,False,Cycle,111.63545407962059
+test_03,test_03,True,SoC (%),2.278013842054478
+test_03,test_03,True,Cycle,71.61537370593236

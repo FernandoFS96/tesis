@@ -1,10 +1,10 @@
 pred_task,ctx_task,matched,target,mae
-test_01,test_01,True,SoC (%),2.78220386756942
-test_01,test_02,False,SoC (%),2.8158566269429515
-test_01,test_03,False,SoC (%),2.7241023031970153
-test_02,test_01,False,SoC (%),3.474409614553221
-test_02,test_02,True,SoC (%),3.8826741819546564
-test_02,test_03,False,SoC (%),3.574253040481004
-test_03,test_01,False,SoC (%),6.313755262053568
-test_03,test_02,False,SoC (%),6.137614549764874
-test_03,test_03,True,SoC (%),4.366915153360483
+test_01,test_01,True,SoC (%),3.3878772579125047
+test_01,test_02,False,SoC (%),2.4330290098534837
+test_01,test_03,False,SoC (%),2.503878709486034
+test_02,test_01,False,SoC (%),4.887399515963065
+test_02,test_02,True,SoC (%),3.959218269319102
+test_02,test_03,False,SoC (%),4.030619562079767
+test_03,test_01,False,SoC (%),5.575076226275218
+test_03,test_02,False,SoC (%),4.859886842139383
+test_03,test_03,True,SoC (%),5.657524369049104

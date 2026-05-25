@@ -35,7 +35,7 @@ Usage:
     python test_physical_coherence.py \
         --data_dir            ../csic_real_synth_load/prepared_data \
         --mlp_run             ../train/runs_mlp/20260511_121741 \
-        --anp_soc_reduced_run   ../train/optuna_results/anp_soc_reduced/trial_031 \
+        --anp_soc_reduced_run   ../train/optuna_results/anp_soc_reduced/trial_163 \
         --anp_cycle_reduced_run ../train/runs/anp_Cycle_reduced_agg_enriched/20260521_124941 \
         --plot_clean \
         --anp_cycle_run       ../train/runs/anp_Cycle/20260512_114703 \
