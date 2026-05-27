@@ -1,3 +1,0 @@
-Removed sensors (most critical from E3b/ANP (basic)): [6, 5, 1]
-Active sensors: [0, 2, 3, 4, 7, 8, 9]
-k_removed: 3
