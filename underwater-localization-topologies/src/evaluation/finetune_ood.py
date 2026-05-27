@@ -185,6 +185,7 @@ PLOT_TEXT_SIZE       = 18
 PLOT_TITLE_SIZE      = 20
 # If False, plot titles will be omitted
 PLOT_SHOW_TITLES     = False
+DPI                  = 300
 
 # =============================================================================
 # Data utilities
@@ -735,7 +736,7 @@ def plot_mae_vs_ntraj(
         ax.set_ylim(bottom=0)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
-    fig.savefig(save_path, dpi=160)
+    fig.savefig(save_path, dpi=DPI)
     plt.close(fig)
     print(f"  [plot] {save_path}")
 
@@ -798,7 +799,7 @@ def plot_gap_closed(
     ax.tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
-    fig.savefig(save_path, dpi=160)
+    fig.savefig(save_path, dpi=DPI)
     plt.close(fig)
     print(f"  [plot] {save_path}")
 
@@ -832,7 +833,7 @@ def plot_time_vs_ntraj(
     ax.tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
-    fig.savefig(save_path, dpi=160)
+    fig.savefig(save_path, dpi=DPI)
     plt.close(fig)
     print(f"  [plot] {save_path}")
 
@@ -880,7 +881,7 @@ def plot_pareto(
     ax.tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
-    fig.savefig(save_path, dpi=160)
+    fig.savefig(save_path, dpi=DPI)
     plt.close(fig)
     print(f"  [plot] {save_path}")
 
@@ -928,7 +929,7 @@ def plot_context_sweep(
     ax.set_ylim(bottom=0)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
-    fig.savefig(save_path, dpi=160)
+    fig.savefig(save_path, dpi=DPI)
     plt.close(fig)
     print(f"  [plot] {save_path}")
 
@@ -988,7 +989,7 @@ def plot_finetune_curves(
         fig.suptitle("Fine-tuning curves — val MAE over epochs", fontsize=PLOT_TITLE_SIZE)
     fig.tight_layout(rect=[0, 0, 0.82, 1])
     save_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(save_path, dpi=160)
+    fig.savefig(save_path, dpi=DPI)
     plt.close(fig)
     print(f"  [plot] {save_path}")
 
@@ -1043,7 +1044,7 @@ def plot_summary_heatmap(
     ax.tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
     fig.tight_layout()
     save_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(save_path, dpi=160)
+    fig.savefig(save_path, dpi=DPI)
     plt.close(fig)
     print(f"  [plot] {save_path}")
 
