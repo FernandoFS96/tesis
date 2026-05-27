@@ -130,6 +130,7 @@ PLOT_LEGEND_SIZE     = 13
 PLOT_TEXT_SIZE       = 18
 PLOT_TITLE_SIZE      = 20
 PLOT_SHOW_TITLES     = False
+DPI                  = 300
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Data utilities
@@ -520,7 +521,7 @@ def run_e1_oracle(models, test_data, y_mean, y_std, x_means_SP,
     axes[1].tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
 
     plt.tight_layout()
-    fig.savefig(out_dir / "e1_oracle_ctx_sweep.png", dpi=150)
+    fig.savefig(out_dir / "e1_oracle_ctx_sweep.png", dpi=DPI)
     plt.close(fig)
 
     print(f"  E1 done → {out_dir}")
@@ -606,7 +607,7 @@ def run_e2_random_dropout(models, test_data, y_mean, y_std, x_means_SP,
     ax.legend(fontsize=PLOT_LEGEND_SIZE); ax.grid(True, alpha=0.3)
     ax.tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
     plt.tight_layout()
-    fig.savefig(out_dir / "e2_random_dropout_mae.png", dpi=150)
+    fig.savefig(out_dir / "e2_random_dropout_mae.png", dpi=DPI)
     plt.close(fig)
 
     # ── Predicted uncertainty vs k_active ─────────────────────────────────────
@@ -623,7 +624,7 @@ def run_e2_random_dropout(models, test_data, y_mean, y_std, x_means_SP,
     ax.legend(fontsize=PLOT_LEGEND_SIZE); ax.grid(True, alpha=0.3)
     ax.tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
     plt.tight_layout()
-    fig.savefig(out_dir / "e2_random_dropout_uncertainty.png", dpi=150)
+    fig.savefig(out_dir / "e2_random_dropout_uncertainty.png", dpi=DPI)
     plt.close(fig)
 
     print(f"  E2 done → {out_dir}")
@@ -742,7 +743,7 @@ def run_e3_sensor_importance(models, test_data, y_mean, y_std, x_means_SP,
     if n_runs > 1:
         fig.suptitle(f"n_runs={n_runs}", fontsize=9, y=1.01)
     plt.tight_layout()
-    fig.savefig(out_dir / "e3_sensor_importance.png", dpi=150)
+    fig.savefig(out_dir / "e3_sensor_importance.png", dpi=DPI)
     plt.close(fig)
 
     # Build ranking from E3b
@@ -954,7 +955,7 @@ def run_e4_spatial_dropout(models, test_data, y_mean, y_std, x_means_SP, topolog
         ax.legend(fontsize=12); ax.grid(True, alpha=0.3)
         ax.tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
         plt.tight_layout()
-        fig.savefig(out_dir / f"e4_{mode_name}_mae.png", dpi=150)
+        fig.savefig(out_dir / f"e4_{mode_name}_mae.png", dpi=DPI)
         plt.close(fig)
 
     print(f"  E4 done → {out_dir}")
@@ -1214,7 +1215,7 @@ def run_e5_finetune(models, train_data, val_data, test_data,
             if labels2:
                 ax2.legend(loc="center right", fontsize=PLOT_LEGEND_SIZE)
             plt.tight_layout()
-            fig.savefig(curve_dir / "finetune_curve.png", dpi=150)
+            fig.savefig(curve_dir / "finetune_curve.png", dpi=DPI)
             plt.close(fig)
 
     _save_csv(rows, out_dir / "e5_finetune_summary.csv")
@@ -1261,13 +1262,14 @@ def run_e5_finetune(models, train_data, val_data, test_data,
                 y_min_vals.extend(m_arr.tolist())
         if y_min_vals:
             min_val = min(y_min_vals)
-            margin = max(0.05 * (max(y_min_vals) - min_val), 0.1) if len(y_min_vals) > 1 else 0.1
+            spread = max(y_min_vals) - min_val
+            margin = max(0.08 * spread, 0.15) if len(y_min_vals) > 1 else 0.15
             y_bottom = max(0.0, min_val - margin)
             ax.set_ylim(bottom=y_bottom)
     except Exception:
         pass
     plt.tight_layout()
-    fig.savefig(out_dir / "e5_mae_vs_ntraj.png", dpi=150)
+    fig.savefig(out_dir / "e5_mae_vs_ntraj.png", dpi=DPI)
     plt.close(fig)
 
     print(f"  E5 done → {out_dir}")
@@ -1307,7 +1309,7 @@ def plot_cross_topology_summary(all_topology_results: Dict, out_dir: Path):
         ax.legend(fontsize=PLOT_LEGEND_SIZE); ax.grid(True, alpha=0.3)
         ax.tick_params(axis="both", labelsize=PLOT_TICK_LABEL_SIZE)
         plt.tight_layout()
-        fig.savefig(out_dir / f"cross_topology_e2_{model_name}.png", dpi=150)
+        fig.savefig(out_dir / f"cross_topology_e2_{model_name}.png", dpi=DPI)
         plt.close(fig)
 
     print(f"  Cross-topology summary → {out_dir}")
