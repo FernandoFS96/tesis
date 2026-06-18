@@ -47,6 +47,8 @@ class channel():
         else:
             print(f'\nLoading channel params: non default used (topology: {topology})')
         
+        assert self.params is not None, "params must be initialized"
+        
         if load:
             try:
                 print(f'Loading channel matrix for topology: {topology}')
@@ -63,6 +65,9 @@ class channel():
             print(f'Obtaining channel matrix for topology: {topology}')
             self.h = self.obtain_h().astype(np.complex64)
             self.save_channel_info(name)
+        
+        assert self.h is not None, "Channel matrix (h) must be initialized"
+        assert self.traj is not None, "Trajectories (traj) must be initialized"
 
     def save_channel_info(self, name):
         base_dir = 'data'
@@ -71,6 +76,9 @@ class channel():
         os.makedirs(info_dir, exist_ok=True)
 
         # Save channel data for this topology
+        assert self.h is not None, "Channel matrix (h) is None"
+        assert self.traj is not None, "Trajectories (traj) is None"
+        assert self.r_posicion is not None, "Sensor positions (r_posicion) is None"
         np.save(f'{info_dir}/channel_h_{name}.npy', self.h)
         np.save(f'{info_dir}/trajs_{name}.npy', self.traj)
         np.save(f'{info_dir}/sensor_positions_{name}.npy', self.r_posicion)
@@ -118,7 +126,7 @@ class channel():
                        'n_sensors': 10,  # Number of sensors
                        'radius_r': 1000,  # To obtain sensor position
                        'n_traj': 150,  # Number of trajectories
-                       'ppt': 50,  # Number of points per trajectory
+                       'ppt': 30, #50 # Number of points per trajectory
                        'm': 0.7,  # Modulation index
                        'T': 20,  # Sampling period
                        }
@@ -142,6 +150,7 @@ class channel():
         --------
         r_posicion : np.ndarray de forma (3, n_sensors)
         """
+        assert self.params is not None, "params must be initialized"
 
         n_sensors = self.params['n_sensors']
         hr0 = self.params['ci']['hr0']
@@ -208,6 +217,7 @@ class channel():
             return self.precomputed_trajectories
         
         # Generate new trajectories
+        assert self.params is not None, "params must be initialized"
         n_traj = self.params['n_traj']
         ppt = self.params['ppt']
         
@@ -230,6 +240,7 @@ class channel():
 
     def obtain_h(self):
         # Generar (o cargar) trayectorias
+        assert self.params is not None, "params must be initialized"
         self.traj = self.generate_trajectories()
     
         # Generar sensores adaptados al tamaño real de las trayectorias
@@ -237,6 +248,7 @@ class channel():
            
         # Process values for each pair (sensor, trajectory)
         def process_sensor(ise):
+            assert self.params is not None, "params must be initialized"
             import scipy.signal as signal
             Lf = len(range_m(self.params['ci']['fmin'], self.params['ci']['fmax'], self.params['ci']['df']))
             h_val = np.zeros([self.params['n_traj'], self.params['ppt'], Lf],
@@ -245,6 +257,8 @@ class channel():
             for itx in tqdm(range(self.params['n_traj']), 
                           desc=f"Sensor {ise+1} processing trajectories ({self.topology})", 
                           leave=False):
+                assert self.traj is not None, "trajectories (traj) must be initialized"
+                assert self.r_posicion is not None, "sensor positions (r_posicion) must be initialized"
                 for ptx in range(self.params['ppt']):
                     # [Rest of the processing code remains the same as original]
                     d0 = np.linalg.norm(self.r_posicion[:, ise] - self.traj[:, itx, ptx])
@@ -352,7 +366,7 @@ class channel():
                                     refl = -1
                                 else:
                                     refl = np.exp(1j * np.pi * (1 - theta / thetac))
-                            if theta >= thetac:
+                            else:
                                 refl = (x1 - x2) / (x1 + x2)
                             return refl
 
@@ -509,6 +523,7 @@ class channel():
 
     def filter(self, n, snr=0, nt=10, multiprocessing=True, specific=None, signal_type='sinusoid', rep=1):
         # [Keep the original filter method unchanged]
+        assert self.params is not None, "params must be initialized"
         print(f'Filtering for topology: {self.topology}...')
         # Obtain trajs
         if specific is None:
@@ -522,6 +537,8 @@ class channel():
         trjs = np.repeat(trjs, rep)
 
         def process_sensor(ise):
+            assert self.params is not None, "params must be initialized"
+            assert self.h is not None, "channel matrix (h) must be initialized"
             h = np.roll(self.h, 50, axis=0)
             s = np.zeros([n, self.params['ppt']])
             x = np.zeros([n, self.params['ppt']])
@@ -565,6 +582,9 @@ class channel():
         else:
             out = [process_sensor(ise) for ise in range(self.params['n_sensors'])]
 
+        assert self.h is not None, "channel matrix (h) must be initialized"
+        assert self.traj is not None, "trajectories (traj) must be initialized"
+        out = list(out)  # Convert generator to list if needed
         y_out = np.zeros([self.h.shape[0], self.h.shape[1], len(trjs), self.h.shape[3]])
         for ise in range(self.params['n_sensors']):
             y_out[:, :, :, ise] = out[ise]
@@ -611,8 +631,10 @@ def generate_params(options=None):
     if isinstance(options, str):
         if options == 'no_var':
             aux = 0.0
+        else:
+            aux = 1.0  # Default for non-'no_var' strings
     else:
-        aux = options
+        aux = options if options is not None else 1.0
     
     channel_info['sig2s'] *= aux
     channel_info['sig2b'] *= aux
@@ -638,7 +660,7 @@ def generate_params(options=None):
               'n_sensors': 10,
               'radius_r': 1000,
               'n_traj': 150,
-              'ppt': 50,
+              'ppt': 30,#50
               'm': 0.7,
               'T': 20,
               }
@@ -822,6 +844,10 @@ def process(channel_options, snr, rep, nop=-1, n_traj_override=None):
         
         channels_for_validation = {}
         
+        # Initialize trjs to avoid unbound variable error
+        trjs = None
+        data = None
+        
         # Process each topology with the same trajectories
         for topology in topologies:
             print(f"\nProcessing topology: {topology}")
@@ -838,7 +864,7 @@ def process(channel_options, snr, rep, nop=-1, n_traj_override=None):
             data, trjs = generate_batch_of_trajs(c, 'sinusoid', n=1024, snr=snr, rep=rep)
             
             # Save the generated data
-            root_dir = 'data_2'
+            root_dir = 'data'
             topology_dir = f'{root_dir}/channel_option_{option}/{topology}'
             
             # Create directories for this topology
@@ -846,6 +872,8 @@ def process(channel_options, snr, rep, nop=-1, n_traj_override=None):
             os.makedirs(f'{topology_dir}/filtered_data', exist_ok=True)
             
             # Save data
+            assert data is not None, "Filtered data is None"
+            assert trjs is not None, "Trajectories are None"
             np.save(f'{topology_dir}/trajectory/trajectories.npy', trjs)
             np.save(f'{topology_dir}/filtered_data/filtered_data.npy', data)
             
@@ -855,6 +883,7 @@ def process(channel_options, snr, rep, nop=-1, n_traj_override=None):
         if option_idx == 0:
             plot_validation(channels_for_validation, option)
         
+        assert trjs is not None, "Trajectories must be set after topology loop"
         stats = save_velocity_histogram(trjs, T_tot=params['ci']['T_tot'], bins=40, option_idx=option)
 
 def parse_float_list(s):
@@ -865,7 +894,7 @@ def parse_float_list(s):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Generar datos de canal (topologías).")
-    parser.add_argument('--channel_options', type=str, default="0.0,0.1,0.2,0.3,0.4,0.5", help="Lista de opciones separadas por coma (ej: '0.0,0.1,0.2').")
+    parser.add_argument('--channel_options', type=str, default="0.0,0.1,0.2,0.3,0.4,0.5,0.6", help="Lista de opciones separadas por coma (ej: '0.0,0.1,0.2').")
 
     parser.add_argument('--n_traj', type=int, default=150, help="Número de trayectorias (sobrescribe params['n_traj']).")
     parser.add_argument('--snr', type=float, default=10, help="SNR para filtrado.")
@@ -876,7 +905,7 @@ if __name__ == '__main__':
     # Parse channel options
     channel_options = parse_float_list(args.channel_options)
     if channel_options is None:
-        channel_options = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
+        channel_options = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
     
     # Set random seed for reproducibility
     np.random.seed(11)
