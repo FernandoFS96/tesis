@@ -10,7 +10,7 @@ from tqdm import tqdm
 Use:
     python data_process_topology.py --mode separate
 
-    python data_process_topology.py --data-dir ./data --mode separate --theta-range 0.0 0.3
+    python data_process_topology.py --data-dir ./data --mode separate --theta-range 0.0 0.6
 '''
 
 # Function to reshape input data
@@ -106,9 +106,9 @@ def detect_variance_group(channel_options):
     theta_values = [float(opt) for opt in channel_options]
     max_theta = max(theta_values)
     
-    if max_theta <= 0.5:
+    if max_theta <= 0.3:
         return 'low_variance'
-    elif min(theta_values) >= 0.6:
+    elif min(theta_values) >= 0.4:
         return 'high_variance'
     else:
         return 'mixed'
