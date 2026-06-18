@@ -276,7 +276,7 @@ class LatentModel(nn.Module):
         context_indices: t.Tensor, # (Nc,)  índices del contexto
         context_y: t.Tensor, # (B, Nc, output_dim)
         target_indices: t.Tensor, # (Nt,)  índices de los targets (normalmente 0..T-1)
-        target_y: t.Tensor = None, # (B, Nt, output_dim) — None en inferencia
+        target_y: t.Tensor = None, # (B, Nt, output_dim) — None en inferencia 
         beta: float = 1.0,
         ):
         # RNN aplicado internamente sobre la secuencia completa
@@ -308,7 +308,7 @@ class LatentModel(nn.Module):
             nll = 0.5 * t.log(2 * t.pi * y_pred_var) + \
                   0.5 * ((target_y - y_pred_mean) ** 2) / y_pred_var
             nll = nll.mean()
-            kl = self.kl_div(prior_mu, prior_var, posterior_mu, posterior_var)
+            kl = self.kl_div(prior_mu, prior_var, posterior_mu, posterior_var) #type: ignore[assignment]
             loss = nll + beta * kl
         else:
             kl = loss = nll = None
@@ -321,3 +321,80 @@ class LatentModel(nn.Module):
              + (prior_var - posterior_var) # (B, latent_dim)
         kl = 0.5 * kl.sum(dim=-1) # (B,)
         return kl.mean() # scalar, stable vs batch size
+
+
+class DeterministicDecoder(nn.Module):
+    """Decoder for RCNP: takes only the deterministic representation r (no latent z)."""
+    def __init__(self, num_hidden, input_dim, output_dim):
+        super(DeterministicDecoder, self).__init__()
+        self.target_projection = Linear(input_dim, num_hidden)
+        self.linears = nn.ModuleList([Linear(num_hidden * 2, num_hidden * 2, w_init='relu') for _ in range(3)])
+        self.mean_projection = Linear(num_hidden * 2, output_dim)
+        self.log_var_projection = Linear(num_hidden * 2, output_dim)
+
+    def forward(self, r, target_x):
+        target_x = self.target_projection(target_x)
+        hidden = t.cat([r, target_x], dim=-1)
+        for linear in self.linears:
+            hidden = t.relu(linear(hidden))
+        mean = self.mean_projection(hidden)
+        var = 1e-3 + F.softplus(self.log_var_projection(hidden))
+        return mean, var
+
+
+class DeterministicModel(nn.Module):
+    """RCNP: RNN temporal encoder + attentive deterministic encoder + decoder, no latent variable."""
+    def __init__(
+        self,
+        num_hidden: int,
+        input_dim: int,
+        output_dim: int,
+        rnn_type: str = "lstm",
+        rnn_layers: int = 1,
+        rnn_dropout: float = 0.0,
+    ):
+        super(DeterministicModel, self).__init__()
+        self.temporal_encoder = TemporalEncoder(
+            input_dim=input_dim,
+            hidden_dim=num_hidden,
+            num_layers=rnn_layers,
+            dropout=rnn_dropout,
+            rnn_type=rnn_type,
+            layer_norm=True,
+        )
+        self.deterministic_encoder = DeterministicEncoder(
+            num_hidden, num_latent=num_hidden,
+            input_dim=num_hidden,
+            output_dim=output_dim,
+        )
+        self.decoder = DeterministicDecoder(
+            num_hidden,
+            input_dim=num_hidden,
+            output_dim=output_dim,
+        )
+
+    def forward(
+        self,
+        x_seq: t.Tensor,
+        context_indices: t.Tensor,
+        context_y: t.Tensor,
+        target_indices: t.Tensor,
+        target_y: t.Tensor = None, #type: ignore[assignment]
+        beta: float = 1.0,
+    ):
+        h_seq = self.temporal_encoder(x_seq)
+        context_x = h_seq[:, context_indices, :]
+        target_x  = h_seq[:, target_indices,  :]
+
+        r = self.deterministic_encoder(context_x, context_y, target_x)
+        y_pred_mean, y_pred_var = self.decoder(r, target_x)
+
+        if target_y is not None:
+            nll = 0.5 * t.log(2 * t.pi * y_pred_var) + \
+                  0.5 * ((target_y - y_pred_mean) ** 2) / y_pred_var
+            nll = nll.mean()
+            loss = nll
+        else:
+            nll = None
+            loss = None
+        return y_pred_mean, y_pred_var, loss, None, nll  # kl always None
