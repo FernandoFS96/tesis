@@ -88,7 +88,7 @@ python train_r-anp_topologies_masked.py \
 import csv
 import sys
 import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 import time
 import pickle
 import argparse
@@ -99,7 +99,7 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 
-from src.models.r_anp import LatentModel
+from src.models.r_anp import LatentModel, DeterministicModel
 from src.utils.nav_dataset import NavigationTrajectoryDataset
 from src.utils.plots import plot_training_metrics
 
@@ -432,6 +432,7 @@ def train_ranp_topology_masked(
     rnn_layers: int = 1,
     rnn_dropout: float = 0.0,
     dry_run: bool = False,
+    use_latent: bool = True,
     es_weight_fixed: float = 0.3,
     es_weight_inverse: float = 0.7,
     holdout_frac: float = 0.2,
@@ -443,7 +444,8 @@ def train_ranp_topology_masked(
 ):
     os.makedirs(save_dir, exist_ok=True)
 
-    print(f"\nTraining MASKED RANP for topology: {topology_name}")
+    model_type = "RANP" if use_latent else "RCNP"
+    print(f"\nTraining MASKED {model_type} for topology: {topology_name}")
     print(f"  Training set size: {len(train_data)} trajectories")
     print(f"  Validation set size: {len(val_data)} trajectories")
     print(f"  X shape: {train_data[0][0].shape}, Y shape: {train_data[0][1].shape}")
@@ -474,10 +476,10 @@ def train_ranp_topology_masked(
     x_means_SP = torch.tensor(x_means_np, dtype=torch.float32, device=device)
 
     # model
-    # Instanciación del modelo: LatentModel encapsula todo. input_dim es la dimensión ANTES del RNN.
-    model = LatentModel(
+    model_cls = LatentModel if use_latent else DeterministicModel
+    model = model_cls(
         num_hidden=num_hidden,
-        input_dim=input_dim_new, # dimensión de x_aug (Dx+S), no rnn_hidden_dim
+        input_dim=input_dim_new,
         output_dim=output_dim,
         rnn_type=rnn_type,
         rnn_layers=rnn_layers,
@@ -533,7 +535,7 @@ def train_ranp_topology_masked(
     VAL_ES_FRAC = 0.4
 
     t_init = time.time()
-    pbar = tqdm(range(epochs), desc=f"[RANP-MASKED-{topology_name}]", unit="epoch", ncols=200)
+    pbar = tqdm(range(epochs), desc=f"[{model_type}-MASKED-{topology_name}]", unit="epoch", ncols=200)
 
     for epoch in pbar:
         # -------------------
@@ -616,7 +618,7 @@ def train_ranp_topology_masked(
                 train_var_mean += y_pred_var_norm.mean().item()
                 train_var_max  += y_pred_var_norm.max().item()
                 train_nll += nll.item()
-                train_kl  += kl.item()
+                train_kl  += kl.item() if kl is not None else 0.0
 
                 # target_indices already excludes context → all outputs are post-context
                 nll_pointwise = 0.5 * torch.log(2 * torch.pi * y_pred_var_norm) \
@@ -735,7 +737,7 @@ def train_ranp_topology_masked(
                     val_mae_per_frac[frac] += mae
 
                     val_nll += nll.item()
-                    val_kl  += kl.item()
+                    val_kl  += kl.item() if kl is not None else 0.0
                     val_var_min  += y_pred_var_norm.min().item()
                     val_var_mean += y_pred_var_norm.mean().item()
                     val_var_max  += y_pred_var_norm.max().item()
@@ -1123,6 +1125,7 @@ def main():
     parser.add_argument("--rnn-layers", type=int, default=1, help="Number of layers in the RNN encoder")
     parser.add_argument("--rnn-dropout", type=float, default=0.0, help="Dropout probability for the RNN encoder")
     parser.add_argument("--dry-run", action="store_true", help="Perform a dry run without saving results")
+    parser.add_argument("--no-latent", action="store_true", help="Train a RCNP (deterministic only, no latent variable / KL term)")
 
     # validation and early stopping params
     parser.add_argument("--holdout-frac", type=float, default=0.2, help="Fraction of data to use for holdout validation")
@@ -1145,8 +1148,9 @@ def main():
     else:
         var_tag = "varunknown"
 
+    model_tag = "rcnp" if args.no_latent else "ranp"
     run_name = (
-        f"ranp_drop{args.sensor_drop_mode}_p{args.sensor_drop_p}"
+        f"{model_tag}_drop{args.sensor_drop_mode}_p{args.sensor_drop_p}"
         f"_{args.mask_fill}_{args.ctx_sample_mode}"
         f"_rnn-{args.rnn_type}_h{args.rnn_hidden_dim}_l{args.rnn_layers}"
     )
@@ -1191,6 +1195,7 @@ def main():
             rnn_layers=args.rnn_layers,
             rnn_dropout=args.rnn_dropout,
             dry_run=args.dry_run,
+            use_latent=not args.no_latent,
             holdout_frac=args.holdout_frac,
             es_context_frac=args.es_context_frac,
             es_weight_fixed=args.es_weight_fixed,

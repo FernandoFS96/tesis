@@ -11,7 +11,7 @@ class Linear(nn.Module):
 
         nn.init.xavier_uniform_(
             self.linear_layer.weight,
-            gain=nn.init.calculate_gain(w_init))
+            gain=nn.init.calculate_gain(w_init))  # type: ignore[arg-type]
 
     def forward(self, x):
         return self.linear_layer(x)
@@ -188,7 +188,7 @@ class LatentModel(nn.Module):
         if target_y is not None:
             nll = 0.5 * t.log(2 * t.pi * y_pred_var) + 0.5 * ((target_y - y_pred_mean) ** 2) / y_pred_var
             nll = nll.mean()
-            kl = self.kl_div(prior_mu, prior_var, posterior_mu, posterior_var)
+            kl = self.kl_div(prior_mu, prior_var, posterior_mu, posterior_var) #type: ignore[assignment]
             loss = nll + beta * kl
         else:
             kl = None
@@ -202,3 +202,48 @@ class LatentModel(nn.Module):
              + (prior_var - posterior_var) # (B, latent_dim)
         kl = 0.5 * kl.sum(dim=-1) # (B,)
         return kl.mean() # scalar, stable vs batch size
+
+
+class DeterministicDecoder(nn.Module):
+    """Decoder for CNP: takes only the deterministic representation r (no latent z)."""
+    def __init__(self, num_hidden, input_dim, output_dim):
+        super(DeterministicDecoder, self).__init__()
+        self.target_projection = Linear(input_dim, num_hidden)
+        self.linears = nn.ModuleList([Linear(num_hidden * 2, num_hidden * 2, w_init='relu') for _ in range(3)])
+        self.mean_projection = Linear(num_hidden * 2, output_dim)
+        self.log_var_projection = Linear(num_hidden * 2, output_dim)
+
+    def forward(self, r, target_x):
+        target_x = self.target_projection(target_x)
+        hidden = t.cat([r, target_x], dim=-1)
+        for linear in self.linears:
+            hidden = t.relu(linear(hidden))
+        mean = self.mean_projection(hidden)
+        var = 1e-3 + F.softplus(self.log_var_projection(hidden))
+        return mean, var
+
+
+class DeterministicModel(nn.Module):
+    """CNP: attentive deterministic encoder + decoder, no latent variable."""
+    def __init__(self, num_hidden, input_dim, output_dim):
+        super(DeterministicModel, self).__init__()
+        self.deterministic_encoder = DeterministicEncoder(num_hidden,
+                                                          num_latent=num_hidden,
+                                                          input_dim=input_dim,
+                                                          output_dim=output_dim)
+        self.decoder = DeterministicDecoder(num_hidden,
+                                            input_dim=input_dim,
+                                            output_dim=output_dim)
+
+    def forward(self, context_x, context_y, target_x, target_y=None, beta: float = 1.0):
+        r = self.deterministic_encoder(context_x, context_y, target_x)
+        y_pred_mean, y_pred_var = self.decoder(r, target_x)
+
+        if target_y is not None:
+            nll = 0.5 * t.log(2 * t.pi * y_pred_var) + 0.5 * ((target_y - y_pred_mean) ** 2) / y_pred_var
+            nll = nll.mean()
+            loss = nll
+        else:
+            nll = None
+            loss = None
+        return y_pred_mean, y_pred_var, loss, None, nll  # kl always None

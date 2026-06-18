@@ -5,11 +5,11 @@ This script trains ANP models with sensor masking for each topology and logs det
 
 Usage:
 Using bernoulli dropout with 20% drop probability and filling masked sensors with training mean:
-    cd /home/fernando/tesis/underwater-localization-topologies/src/training
+    cd /home/fer/tesis/underwater-localization-topologies/src/training
 
     python train_anp_topologies_masked.py \
-        --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-        --save-dir /home/fernando/tesis/underwater-localization-topologies/results/ANP_topologies_no_masked \
+        --data-dir /home/fer/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
+        --save-dir /home/fer/tesis/underwater-localization-topologies/results/ANP_topologies_no_masked \
         --topologies random,ellipsoidal,aligned \
         --batch-size 16 \
         --epochs 5000 \
@@ -27,13 +27,14 @@ Using bernoulli dropout with 20% drop probability and filling masked sensors wit
         --es-context-frac 0.4 \
         --robust-context-fracs 0.2,0.4,0.6,0.8 \
         --robust-eval-every 5 \
-        --robust-alpha 0.8
+        --robust-alpha 0.8 \
+        --no-latent
     
 Using bernoulli dropout with 20% drop probability and filling masked sensors with training mean but for high variance data:
     cd underwater-localization-topologies/src/training
     python train_anp_topologies_masked.py \
-      --data-dir /home/fernando/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
-      --save-dir /home/fernando/tesis/underwater-localization-topologies/results/ANP_topologies_masked \
+      --data-dir /home/fer/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
+      --save-dir /home/fer/tesis/underwater-localization-topologies/results/ANP_topologies_masked \
       --topologies aligned,ellipsoidal,random \
       --batch-size 8 \
       --epochs 5000 \
@@ -57,7 +58,7 @@ Using bernoulli dropout with 20% drop probability and filling masked sensors wit
 import csv
 import sys
 import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 import time
 import pickle
 import argparse
@@ -68,7 +69,7 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 
-from src.models.anp import LatentModel
+from src.models.anp import LatentModel, DeterministicModel
 from src.utils.nav_dataset import NavigationTrajectoryDataset
 from src.utils.plots import plot_training_metrics
 
@@ -139,7 +140,7 @@ def build_holdout_indices(total_points, holdout_frac, context_frac, protocol, de
 # Masking / dropout
 # ---------------------------
 
-def sample_sensor_mask(B: int, S: int, mode: str, p_drop: float, device: torch.device):
+def sample_sensor_mask(B: int, S: int, mode: str, p_drop: float, device: "str | torch.device"):
     """
     Returns float mask (B,S) in {0,1}, where 1=available.
     Ensures at least one sensor available per sample.
@@ -149,7 +150,7 @@ def sample_sensor_mask(B: int, S: int, mode: str, p_drop: float, device: torch.d
     elif mode == "k_uniform":
         keep = torch.zeros(B, S, dtype=torch.bool, device=device)
         for b in range(B):
-            k = torch.randint(1, S + 1, (1,), device=device).item()
+            k = int(torch.randint(1, S + 1, (1,), device=device).item())
             idx = torch.randperm(S, device=device)[:k]
             keep[b, idx] = True
     else:
@@ -158,7 +159,7 @@ def sample_sensor_mask(B: int, S: int, mode: str, p_drop: float, device: torch.d
     # ensure at least one sensor on
     all_off = ~keep.any(dim=1)
     if all_off.any():
-        idx = torch.randint(0, S, (all_off.sum().item(),), device=device)
+        idx = torch.randint(0, S, (int(all_off.sum().item()),), device=device)
         keep[all_off, idx] = True
 
     return keep.float()
@@ -404,10 +405,12 @@ def train_anp_topology_masked(
     robust_context_fracs=None,
     robust_eval_every: int = 1,
     robust_alpha: float = 0.8,
+    use_latent: bool = True,
 ):
     os.makedirs(save_dir, exist_ok=True)
 
-    print(f"\nTraining MASKED ANP for topology: {topology_name}")
+    model_type = "ANP" if use_latent else "CNP"
+    print(f"\nTraining MASKED {model_type} for topology: {topology_name}")
     print(f"  Training set size: {len(train_data)} trajectories")
     print(f"  Validation set size: {len(val_data)} trajectories")
     print(f"  X shape: {train_data[0][0].shape}, Y shape: {train_data[0][1].shape}")
@@ -437,7 +440,10 @@ def train_anp_topology_masked(
     x_means_SP = torch.tensor(x_means_np, dtype=torch.float32, device=device)
 
     # model
-    model = LatentModel(num_hidden=num_hidden, input_dim=input_dim_new, output_dim=output_dim).to(device)
+    if use_latent:
+        model = LatentModel(num_hidden=num_hidden, input_dim=input_dim_new, output_dim=output_dim).to(device)
+    else:
+        model = DeterministicModel(num_hidden=num_hidden, input_dim=input_dim_new, output_dim=output_dim).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
     # logs
@@ -486,8 +492,9 @@ def train_anp_topology_masked(
     VAL_ES_FRAC = 0.4
 
     t_init = time.time()
-    pbar = tqdm(range(epochs), desc=f"[ANP-MASKED-{topology_name}]", unit="epoch", ncols=200)
+    pbar = tqdm(range(epochs), desc=f"[{model_type}-MASKED-{topology_name}]", unit="epoch", ncols=200)
 
+    epoch = -1
     for epoch in pbar:
         # -------------------
         # Train
@@ -499,11 +506,11 @@ def train_anp_topology_masked(
         train_nll_nonctx = 0.0
         train_k_active = 0.0  # avg active sensors (debug)
 
+        beta = kl_beta(epoch, warmup_epochs=kl_warmup_epochs)
+
         for x_batch, y_batch in train_loader:
             x_batch = x_batch.to(device)
             y_batch = y_batch.to(device)
-
-            beta = kl_beta(epoch, warmup_epochs=kl_warmup_epochs)
 
             B = x_batch.size(0)
             T = x_batch.size(1)
@@ -523,7 +530,7 @@ def train_anp_topology_masked(
             total_points = T
             min_context = max(1, int(0.1 * total_points))
             max_context = min(int(0.9 * total_points), total_points - 1)
-            context_size = torch.randint(min_context, max_context + 1, (1,), device=device).item() \
+            context_size = int(torch.randint(min_context, max_context + 1, (1,), device=device).item()) \
                 if max_context > min_context else min_context
 
             context_indices = sample_context_indices(
@@ -556,7 +563,7 @@ def train_anp_topology_masked(
                 train_var_mean += y_pred_var_norm.mean().item()
                 train_var_max  += y_pred_var_norm.max().item()
                 train_nll += nll.item()
-                train_kl  += kl.item()
+                train_kl  += kl.item() if kl is not None else 0.0
 
                 # target_indices already excludes context → all outputs are post-context
                 nll_pointwise = 0.5 * torch.log(2 * torch.pi * y_pred_var_norm) \
@@ -615,7 +622,7 @@ def train_anp_topology_masked(
         val_var_min, val_var_mean, val_var_max = 0.0, 0.0, 0.0
         val_nll_nonctx = 0.0
         do_robust_eval = len(robust_context_fracs) > 0 and (epoch % robust_eval_every == 0)
-        robust_mae_sums = {f: 0.0 for f in robust_context_fracs} if do_robust_eval else None
+        robust_mae_sums = {f: 0.0 for f in robust_context_fracs} if do_robust_eval else {}
 
         with torch.no_grad():
             for x_batch, y_batch in val_loader:
@@ -669,7 +676,7 @@ def train_anp_topology_masked(
                     val_mae_per_frac[frac] += mae
 
                     val_nll += nll.item()
-                    val_kl  += kl.item()
+                    val_kl  += kl.item() if kl is not None else 0.0
                     val_var_min  += y_pred_var_norm.min().item()
                     val_var_mean += y_pred_var_norm.mean().item()
                     val_var_max  += y_pred_var_norm.max().item()
@@ -1030,6 +1037,7 @@ def main():
     parser.add_argument("--robust-context-fracs", type=str, default="0.2,0.4,0.6,0.8", help="Comma-separated context fractions for robust inverse-holdout monitoring")
     parser.add_argument("--robust-eval-every", type=int, default=1, help="Run robust multi-context validation every N epochs")
     parser.add_argument("--robust-alpha", type=float, default=0.8, help="Blend factor for robust score: alpha*primary + (1-alpha)*robust_mean")
+    parser.add_argument("--no-latent", action="store_true", help="Train a CNP (deterministic only, no latent variable / KL term)")
 
     args = parser.parse_args()
 
@@ -1042,7 +1050,8 @@ def main():
     else:
         variance_tag = "varunknown"
 
-    run_name = f"masked_drop{args.sensor_drop_mode}_p{args.sensor_drop_p}_{args.mask_fill}_{args.ctx_sample_mode}"
+    model_tag = "cnp" if args.no_latent else "anp"
+    run_name = f"{model_tag}_masked_drop{args.sensor_drop_mode}_p{args.sensor_drop_p}_{args.mask_fill}_{args.ctx_sample_mode}"
 
     if args.save_dir is None:
         base = os.path.join(os.getcwd(), "results", "ANP_topologies_masked", variance_tag, run_name)
@@ -1087,6 +1096,7 @@ def main():
             robust_context_fracs=robust_context_fracs,
             robust_eval_every=args.robust_eval_every,
             robust_alpha=args.robust_alpha,
+            use_latent=not args.no_latent,
         )
         results[topo] = best_metrics
 
