@@ -9,7 +9,7 @@ import argparse
 '''
 Use:
     python data_generator_topology.py \
-        --n_traj 10 \
+        --n_traj 150 \
         --snr 10 \
         --rep 1
 

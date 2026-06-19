@@ -3,13 +3,11 @@ Docstring for src.training.train_anp_topologies_masked
 
 This script trains ANP models with sensor masking for each topology and logs detailed diagnostics.
 
-Usage:
-Using bernoulli dropout with 20% drop probability and filling masked sensors with training mean:
-    cd /home/fer/tesis/underwater-localization-topologies/src/training
+Usage (run from any directory — paths are relative to the repo root by default):
+Using bernoulli dropout with no sensor drop, filling masked sensors with training mean:
+    cd underwater-localization-topologies/src/training
 
     python train_anp_topologies_masked.py \
-        --data-dir /home/fer/tesis/underwater-localization-topologies/data/data/data_processed_topologies_low_variance \
-        --save-dir /home/fer/tesis/underwater-localization-topologies/results/ANP_topologies_no_masked \
         --topologies random,ellipsoidal,aligned \
         --batch-size 16 \
         --epochs 5000 \
@@ -29,12 +27,12 @@ Using bernoulli dropout with 20% drop probability and filling masked sensors wit
         --robust-eval-every 5 \
         --robust-alpha 0.8 \
         --no-latent
-    
-Using bernoulli dropout with 20% drop probability and filling masked sensors with training mean but for high variance data:
+
+Using bernoulli dropout with 30% drop probability for high variance data (override defaults):
     cd underwater-localization-topologies/src/training
     python train_anp_topologies_masked.py \
-      --data-dir /home/fer/tesis/underwater-localization-topologies/data/data/data_processed_topologies_high_variance \
-      --save-dir /home/fer/tesis/underwater-localization-topologies/results/ANP_topologies_masked \
+      --data-dir ../../data/data/data_processed_topologies_high_variance \
+      --save-dir ../../results/ANP_topologies_masked \
       --topologies aligned,ellipsoidal,random \
       --batch-size 8 \
       --epochs 5000 \
@@ -1010,10 +1008,14 @@ def train_anp_topology_masked(
 # Main: train one model per topology
 # ---------------------------
 
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data-dir", type=str, required=True)
-    parser.add_argument("--save-dir", type=str, default=None, help="Base output directory. If None, uses <cwd>/results/RANP_topologies_masked/<run_name>")
+    parser.add_argument("--data-dir", type=str,
+                        default=os.path.join(_REPO_ROOT, "data/data/data_processed_topologies_low_variance"))
+    parser.add_argument("--save-dir", type=str, default=None,
+                        help="Base output directory. If None, uses <repo_root>/results/ANP_topologies_masked/<run_name>")
     parser.add_argument("--topologies", type=str, default="aligned,ellipsoidal,random")
     parser.add_argument("--batch-size", type=int, default=8, help="Batch size for training and validation")
     parser.add_argument("--epochs", type=int, default=5000, help="Maximum number of epochs to train")
