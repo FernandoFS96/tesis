@@ -1,33 +1,43 @@
 """
-random_position_generator.py
+data_generator_random_positions.py
 ==================================
 
-Revised acoustic-channel data generator for the *sensor-displacement* robustness study (collaboration with KIT-ALR).
+Revised acoustic-channel data generator for the *sensor-displacement* robustness
+study (collaboration with KIT-ALR).
 
 WHAT THIS SCRIPT DOES
 ---------------------
-It produces ``N_POSITION_SETS`` (default 20) datasets that are identical in every respect except the (x, y) positions of the 10 hydrophones. 
-Concretely, for every channel-variability value ``theta`` (the ``channel_option``) the script:
+It produces ``N_POSITION_SETS`` (default 20) datasets that are **identical in
+every respect except the (x, y) positions of the 10 hydrophones**. Concretely,
+for every channel-variability value ``theta`` (the ``channel_option``) the script:
 
   1. Generates ONE fixed set of trajectories (100 trajectories, 50 points each).
-     These trajectories are shared across *all* position-sets and *all* theta values handling is identical to the original pipeline.
-  2. For each of the 20 position-sets, draws a *different* random placement of the 10 sensors (RANDOM topology only),
-     then simulates the channel impulse response and the filtered acoustic features for those positions.
-  3. Saves, per (theta, position-set), the filtered acoustic data, the trajectories, and crucially the sensor positions themselves 
-     (needed later for the spatial-encoder experiments).
+     These trajectories are shared across *all* position-sets and *all* theta
+     values handling is identical to the original pipeline.
+  2. For each of the 20 position-sets, draws a *different* random placement of
+     the 10 sensors (RANDOM topology only), then simulates the channel impulse
+     response and the filtered acoustic features for those positions.
+  3. Saves, per (theta, position-set), the filtered acoustic data, the
+     trajectories, and crucially the sensor positions themselves (needed later
+     for the spatial-encoder experiments).
 
-Compared with the original ``acoustic_data_generator.py`` the important changes are:
+Compared with the original ``data_generator_topology.py`` the important changes
+are:
 
   * Only the RANDOM topology is generated (per the collaboration plan).
-  * The random sensor layout is NO LONGER hardcoded to a single seed. 
-    Each position-set ``p`` uses its own reproducible seed, so the 20 layouts are genuinely different from one another while remaining fully reproducible.
-  * Trajectories are generated ONCE per theta and reused for every position-set, so sensor geometry is the only varying factor between the 20 datasets.
-  * Defaults updated to the collaboration spec: ``n_traj=100``, ``ppt=50``, ``df=100`` 
-    (this reduces the per-point acoustic feature dimension from 4010 at df=25 / 2010 at df=50 down to 1010 at df=100).
+  * The random sensor layout is NO LONGER hardcoded to a single seed. Each
+    position-set ``p`` uses its own reproducible seed, so the 20 layouts are
+    genuinely different from one another while remaining fully reproducible.
+  * Trajectories are generated ONCE per theta and reused for every position-set,
+    so sensor geometry is the only varying factor between the 20 datasets.
+  * Defaults updated to the collaboration spec: ``n_traj=100``, ``ppt=50``,
+    ``df=100`` (this reduces the per-point acoustic feature dimension from
+    4010 at df=25 / 2010 at df=50 down to 1010 at df=100).
   * Sensor positions are always saved next to the data.
 
 OUTPUT LAYOUT
 -------------
+::
 
     <out-dir>/
       position_set_00/
@@ -48,14 +58,15 @@ OUTPUT LAYOUT
       position_set_19/ ...
       _manifest.pkl                      # bookkeeping (seeds, positions, args)
 
-The per-(theta) sub-structure inside each ``position_set_XX`` directory is deliberately IDENTICAL to what the original ``data_process_topology.py`` expects:
-        
-        (``channel_option_<opt>/random/filtered_data/filtered_data.npy`` and ``.../trajectory/trajectories.npy``),
+The per-(theta) sub-structure inside each ``position_set_XX`` directory is
+deliberately IDENTICAL to what the original ``data_process_topology.py`` expects
+(``channel_option_<opt>/random/filtered_data/filtered_data.npy`` and
+``.../trajectory/trajectories.npy``), so you can post-process each position-set
+folder with the existing processing script by pointing ``--data-dir`` at it.
 
-so we can post-process each position-set folder with the existing processing script by pointing ``--data-dir`` at it.
-
-The original physics (``generate_params``, ``obtain_h``, ``filter``, the multipath / Doppler model) is reused UNCHANGED and imported from the original module, 
-so results stay consistent with the published acoustic pipeline.
+The original physics (``generate_params``, ``obtain_h``, ``filter``, the
+multipath / Doppler model) is reused UNCHANGED and imported from the original
+module, so results stay consistent with the published acoustic pipeline.
 
 USAGE
 -----
@@ -66,7 +77,7 @@ Basic (20 position-sets, default thetas, collaboration spec)::
 Explicit / typical run::
 
     python random_position_generator.py \
-        --channel_options "0.0,0.1,0.2,0.3,0.4,0.5,0.6" \
+        --channel_options "0.0,0.1,0.2,0.3,0.4,0.5" \
         --n_position_sets 20 \
         --n_traj 100 \
         --ppt 50 \
@@ -86,12 +97,17 @@ Then post-process each position-set with the existing splitter, e.g.::
 
 NOTES
 -----
-* ``--df`` overrides the frequency resolution. The per-trajectory-point feature dimension after reshaping is ``Lf * n_sensors`` 
-  where ``Lf = len(range(fmin, fmax, df))``: 1010 for df=100 / 10 sensors. Important to set the model ``input_dim`` accordingly when training.
-* All randomness is derived from ``--master-seed`` so an entire 20-set run is bit-for-bit reproducible. 
-  Position-set ``p`` uses layout seed ``master_seed + 1000 + p`` (see ``layout_seed_for``).
-* This is compute-heavy: cost scales as ``n_position_sets * n_thetas`` channel simulations. 
-  Use ``--nop`` to control the joblib parallelism and consider running subsets of position-sets in parallel jobs (``--start-set`` / ``--end-set``).
+* ``--df`` overrides the frequency resolution. The per-trajectory-point feature
+  dimension after reshaping is ``Lf * n_sensors`` where
+  ``Lf = len(range(fmin, fmax, df))``: 1010 for df=100 / 10 sensors.
+  Remember to set the model ``input_dim`` accordingly when you train.
+* All randomness is derived from ``--master-seed`` so an entire 20-set run is
+  bit-for-bit reproducible. Position-set ``p`` uses layout seed
+  ``master_seed + 1000 + p`` (see ``layout_seed_for``).
+* This is compute-heavy: cost scales as
+  ``n_position_sets * n_thetas`` channel simulations. Use ``--nop`` to control
+  the joblib parallelism and consider running subsets of position-sets in
+  parallel jobs (``--start-set`` / ``--end-set``).
 """
 
 import os
@@ -119,7 +135,8 @@ def layout_seed_for(master_seed: int, position_set_idx: int) -> int:
 # --------------------------------------------------------------------------- #
 # Random sensor placement (one independent layout per position-set)
 # --------------------------------------------------------------------------- #
-def random_sensor_positions(traj, n_sensors, hr0, layout_seed, scale=0.6, min_span=20.0):
+def random_sensor_positions(traj, n_sensors, hr0, layout_seed,
+                            scale=0.6, min_span=20.0):
     """
     Draw a single RANDOM hydrophone layout adapted to the spatial extent of the
     (shared) trajectories. This mirrors the 'random' branch of the original
@@ -185,35 +202,70 @@ def generate_one(option, position_set_idx, shared_trajectories, layout_seed,
     ONE sensor layout (position-set), writing the result in the
     original-compatible directory layout.
 
+    Design (single-pass, no double obtain_h):
+      * We compute our seeded sensor layout FIRST.
+      * We patch ``channel.generate_sensor_positions`` to return that layout,
+        and pass ``precomputed_trajectories=shared_trajectories``, BEFORE the
+        channel is constructed.
+      * ``channel.__init__`` then calls ``obtain_h()`` exactly once. Inside it,
+        ``generate_trajectories()`` returns the shared array (because
+        ``precomputed_trajectories`` is set) and ``generate_sensor_positions()``
+        returns our layout. The heavy multipath/Doppler physics runs once,
+        unmodified.
+
+    This removes the fragile re-run of ``obtain_h`` and the lambda-signature
+    hazard that previously crashed on the ``scale=`` keyword.
+
     Returns the (3, n_sensors) sensor positions used, for the manifest.
     """
     # Fresh params for this theta. df / n_traj / ppt were already injected into
     # the base.generate_params defaults via override_base_params() in main().
     params = base.generate_params(options=option)
 
-    # Build a channel for the RANDOM topology, reusing the shared trajectories.
-    # We pass precomputed_trajectories so obtain_h() will reuse them rather than
-    # regenerate. We then OVERRIDE the sensor layout with our per-set random one.
-    c = base.channel(
-        load=False,
-        params=params,
-        number_of_processes=nop,
-        name=str(option),
-        topology='random',
-        precomputed_trajectories=shared_trajectories,
-    )
-
-    # At this point c.obtain_h() (called in __init__) has already placed sensors
-    # using the original hardcoded random seed. We must REGENERATE the impulse
-    # response with OUR layout. To do that cleanly we re-run obtain_h() after
-    # patching the sensor-placement to our seeded layout. See _rebuild_with_layout.
+    # 1) Our per-set random layout (varies across position-sets, reproducible).
     r_posicion = random_sensor_positions(
         traj=shared_trajectories,
         n_sensors=params['n_sensors'],
         hr0=params['ci']['hr0'],
         layout_seed=layout_seed,
     )
-    _rebuild_with_layout(c, shared_trajectories, r_posicion)
+
+    # 2) Patch placement on the CLASS so the constructor's single obtain_h()
+    #    call uses our layout. The patched function accepts and ignores the
+    #    positional ``traj`` and any keywords (e.g. scale=, min_span=).
+    original_gsp = base.channel.generate_sensor_positions
+
+    def _fixed_layout(self, *args, **kwargs):
+        return r_posicion
+
+    base.channel.generate_sensor_positions = _fixed_layout
+    try:
+        # 3) Construct ONCE; obtain_h runs once with shared traj + our layout.
+        c = base.channel(
+            load=False,
+            params=params,
+            number_of_processes=nop,
+            name=str(option),
+            topology='random',
+            precomputed_trajectories=shared_trajectories,
+        )
+    finally:
+        base.channel.generate_sensor_positions = original_gsp  # always restore
+
+    # ---- Invariant guard: the channel MUST have used the shared trajectories.
+    #      ppt = params['ppt']; shared traj has ppt+1 points, c.traj likewise.
+    if not np.array_equal(np.asarray(c.traj), np.asarray(shared_trajectories)):
+        raise RuntimeError(
+            f"[set {position_set_idx}, theta {option}] channel did NOT reuse the "
+            f"shared trajectories (max|diff|="
+            f"{np.abs(np.asarray(c.traj) - np.asarray(shared_trajectories)).max():.3g})."
+            " Shared-trajectory invariant violated -- aborting before writing."
+        )
+    if not np.array_equal(np.asarray(c.r_posicion), r_posicion):
+        raise RuntimeError(
+            f"[set {position_set_idx}, theta {option}] channel did NOT use the "
+            "requested sensor layout. Aborting before writing."
+        )
 
     # Filtered acoustic features + target trajectory coordinates.
     data, trjs = base.generate_batch_of_trajs(
@@ -235,38 +287,6 @@ def generate_one(option, position_set_idx, shared_trajectories, layout_seed,
     np.save(os.path.join(info_dir, f'sensor_positions_{option}.npy'), r_posicion)
 
     return r_posicion
-
-
-def _rebuild_with_layout(c, shared_trajectories, r_posicion):
-    """
-    Re-run the impulse-response computation of an existing ``channel`` object
-    using a SPECIFIED sensor layout.
-
-    The original ``channel.obtain_h`` couples trajectory generation and sensor
-    placement. We reproduce its body here but (a) reuse the shared trajectories
-    and (b) inject our own ``r_posicion`` instead of calling
-    ``generate_sensor_positions``. Everything downstream (the per-sensor
-    multipath / Doppler simulation) is the original code, reached via the
-    nested ``process_sensor`` closure that ``obtain_h`` defines.
-
-    Implementation detail: rather than duplicate the long physics body, we
-    temporarily monkey-patch ``generate_sensor_positions`` on this instance so
-    that the unmodified ``obtain_h`` uses our layout, then restore it.
-    """
-    # Ensure the channel reuses the shared trajectories.
-    c.precomputed_trajectories = shared_trajectories
-    c.traj = shared_trajectories
-
-    # Force obtain_h's internal generate_sensor_positions(...) call to return
-    # exactly our layout, regardless of its scale/min_span arguments.
-    original_gsp = c.generate_sensor_positions
-    c.generate_sensor_positions = (lambda *a, **k: r_posicion)  # type: ignore
-    try:
-        c.h = c.obtain_h().astype(np.complex64)
-    finally:
-        c.generate_sensor_positions = original_gsp  # restore
-    # obtain_h sets c.r_posicion; make sure it matches what we intended.
-    c.r_posicion = r_posicion
 
 
 # --------------------------------------------------------------------------- #
@@ -380,7 +400,8 @@ def parse_float_list(s):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate N random-position datasets sharing identical trajectories (sensor-displacement robustness study)."
+        description="Generate N random-position datasets sharing identical "
+                    "trajectories (sensor-displacement robustness study)."
     )
     parser.add_argument('--channel_options', type=str,
                         default="0.0,0.1,0.2,0.3,0.4,0.5",
@@ -413,7 +434,7 @@ def main():
                              "Defaults to --n_position_sets.")
     args = parser.parse_args()
 
-    channel_options = parse_float_list(args.channel_options) or [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+    channel_options = parse_float_list(args.channel_options) or [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
     end_set = args.end_set if args.end_set is not None else args.n_position_sets
     start_set = max(0, args.start_set)
     end_set = min(end_set, args.n_position_sets)
