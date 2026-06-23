@@ -126,7 +126,7 @@ def find_position_sets(data_root):
 
 def set_index(set_dir):
     m = re.search(r"position_set_(\d+)$", set_dir)
-    return int(m.group(1))
+    return int(m.group(1)) #type: ignore[no-any-return]
 
 
 def find_thetas(set_dir):
