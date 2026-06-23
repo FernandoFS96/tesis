@@ -282,8 +282,8 @@ def generate_one(option, position_set_idx, shared_trajectories, layout_seed,
 
     np.save(os.path.join(topology_dir, 'trajectory', 'trajectories.npy'), trjs)
     np.save(os.path.join(topology_dir, 'filtered_data', 'filtered_data.npy'), data)
-    np.save(os.path.join(info_dir, f'channel_h_{option}.npy'), c.h)
-    np.save(os.path.join(info_dir, f'trajs_{option}.npy'), c.traj)
+    np.save(os.path.join(info_dir, f'channel_h_{option}.npy'), c.h) #type: ignore
+    np.save(os.path.join(info_dir, f'trajs_{option}.npy'), c.traj) #type: ignore
     np.save(os.path.join(info_dir, f'sensor_positions_{option}.npy'), r_posicion)
 
     return r_posicion
