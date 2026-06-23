@@ -61,7 +61,7 @@ OUTPUT LAYOUT
 The per-(theta) sub-structure inside each ``position_set_XX`` directory is
 deliberately IDENTICAL to what the original ``data_process_topology.py`` expects
 (``channel_option_<opt>/random/filtered_data/filtered_data.npy`` and
-``.../trajectory/trajectories.npy``), so you can post-process each position-set
+``.../trajectory/trajectories.npy``), so we can post-process each position-set
 folder with the existing processing script by pointing ``--data-dir`` at it.
 
 The original physics (``generate_params``, ``obtain_h``, ``filter``, the
@@ -78,7 +78,7 @@ Explicit / typical run::
 
     python random_position_generator.py \
         --channel_options "0.0,0.1,0.2,0.3,0.4,0.5" \
-        --n_position_sets 20 \
+        --n_position_sets 5 \
         --n_traj 100 \
         --ppt 50 \
         --df 100 \
@@ -100,7 +100,7 @@ NOTES
 * ``--df`` overrides the frequency resolution. The per-trajectory-point feature
   dimension after reshaping is ``Lf * n_sensors`` where
   ``Lf = len(range(fmin, fmax, df))``: 1010 for df=100 / 10 sensors.
-  Remember to set the model ``input_dim`` accordingly when you train.
+  Remember to set the model ``input_dim`` accordingly when training.
 * All randomness is derived from ``--master-seed`` so an entire 20-set run is
   bit-for-bit reproducible. Position-set ``p`` uses layout seed
   ``master_seed + 1000 + p`` (see ``layout_seed_for``).
@@ -268,8 +268,18 @@ def generate_one(option, position_set_idx, shared_trajectories, layout_seed,
         )
 
     # Filtered acoustic features + target trajectory coordinates.
-    data, trjs = base.generate_batch_of_trajs(
-        c, 'sinusoid', n=signal_n, snr=snr, rep=rep
+    # IMPORTANT: channel.filter() otherwise draws a RANDOM trajectory ordering
+    # (np.random.choice over n_traj) and returns self.traj reindexed by it. That
+    # would shuffle the 100 (shared) trajectories into a DIFFERENT row order for
+    # every position-set, breaking row-alignment across geometries (trajectory i
+    # in set 0 would not equal trajectory i in set 1) even though the content is
+    # identical. We pass an explicit, canonical ordering via `specific=` so all
+    # sets store the trajectories (and their matched features) in the SAME order.
+    n_traj = c.params['n_traj'] #type: ignore
+    canonical = list(range(n_traj))
+    data, trjs = c.filter(
+        signal_n, snr=snr, nt=n_traj, signal_type='sinusoid', rep=rep,
+        specific=canonical,
     )
 
     # ---- Write in the original-compatible structure ----
@@ -280,6 +290,18 @@ def generate_one(option, position_set_idx, shared_trajectories, layout_seed,
     os.makedirs(os.path.join(topology_dir, 'filtered_data'), exist_ok=True)
     os.makedirs(info_dir, exist_ok=True)
 
+    # Guard: the saved target trajectories must be the shared trajectories in
+    # canonical order (first ppt points). Aborts before writing if filter()
+    # reordered or altered them.
+    ppt = c.params['ppt'] #type: ignore
+    expected_trjs = np.asarray(shared_trajectories)[:, :n_traj, 0:ppt]
+    if not np.array_equal(np.asarray(trjs), expected_trjs):
+        raise RuntimeError(
+            f"[set {position_set_idx}, theta {option}] saved target trajectories "
+            f"are not the shared trajectories in canonical order "
+            f"(max|diff|={np.abs(np.asarray(trjs) - expected_trjs).max():.3g}). "
+            "filter() may have reintroduced random trajectory selection."
+        )
     np.save(os.path.join(topology_dir, 'trajectory', 'trajectories.npy'), trjs)
     np.save(os.path.join(topology_dir, 'filtered_data', 'filtered_data.npy'), data)
     np.save(os.path.join(info_dir, f'channel_h_{option}.npy'), c.h) #type: ignore
