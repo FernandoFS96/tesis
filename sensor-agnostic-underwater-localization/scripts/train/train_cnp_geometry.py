@@ -36,9 +36,9 @@ fraction for comparability.
 USAGE
 -----
     python train_cnp_geometry.py \
-        --data-dir ../data/data_random_positions/processed/geometry_split \
+        --data-dir ../../data/data_random_positions/processed/geometry_split \
         --out-dir  ../runs/cnp_baseline \
-        --epochs 200 --batch-size 64 --num-hidden 128 --lr 5e-4
+        --epochs 1000 --batch-size 16 --num-hidden 128 --lr 5e-4
 
 Outputs to --out-dir:
     best.pt          (lowest val loss)  + last.pt
@@ -51,15 +51,9 @@ import numpy as np
 import torch as t
 from torch.utils.data import Dataset, DataLoader
 
-# Import the model. Adjust the path if your package layout differs.
-sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src", "models"))
-sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src"))
-try:
-    from anp import DeterministicModel #type: ignore
-except ImportError:
-    # fallback: anp.py sitting next to this script
-    sys.path.append(os.path.dirname(__file__))
-    from anp import DeterministicModel #type: ignore
+# Add the repo root (parent of src/) so that `from src.models.anp import ...` works.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+from src.models.anp import DeterministicModel  # type: ignore
 
 
 # --------------------------------------------------------------------------- #
@@ -134,12 +128,12 @@ def run_epoch(model, loader, device, optimizer=None):
                 t.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
                 optimizer.step()
         b = target_y.size(0)
-        tot_loss += float(loss) * b
-        tot_nll += float(nll) * b
+        tot_loss += loss.item() * b
+        tot_nll += nll.item() * b
         # MAE in target units (Euclidean per-point distance, then mean)
         with t.no_grad():
             dist = t.sqrt(((mean - target_y) ** 2).sum(-1) + 1e-12)  # (B, ppt)
-            tot_mae += float(dist.mean()) * b
+            tot_mae += dist.mean().item() * b
         n += b
     return tot_loss / n, tot_nll / n, tot_mae / n
 
@@ -152,10 +146,10 @@ def main():
     ap.add_argument("--epochs", type=int, default=200)
     ap.add_argument("--batch-size", type=int, default=64)
     ap.add_argument("--num-hidden", type=int, default=128)
-    ap.add_argument("--lr", type=float, default=5e-4)
+    ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--ctx-min", type=int, default=5)
-    ap.add_argument("--ctx-max", type=int, default=25)
-    ap.add_argument("--val-ctx", type=int, default=15,
+    ap.add_argument("--ctx-max", type=int, default=40)
+    ap.add_argument("--val-ctx", type=int, default=20,
                     help="fixed context size for val (comparability)")
     ap.add_argument("--weight-decay", type=float, default=1e-5)
     ap.add_argument("--seed", type=int, default=0)

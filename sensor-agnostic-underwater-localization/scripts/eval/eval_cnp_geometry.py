@@ -23,7 +23,7 @@ extrapolation - interpolation gap.
 USAGE
 -----
     python eval_cnp_geometry.py \
-        --data-dir ../data/data_random_positions/processed/geometry_split \
+        --data-dir ../../data/data_random_positions/processed/geometry_split \
         --ckpt     ../runs/cnp_baseline/best.pt \
         --out-dir  ../runs/cnp_baseline/eval \
         --eval-ctx 15 --n-context-draws 5
@@ -42,17 +42,13 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src", "models"))
-sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src"))
-try:
-    from anp import DeterministicModel
-except ImportError:
-    sys.path.append(os.path.dirname(__file__))
-    from anp import DeterministicModel
+# Add the repo root (parent of src/) so that `from src.models.anp import ...` works.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+from src.models.anp import DeterministicModel  # type: ignore
 
 # reuse dataset/collate from the trainer if available, else inline minimal copies
 try:
-    from train_cnp_geometry import TrajectoryDataset, make_collate
+    from scripts.train.train_cnp_geometry import TrajectoryDataset, make_collate #type: ignore
 except ImportError:
     class TrajectoryDataset:
         def __init__(self, p):
