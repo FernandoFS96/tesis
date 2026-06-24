@@ -1,0 +1,18 @@
+================================================================
+ANP baseline -- out-of-position degradation
+================================================================
+checkpoint: ../runs/anp_baseline/best.pt  (epoch 271, conv=split)
+eval context size: 20  draws: 5
+
+train pool MAE: 39.7468  (12 geometries)
+val   pool MAE: 64.4438  (4 geometries)
+test  pool MAE: 62.4130  (4 geometries)
+
+DEGRADATION val vs train: +24.6970  (+62.1%)
+DEGRADATION test vs train: +22.6662  (+57.0%)
+  interp held-out MAE: 61.1439 (n=4)
+  extrap held-out MAE: 65.7129 (n=4)
+  extrap - interp gap: +4.5690
+
+per-geometry CSV : ../runs/anp_baseline/eval/per_geometry_mae.csv
+degradation curve: ../runs/anp_baseline/eval/degradation_curve.png

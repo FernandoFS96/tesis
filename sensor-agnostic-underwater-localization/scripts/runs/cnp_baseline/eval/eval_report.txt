@@ -1,23 +1,18 @@
 ================================================================
 CNP baseline -- out-of-position degradation
 ================================================================
-checkpoint: ../runs/cnp_baseline/best.pt  (epoch 100)
-eval context size: 15  draws: 5
+checkpoint: ../runs/cnp_baseline/best.pt  (epoch 372, conv=split)
+eval context size: 20  draws: 5
 
-train pool MAE: 60.7969  (12 geometries)
-val   pool MAE: 93.0247  (4 geometries)
-test  pool MAE: 92.1862  (4 geometries)
+train pool MAE: 40.1112  (12 geometries)
+val   pool MAE: 62.2978  (4 geometries)
+test  pool MAE: 59.9844  (4 geometries)
 
-DEGRADATION val vs train: +32.2279  (+53.0%)
-DEGRADATION test vs train: +31.3894  (+51.6%)
-  interp held-out MAE: 90.0300 (n=4)
-  extrap held-out MAE: 95.1810 (n=4)
-  extrap - interp gap: +5.1509
+DEGRADATION val vs train: +22.1866  (+55.3%)
+DEGRADATION test vs train: +19.8732  (+49.5%)
+  interp held-out MAE: 58.8144 (n=4)
+  extrap held-out MAE: 63.4678 (n=4)
+  extrap - interp gap: +4.6535
 
 per-geometry CSV : ../runs/cnp_baseline/eval/per_geometry_mae.csv
 degradation curve: ../runs/cnp_baseline/eval/degradation_curve.png
-
-INTERPRETATION: a large val/test degradation and a positive extrap-
-interp gap mean sensor displacement genuinely hurts the current model
--- i.e. there is a real problem for the spatial encoder to fix. A near-
-zero degradation would mean the task is too easy / displacement too weak.
