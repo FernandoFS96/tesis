@@ -143,8 +143,8 @@ def main():
     ap.add_argument("--data-dir", required=True,
                     help="…/processed/geometry_split")
     ap.add_argument("--out-dir", required=True)
-    ap.add_argument("--epochs", type=int, default=200)
-    ap.add_argument("--batch-size", type=int, default=64)
+    ap.add_argument("--epochs", type=int, default=500)
+    ap.add_argument("--batch-size", type=int, default=16)
     ap.add_argument("--num-hidden", type=int, default=128)
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--ctx-min", type=int, default=5)
@@ -154,7 +154,7 @@ def main():
     ap.add_argument("--weight-decay", type=float, default=1e-5)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", default="cuda" if t.cuda.is_available() else "cpu")
-    ap.add_argument("--num-workers", type=int, default=4)
+    ap.add_argument("--num-workers", type=int, default=1)
     args = ap.parse_args()
 
     t.manual_seed(args.seed); np.random.seed(args.seed)
