@@ -6,9 +6,10 @@ Quality-control and characterization suite for the 20 random-position datasets p
 
 It serves two purposes at once (both are reported):
 
-  A. EXPERIMENT-VALIDITY CHECKS  -- assertions that the generated data actually implements the intended design, i.e. that *sensor geometry is the only factor that varies between position-sets*:
-       * trajectories are byte-identical across all 20 position-sets (per theta);
-       * the 20 sensor layouts are genuinely different from one another;
+  A. EXPERIMENT-VALIDITY CHECKS  -- assertions that the generated data actually implements the intended design. The trajectory invariant depends on the generation mode (read from _manifest.pkl, overridable with --shared-/--distinct-trajectories):
+       * SHARED mode (sensor-displacement study): trajectories are byte-identical across all position-sets (per theta) -- geometry is the only varying factor;
+       * DISTINCT mode: trajectories DIFFER across all position-sets (each set has its own per-set-seeded ensemble);
+       * the sensor layouts are genuinely different from one another (both modes);
        * shapes / feature dimension match the spec (df -> Lf*n_sensors);
        * no NaN/Inf, no degenerate (all-zero) sensor channels;
        * the receiver depth (z-row) is constant within a layout.
@@ -148,7 +149,7 @@ def reshape_features(filtered):
 # A. VALIDITY CHECKS
 # --------------------------------------------------------------------------- #
 def check_validity(data_root, set_dirs, thetas, rep, n_sensors_expected,
-                   df, fmin, fmax, report):
+                   df, fmin, fmax, report, distinct_trajectories=False):
     report.info("=" * 64)
     report.info("A. EXPERIMENT-VALIDITY CHECKS")
     report.info("=" * 64)
@@ -210,13 +211,27 @@ def check_validity(data_root, set_dirs, thetas, rep, n_sensors_expected,
             traj_hash.setdefault(th, {})[si] = hash(traj.tobytes())
             layouts.setdefault(th, {})[si] = pos
 
-    # ---- (1) trajectories identical across sets, per theta ----
+    # ---- (1) cross-set trajectory invariant, per theta ----
+    # The expected invariant depends on the generation mode:
+    #   shared   -> trajectories must be byte-IDENTICAL across all sets
+    #               (geometry is the only varying factor).
+    #   distinct -> trajectories must DIFFER across all sets (each set has its
+    #               own per-set-seeded ensemble); any collision means the per-set
+    #               seeding silently did not take effect.
     for th in thetas:
         hashes = traj_hash.get(th, {})
         uniq = set(hashes.values())
         if len(hashes) <= 1:
             report.warn(f"theta {th}: <=1 set available, cannot cross-check "
-                        f"trajectory sharing")
+                        f"trajectory {'distinctness' if distinct_trajectories else 'sharing'}")
+        elif distinct_trajectories:
+            if len(uniq) == len(hashes):
+                report.ok(f"theta {th}: trajectories distinct across "
+                          f"{len(hashes)} position-sets (per-set design OK)")
+            else:
+                report.fail(f"theta {th}: only {len(uniq)} distinct trajectory "
+                            f"ensembles across {len(hashes)} sets -- per-set "
+                            f"seeding did not take; sets share trajectories!")
         elif len(uniq) == 1:
             report.ok(f"theta {th}: trajectories byte-identical across "
                       f"{len(hashes)} position-sets (shared-trajectory design OK)")
@@ -506,6 +521,14 @@ def main():
     ap.add_argument("--df", type=float, default=100.0)
     ap.add_argument("--fmin", type=float, default=10000.0)
     ap.add_argument("--fmax", type=float, default=20000.0)
+    ap.add_argument("--distinct-trajectories", dest="distinct_trajectories",
+                    action="store_true", default=None,
+                    help="Force per-set (distinct) trajectory invariant "
+                         "(default: read from _manifest.pkl).")
+    ap.add_argument("--shared-trajectories", dest="distinct_trajectories",
+                    action="store_false", default=None,
+                    help="Force shared (identical) trajectory invariant "
+                         "(default: read from _manifest.pkl).")
     args = ap.parse_args()
 
     out_dir = args.out_dir or os.path.join(args.data_root, "qc_report")
@@ -532,20 +555,37 @@ def main():
     report.info(f"position-sets inspected : {len(set_dirs)}")
     report.info(f"thetas : {thetas}")
 
-    # Optional manifest cross-check
+    # Optional manifest cross-check. Also the source of truth for the trajectory
+    # mode (shared vs distinct), unless the user overrides it on the CLI.
+    man_distinct = None
     man_path = os.path.join(args.data_root, "_manifest.pkl")
     if os.path.exists(man_path):
         with open(man_path, "rb") as f:
             man = pickle.load(f)
+        man_distinct = man.get('distinct_trajectories')
         report.ok(f"manifest found (master_seed={man.get('master_seed')}, "
-                  f"declared sets={man.get('n_position_sets')})")
+                  f"declared sets={man.get('n_position_sets')}, "
+                  f"distinct_trajectories={man_distinct})")
     else:
         report.warn("no _manifest.pkl found -- skipping seed cross-check")
+
+    # Resolve trajectory mode: CLI override > manifest > default (shared).
+    if args.distinct_trajectories is not None:
+        distinct_trajectories = bool(args.distinct_trajectories)
+    elif man_distinct is not None:
+        distinct_trajectories = bool(man_distinct)
+    else:
+        distinct_trajectories = False
+        report.warn("trajectory mode unknown (no manifest flag, no CLI override) "
+                    "-- assuming SHARED. Pass --distinct-trajectories if wrong.")
+    report.info(f"trajectory mode : "
+                f"{'DISTINCT (per-set)' if distinct_trajectories else 'SHARED'}")
 
     # ---- A. validity ----
     layouts, Lf = check_validity(
         args.data_root, set_dirs, thetas, args.rep, args.n_sensors,
-        args.df, args.fmin, args.fmax, report)
+        args.df, args.fmin, args.fmax, report,
+        distinct_trajectories=distinct_trajectories)
 
     # ---- B. characterization ----
     report.info("=" * 64)

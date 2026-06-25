@@ -30,19 +30,24 @@ is specific to the new experiment.
 
 THE KEY STRUCTURAL POINT
 ------------------------
-Because the corrected generator shares ONE trajectory ensemble across all 20
-position-sets (sensor geometry is the only varying factor), the velocity
-distribution for a given theta is IDENTICAL across all 20 datasets. Therefore:
+The expected cross-set behaviour depends on the generation mode (read from
+_manifest.pkl, overridable with --shared-/--distinct-trajectories):
 
-  * we report ONE velocity profile per theta (not 20 redundant ones);
-  * we VERIFY that the per-set trajectories are byte-identical across the 20
-    sets -- a velocity-side re-confirmation of the shared-trajectory invariant
-    (the same thing the QC script checks via hashing). If they are NOT identical,
-    that is a hard error and is reported per theta.
+  * SHARED mode -- one trajectory ensemble is reused across all position-sets
+    (sensor geometry is the only varying factor), so the velocity distribution
+    for a given theta is IDENTICAL across all sets. We verify byte-identity
+    across sets (a velocity-side re-confirmation of the shared invariant, the
+    same thing the QC script checks via hashing) and report ONE profile per
+    theta. Non-identical trajectories are a hard error.
 
-It still *iterates over all 20 datasets for each theta* (as requested): it loads
-every (set, theta) trajectory file, checks them against the reference, and only
-then emits the per-theta velocity profile.
+  * DISTINCT mode -- each position-set has its OWN per-set-seeded trajectories.
+    We verify the sets DIFFER (identical content would mean per-set seeding did
+    not take), and the per-theta velocity profile is POOLED over all sets'
+    trajectories. Identical content is the hard error here.
+
+Either way it *iterates over all sets for each theta*: it loads every
+(set, theta) trajectory file, checks them against the reference, and only then
+emits the per-theta velocity profile.
 
 OUTPUTS  (under --out-dir, default <data-root>/velocity_report)
     figures/velocity_hist_theta_<theta>.png   per-theta histogram (original style)
@@ -78,6 +83,7 @@ import os
 import re
 import sys
 import glob
+import pickle
 import argparse
 
 import numpy as np
@@ -253,6 +259,14 @@ def main():
                          f"(default {DEFAULT_T_TOT}, matching the original "
                          f"generator's params['ci']['T_tot']).")
     ap.add_argument("--bins", type=int, default=40)
+    ap.add_argument("--distinct-trajectories", dest="distinct_trajectories",
+                    action="store_true", default=None,
+                    help="Expect per-set (distinct) trajectories "
+                         "(default: read from _manifest.pkl).")
+    ap.add_argument("--shared-trajectories", dest="distinct_trajectories",
+                    action="store_false", default=None,
+                    help="Expect shared (identical) trajectories "
+                         "(default: read from _manifest.pkl).")
     args = ap.parse_args()
 
     out_dir = args.out_dir or os.path.join(args.data_root, "velocity_report")
@@ -277,9 +291,25 @@ def main():
     log = []
     def line(s): log.append(s); print(s)
 
+    # Resolve trajectory mode: CLI override > _manifest.pkl > default (shared).
+    man_distinct = None
+    man_path = os.path.join(args.data_root, "_manifest.pkl")
+    if os.path.exists(man_path):
+        with open(man_path, "rb") as f:
+            man_distinct = pickle.load(f).get('distinct_trajectories')
+    if args.distinct_trajectories is not None:
+        distinct_trajectories = bool(args.distinct_trajectories)
+    elif man_distinct is not None:
+        distinct_trajectories = bool(man_distinct)
+    else:
+        distinct_trajectories = False
+
     line(f"data-root : {args.data_root}")
     line(f"position-sets : {len(set_dirs)} | thetas : {thetas}")
     line(f"T_tot (per-jump denominator) : {args.t_tot} s")
+    line(f"trajectory mode : "
+         f"{'DISTINCT (per-set)' if distinct_trajectories else 'SHARED'}"
+         f"{'' if man_distinct is not None or args.distinct_trajectories is not None else ' (assumed; no manifest)'}")
     line("=" * 64)
 
     per_theta_stats = {}
@@ -287,14 +317,17 @@ def main():
     rows = []
     hard_failures = 0
 
-    # For each theta group, iterate over ALL position-sets, verify the
-    # trajectories agree, then compute the (shared) velocity profile once.
+    # For each theta group, iterate over ALL position-sets, check the cross-set
+    # trajectory invariant (mode-dependent), then compute the velocity profile:
+    #   shared   -> identical across sets, so compute it once on the reference;
+    #   distinct -> each set differs, so POOL speeds over all sets' trajectories.
     for th in thetas:
         ref_traj = None
         ref_src = None
         agree = True
         max_disagreement = 0.0
         n_checked = 0
+        all_trajs = []  # every set's trajectory array (used for pooled profile)
 
         for si, sd in enumerate(set_dirs):
             tp, src = traj_path(sd, th)
@@ -303,6 +336,7 @@ def main():
                 continue
             traj = np.load(tp)
             n_checked += 1
+            all_trajs.append(traj)
             if ref_traj is None:
                 ref_traj = traj
                 ref_src = src
@@ -329,28 +363,54 @@ def main():
                  f"(3,n_traj,ppt); channel_info copy not found. Velocity covers "
                  f"ppt-1 jumps instead of ppt.")
 
-        # Cross-set agreement verdict (velocity-side invariant check).
-        if agree and max_disagreement == 0.0:
-            line(f"[ PASS ] theta {th}: trajectories identical across "
-                 f"{n_checked} sets (max|diff|=0) -> single shared velocity "
-                 f"profile is valid")
+        identical = agree and max_disagreement == 0.0
+        if distinct_trajectories:
+            # Distinct mode: sets MUST differ. Identical content (when >1 set)
+            # means per-set trajectory seeding silently did not take effect.
+            if n_checked > 1 and identical:
+                line(f"[ FAIL ] theta {th}: trajectories IDENTICAL across "
+                     f"{n_checked} sets (max|diff|=0) -> per-set trajectory "
+                     f"seeding did not take; distinct-trajectory design violated")
+                hard_failures += 1
+            else:
+                line(f"[ PASS ] theta {th}: trajectories differ across "
+                     f"{n_checked} sets (max|diff|={max_disagreement:.4g}) -> "
+                     f"per-set design OK; pooling velocity over all sets")
         else:
-            line(f"[ FAIL ] theta {th}: trajectories DIFFER across sets "
-                 f"(max|diff|={max_disagreement:.4g}) -> velocity is NOT shared; "
-                 f"shared-trajectory invariant violated")
-            hard_failures += 1
+            # Shared mode: sets MUST be byte-identical.
+            if identical:
+                line(f"[ PASS ] theta {th}: trajectories identical across "
+                     f"{n_checked} sets (max|diff|=0) -> single shared velocity "
+                     f"profile is valid")
+            else:
+                line(f"[ FAIL ] theta {th}: trajectories DIFFER across sets "
+                     f"(max|diff|={max_disagreement:.4g}) -> velocity is NOT "
+                     f"shared; shared-trajectory invariant violated")
+                hard_failures += 1
 
-        # Velocity profile (computed on the reference; identical across sets if
-        # the check above passed).
-        speeds = compute_speeds(ref_traj, args.t_tot)
+        # Velocity profile. Shared mode: the reference is representative of every
+        # set. Distinct mode: pool all sets' trajectories (same ppt+1 shape) so
+        # the profile reflects the full per-set ensemble, not just one set.
+        if distinct_trajectories and n_checked > 1:
+            same_shape = all(t.shape == ref_traj.shape for t in all_trajs)
+            if same_shape:
+                profile_traj = np.concatenate(all_trajs, axis=1)
+            else:
+                line(f"[ WARN ] theta {th}: per-set trajectory shapes differ; "
+                     f"velocity profile uses the reference set only")
+                profile_traj = ref_traj
+        else:
+            profile_traj = ref_traj
+
+        speeds = compute_speeds(profile_traj, args.t_tot)
         st = speed_stats(speeds)
         per_theta_stats[th] = st
-        ref_traj_by_theta[th] = ref_traj
+        ref_traj_by_theta[th] = profile_traj
 
         line(f"         theta {th}: speed mean={st['mean']:.3f} "
              f"std={st['std']:.3f} min={st['min']:.3f} max={st['max']:.3f} "
              f"median={st['median']:.3f} p95={st['p95']:.3f} [m/s]  "
-             f"(n_traj={ref_traj.shape[1]}, jumps={speeds.shape[1]})")
+             f"(n_traj={profile_traj.shape[1]}, jumps={speeds.shape[1]})")
 
         # Per-theta histogram (original style).
         fig_hist_for_theta(speeds, th, st, fig_dir, bins=args.bins)
@@ -359,8 +419,10 @@ def main():
             "theta": th,
             "n_sets_checked": n_checked,
             "cross_set_max_diff": max_disagreement,
-            "shared_ok": int(agree and max_disagreement == 0.0),
-            "n_traj": ref_traj.shape[1],
+            "distinct_mode": int(distinct_trajectories),
+            "invariant_ok": int((not identical) if (distinct_trajectories and n_checked > 1)
+                                else identical),
+            "n_traj": profile_traj.shape[1],
             "n_jumps": speeds.shape[1],
             "v_mean": st["mean"], "v_std": st["std"],
             "v_min": st["min"], "v_max": st["max"],

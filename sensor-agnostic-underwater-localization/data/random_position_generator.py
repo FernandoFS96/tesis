@@ -130,6 +130,14 @@ def layout_seed_for(master_seed: int, position_set_idx: int) -> int:
     return int(master_seed) + 1000 + int(position_set_idx)
 
 
+def traj_seed_for(master_seed: int, position_set_idx: int, offset: int) -> int:
+    """Deterministic RNG seed for a position-set's OWN trajectory ensemble
+    (distinct-trajectories mode only). Lives in a separate numeric band from the
+    layout seeds (``master_seed + 1000 + p``) so the trajectory and layout RNG
+    streams never collide."""
+    return int(master_seed) + int(offset) + int(position_set_idx)
+
+
 # --------------------------------------------------------------------------- #
 # Random sensor placement (one independent layout per position-set)
 # --------------------------------------------------------------------------- #
@@ -193,12 +201,17 @@ def random_sensor_positions(traj, n_sensors, hr0, layout_seed,
 # --------------------------------------------------------------------------- #
 # Single (theta, position-set) generation
 # --------------------------------------------------------------------------- #
-def generate_one(option, position_set_idx, shared_trajectories, layout_seed,
-                 out_dir, snr, rep, nop, signal_n=1024):
+def generate_one(option, position_set_idx, trajectories, layout_seed,
+                 out_dir, snr, rep, nop, signal_n=1024, traj_config=None):
     """
     Simulate the channel + filtered features for ONE channel option (theta) and
     ONE sensor layout (position-set), writing the result in the
     original-compatible directory layout.
+
+    ``trajectories`` is the trajectory ensemble this (set, theta) should use. In
+    shared mode it is the same array for every position-set; in distinct mode it
+    is the per-set ensemble. Either way the channel is forced to reuse it
+    verbatim (via ``precomputed_trajectories``), and the guards below assert it.
 
     Design (single-pass, no double obtain_h):
       * We compute our seeded sensor layout FIRST.
@@ -222,7 +235,7 @@ def generate_one(option, position_set_idx, shared_trajectories, layout_seed,
 
     # 1) Our per-set random layout (varies across position-sets, reproducible).
     r_posicion = random_sensor_positions(
-        traj=shared_trajectories,
+        traj=trajectories,
         n_sensors=params['n_sensors'],
         hr0=params['ci']['hr0'],
         layout_seed=layout_seed,
@@ -238,26 +251,27 @@ def generate_one(option, position_set_idx, shared_trajectories, layout_seed,
 
     base.channel.generate_sensor_positions = _fixed_layout
     try:
-        # 3) Construct ONCE; obtain_h runs once with shared traj + our layout.
+        # 3) Construct ONCE; obtain_h runs once with our traj + our layout.
         c = base.channel(
             load=False,
             params=params,
             number_of_processes=nop,
             name=str(option),
             topology='random',
-            precomputed_trajectories=shared_trajectories,
+            precomputed_trajectories=trajectories,
+            traj_config=traj_config,
         )
     finally:
         base.channel.generate_sensor_positions = original_gsp  # always restore
 
-    # ---- Invariant guard: the channel MUST have used the shared trajectories.
-    #      ppt = params['ppt']; shared traj has ppt+1 points, c.traj likewise.
-    if not np.array_equal(np.asarray(c.traj), np.asarray(shared_trajectories)):
+    # ---- Invariant guard: the channel MUST have used the trajectories we gave it.
+    #      ppt = params['ppt']; the input traj has ppt+1 points, c.traj likewise.
+    if not np.array_equal(np.asarray(c.traj), np.asarray(trajectories)):
         raise RuntimeError(
             f"[set {position_set_idx}, theta {option}] channel did NOT reuse the "
-            f"shared trajectories (max|diff|="
-            f"{np.abs(np.asarray(c.traj) - np.asarray(shared_trajectories)).max():.3g})."
-            " Shared-trajectory invariant violated -- aborting before writing."
+            f"supplied trajectories (max|diff|="
+            f"{np.abs(np.asarray(c.traj) - np.asarray(trajectories)).max():.3g})."
+            " Precomputed-trajectory invariant violated -- aborting before writing."
         )
     if not np.array_equal(np.asarray(c.r_posicion), r_posicion):
         raise RuntimeError(
@@ -268,11 +282,12 @@ def generate_one(option, position_set_idx, shared_trajectories, layout_seed,
     # Filtered acoustic features + target trajectory coordinates.
     # IMPORTANT: channel.filter() otherwise draws a RANDOM trajectory ordering
     # (np.random.choice over n_traj) and returns self.traj reindexed by it. That
-    # would shuffle the 100 (shared) trajectories into a DIFFERENT row order for
-    # every position-set, breaking row-alignment across geometries (trajectory i
-    # in set 0 would not equal trajectory i in set 1) even though the content is
-    # identical. We pass an explicit, canonical ordering via `specific=` so all
-    # sets store the trajectories (and their matched features) in the SAME order.
+    # would shuffle the trajectories into a DIFFERENT row order for every
+    # position-set, breaking row-alignment across geometries (trajectory i in set
+    # 0 would not correspond to trajectory i in set 1). In shared mode that also
+    # breaks the byte-identity invariant. We pass an explicit, canonical ordering
+    # via `specific=` so every set stores trajectories (and their matched
+    # features) in the SAME row order.
     n_traj = c.params['n_traj'] #type: ignore
     canonical = list(range(n_traj))
     data, trjs = c.filter(
@@ -288,15 +303,15 @@ def generate_one(option, position_set_idx, shared_trajectories, layout_seed,
     os.makedirs(os.path.join(topology_dir, 'filtered_data'), exist_ok=True)
     os.makedirs(info_dir, exist_ok=True)
 
-    # Guard: the saved target trajectories must be the shared trajectories in
+    # Guard: the saved target trajectories must be the supplied trajectories in
     # canonical order (first ppt points). Aborts before writing if filter()
     # reordered or altered them.
     ppt = c.params['ppt'] #type: ignore
-    expected_trjs = np.asarray(shared_trajectories)[:, :n_traj, 0:ppt]
+    expected_trjs = np.asarray(trajectories)[:, :n_traj, 0:ppt]
     if not np.array_equal(np.asarray(trjs), expected_trjs):
         raise RuntimeError(
             f"[set {position_set_idx}, theta {option}] saved target trajectories "
-            f"are not the shared trajectories in canonical order "
+            f"are not the supplied trajectories in canonical order "
             f"(max|diff|={np.abs(np.asarray(trjs) - expected_trjs).max():.3g}). "
             "filter() may have reintroduced random trajectory selection."
         )
@@ -335,16 +350,19 @@ def override_base_params(df, n_traj, ppt):
 # --------------------------------------------------------------------------- #
 # Shared trajectory generation (once per theta, reused across all sets)
 # --------------------------------------------------------------------------- #
-def make_shared_trajectories(option, nop, physics_seed):
+def make_trajectories(option, nop, physics_seed, traj_config=None):
     """
-    Generate the trajectories for a given theta ONCE. These are reused for every
-    position-set so that sensor geometry is the only thing that changes between
-    the 20 datasets.
+    Generate a trajectory ensemble for a given theta.
+
+    In shared mode this is called ONCE per theta (with a fixed ``physics_seed``)
+    and the result is reused for every position-set, so sensor geometry is the
+    only thing that changes between datasets. In distinct mode it is called once
+    per (set, theta) with a per-set ``physics_seed`` so each position-set gets
+    its own trajectories.
 
     We seed the global NumPy RNG immediately before constructing the temporary
     channel because trajectory generation (``generate_trajectories``) draws from
-    the global RNG. Using the same physics_seed for every theta means the
-    trajectory *shapes* are consistent with the original pipeline.
+    the global RNG.
     """
     np.random.seed(physics_seed)
     params = base.generate_params(options=option)
@@ -354,6 +372,7 @@ def make_shared_trajectories(option, nop, physics_seed):
         number_of_processes=nop,
         name=str(option),
         topology='random',  # topology irrelevant for the trajectories themselves
+        traj_config=traj_config,
     )
     return temp.traj
 
@@ -362,7 +381,8 @@ def make_shared_trajectories(option, nop, physics_seed):
 # Orchestration
 # --------------------------------------------------------------------------- #
 def run(channel_options, n_position_sets, out_dir, snr, rep, nop,
-        master_seed, start_set, end_set, signal_n=1024):
+        master_seed, start_set, end_set, signal_n=1024,
+        distinct_trajectories=False, traj_seed_offset=2000, traj_config=None):
     os.makedirs(out_dir, exist_ok=True)
 
     manifest = {
@@ -371,40 +391,59 @@ def run(channel_options, n_position_sets, out_dir, snr, rep, nop,
         'master_seed': master_seed,
         'snr': snr,
         'rep': rep,
+        'distinct_trajectories': bool(distinct_trajectories),
+        'traj_seed_offset': int(traj_seed_offset),
         'positions': {},  # (position_set_idx, theta) -> (3, n_sensors)
         'layout_seeds': {},
+        'traj_seeds': {},  # only populated in distinct mode
     }
 
-    # 1) Shared trajectories: generated ONCE per theta, reused for all sets.
-    #    physics_seed fixed (== master_seed) so trajectory shapes are stable.
-    print("Generating shared trajectories (once per theta)...")
+    # In SHARED mode, generate the trajectories ONCE per theta (fixed seed ==
+    # master_seed) and reuse them for every position-set. In DISTINCT mode we
+    # generate per-(set, theta) inside the loop instead, so leave this empty.
     shared_traj = {}
-    for option in channel_options:
-        shared_traj[option] = make_shared_trajectories(
-            option, nop=nop, physics_seed=master_seed
-        )
-        print(f"  theta={option}: trajectories {shared_traj[option].shape}")
+    if not distinct_trajectories:
+        print("Generating shared trajectories (once per theta)...")
+        for option in channel_options:
+            shared_traj[option] = make_trajectories(
+                option, nop=nop, physics_seed=master_seed, traj_config=traj_config
+            )
+            print(f"  theta={option}: trajectories {shared_traj[option].shape}")
+    else:
+        print("Distinct mode: trajectories generated per (position-set, theta).")
 
-    # 2) For each position-set, draw a layout and simulate every theta.
+    # For each position-set, draw a layout (and, in distinct mode, its own
+    # trajectories) and simulate every theta.
     set_range = range(start_set, end_set)
     for p in tqdm(set_range, desc="Position sets"):
         l_seed = layout_seed_for(master_seed, p)
         manifest['layout_seeds'][p] = l_seed
+        if distinct_trajectories:
+            manifest['traj_seeds'][p] = traj_seed_for(master_seed, p, traj_seed_offset)
         for option in channel_options:
+            if distinct_trajectories:
+                trajectories = make_trajectories(
+                    option, nop=nop,
+                    physics_seed=traj_seed_for(master_seed, p, traj_seed_offset),
+                    traj_config=traj_config,
+                )
+            else:
+                trajectories = shared_traj[option]
             r_pos = generate_one(
                 option=option,
                 position_set_idx=p,
-                shared_trajectories=shared_traj[option],
+                trajectories=trajectories,
                 layout_seed=l_seed,
                 out_dir=out_dir,
                 snr=snr,
                 rep=rep,
                 nop=nop,
                 signal_n=signal_n,
+                traj_config=traj_config,
             )
             manifest['positions'][(p, option)] = r_pos
 
-    # 3) Manifest for bookkeeping / reproducibility.
+    # Manifest for bookkeeping / reproducibility.
     with open(os.path.join(out_dir, '_manifest.pkl'), 'wb') as f:
         pickle.dump(manifest, f)
     print(f"\nDone. Wrote position-sets [{start_set}, {end_set}) to: {out_dir}")
@@ -420,8 +459,11 @@ def parse_float_list(s):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate N random-position datasets sharing identical "
-                    "trajectories (sensor-displacement robustness study)."
+        description="Generate N random-position datasets. By default all sets "
+                    "share one trajectory ensemble (sensor-displacement study); "
+                    "set per_set.distinct_trajectories in traj_generation.yaml "
+                    "(or pass --distinct-trajectories) to give each set its own "
+                    "trajectories as well as its own sensor layout."
     )
     parser.add_argument('--channel_options', type=str,
                         default="0.0,0.1,0.2,0.3,0.4,0.5",
@@ -452,6 +494,19 @@ def main():
     parser.add_argument('--end-set', type=int, default=None,
                         help="Last position-set index (exclusive). "
                              "Defaults to --n_position_sets.")
+    parser.add_argument('--traj_config', type=str, default=None,
+                        help="Path to the trajectory-generation YAML "
+                             "(default: config/traj_generation.yaml). Its "
+                             "`per_set.distinct_trajectories` flag selects shared "
+                             "vs per-set trajectories.")
+    parser.add_argument('--distinct-trajectories', dest='distinct_trajectories',
+                        action='store_true', default=None,
+                        help="Override the config: give every position-set its "
+                             "OWN trajectories as well as its own layout.")
+    parser.add_argument('--shared-trajectories', dest='distinct_trajectories',
+                        action='store_false', default=None,
+                        help="Override the config: reuse ONE trajectory ensemble "
+                             "across all position-sets (sensor-displacement study).")
     args = parser.parse_args()
 
     channel_options = parse_float_list(args.channel_options) or [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
@@ -465,6 +520,18 @@ def main():
     # Suppress the hardcoded ./data/ side-effect write in channel.__init__.
     base.channel.save_channel_info = lambda self, name: None
 
+    # Trajectory-generation config (method + the per_set toggle). Loaded here so
+    # there is a single source of truth that we also hand to every channel.
+    traj_config = base.load_traj_config(args.traj_config)
+    per_set = traj_config.get('per_set', {}) or {}
+    # CLI flag (if given) overrides the config; otherwise use the config value.
+    if args.distinct_trajectories is None:
+        distinct_trajectories = bool(per_set.get('distinct_trajectories', False))
+    else:
+        distinct_trajectories = bool(args.distinct_trajectories)
+    traj_seed_offset = int(per_set.get('traj_seed_offset', 2000))
+    method = traj_config.get('method', 'spiral')
+
     # Report the resulting feature dimension so the user can set model input_dim.
     Lf = len(base.range_m(10000.0, 20000.0, args.df))
     print("=" * 64)
@@ -477,6 +544,12 @@ def main():
     print(f"  feature dim / point: Lf*n_sensors = {Lf}*10 = {Lf*10}")
     print(f"  snr / rep          : {args.snr} / {args.rep}")
     print(f"  master seed        : {args.master_seed}")
+    print(f"  traj method        : {method}")
+    if distinct_trajectories:
+        print(f"  trajectory mode    : DISTINCT (own trajectories per set; "
+              f"seed offset {traj_seed_offset})")
+    else:
+        print(f"  trajectory mode    : SHARED (one ensemble reused across sets)")
     print(f"  out dir            : {args.out_dir}")
     print("=" * 64)
 
@@ -490,6 +563,9 @@ def main():
         master_seed=args.master_seed,
         start_set=start_set,
         end_set=end_set,
+        distinct_trajectories=distinct_trajectories,
+        traj_seed_offset=traj_seed_offset,
+        traj_config=traj_config,
     )
 
 
