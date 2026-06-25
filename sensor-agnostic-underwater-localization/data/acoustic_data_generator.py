@@ -315,6 +315,8 @@ class channel():
         len_min = float(cfg['seg_len_min'])
         len_max = float(cfg['seg_len_max'])
         tension = float(cfg['tension'])
+        start_r_min = float(cfg['start_radius_min'])
+        start_r_max = float(cfg['start_radius_max'])
 
         def hermite_segment(P0, M0, P1, M1, u):
             """Evaluate a cubic Hermite segment at local params u in [0, 1]."""
@@ -343,8 +345,13 @@ class channel():
             dirs = np.stack([np.cos(thetas), np.sin(thetas)], axis=1)  # (n_knots, 2)
 
             # --- waypoints: step along the knot directions ---
+            # Start point sampled like the spiral's first point: random angle at
+            # a radius in [start_radius_min, start_radius_max] (not the origin).
+            start_r = np.random.uniform(start_r_min, start_r_max)
+            start_a = 2 * np.pi * np.random.rand()
             seg_len = np.random.uniform(len_min, len_max, size=K)
             P = np.zeros((n_knots, 2))
+            P[0] = [start_r * np.cos(start_a), start_r * np.sin(start_a)]
             for k in range(K):
                 P[k + 1] = P[k] + seg_len[k] * dirs[k]
 
