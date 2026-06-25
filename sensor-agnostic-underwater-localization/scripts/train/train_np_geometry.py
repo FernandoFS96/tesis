@@ -37,7 +37,10 @@ USAGE
 
     python train_np_geometry.py --model anp \
         --data-dir ../../data/data_random_positions/processed/geometry_split \
-        --out-dir  ../runs/anp_baseline --epochs 500
+        --out-dir  ../runs/anp_baseline \
+        --normalize-y \
+        --ctx-sample-mode first \
+        --epochs 500 
 
     python train_np_geometry.py --model ranp \
         --data-dir ../../data/data_random_positions/processed/geometry_split \
@@ -87,6 +90,18 @@ def is_latent(name):
 
 
 # --------------------------------------------------------------------------- #
+# Y normalization helpers
+# --------------------------------------------------------------------------- #
+def compute_y_stats(dataset):
+    """Per-dimension mean and std of y across the whole training set."""
+    ys = np.concatenate(
+        [np.asarray(s["y"], dtype=np.float32) for s in dataset.samples], axis=0
+    )
+    return (t.tensor(ys.mean(axis=0), dtype=t.float32),
+            t.tensor(ys.std(axis=0) + 1e-6, dtype=t.float32))
+
+
+# --------------------------------------------------------------------------- #
 # Dataset (one item = one trajectory) + collate producing BOTH conventions
 # --------------------------------------------------------------------------- #
 class TrajectoryDataset(Dataset):
@@ -107,11 +122,13 @@ class TrajectoryDataset(Dataset):
         return X, y, int(s.get("geometry_id", -1)), float(s.get("theta", -1.0))
 
 
-def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None):
+def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None, ctx_sample_mode="random"):
     """Builds a batch carrying BOTH calling conventions:
        - context_x/context_y/target_x/target_y  (for cnp/anp)
        - x_seq + context_indices/target_indices (for ranp)
-       Targets are ALL points; context is a random subset (or fixed count)."""
+       Targets are ALL points; context is a subset determined by ctx_sample_mode.
+       ctx_sample_mode='first'  -> take the first n_ctx points (ordered prefix)
+       ctx_sample_mode='random' -> random permutation (original behaviour)"""
     rng = np.random.default_rng(seed)
 
     def collate(batch):
@@ -122,7 +139,10 @@ def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None):
         B, ppt, _ = Xs.shape
         n_ctx = int(fixed_ctx) if fixed_ctx is not None else int(rng.integers(ctx_min, ctx_max + 1))
         n_ctx = max(1, min(n_ctx, ppt))
-        ctx_idx = t.as_tensor(np.sort(rng.permutation(ppt)[:n_ctx]), dtype=t.long)
+        if ctx_sample_mode == "first":
+            ctx_idx = t.arange(n_ctx, dtype=t.long)
+        else:
+            ctx_idx = t.as_tensor(np.sort(rng.permutation(ppt)[:n_ctx]), dtype=t.long)
         tgt_idx = t.arange(ppt, dtype=t.long)   # predict all points
         return {
             "x_seq": Xs, "y_full": ys,
@@ -154,13 +174,22 @@ def model_forward(model, conv, batch, device, beta, with_target_y=True):
 # --------------------------------------------------------------------------- #
 # Epoch loop
 # --------------------------------------------------------------------------- #
-def run_epoch(model, conv, loader, device, beta, optimizer=None, desc=""):
+def run_epoch(model, conv, loader, device, beta, optimizer=None, desc="",
+              y_mean=None, y_std=None):
+    """y_mean / y_std: if not None, y is normalized before the forward pass and
+    denormalized before MAE computation so the metric stays in physical units."""
     train = optimizer is not None
     model.train(train)
     tot_loss = tot_nll = tot_mae = 0.0; n = 0
+    ym = y_mean.to(device) if y_mean is not None else None
+    ys = y_std.to(device)  if y_std  is not None else None
     bar = tqdm(loader, desc=desc, leave=False)
     for batch in bar:
-        ty = batch["target_y"].to(device)
+        ty_raw = batch["target_y"].to(device)   # physical units, for MAE
+        if ym is not None:
+            batch = {**batch,
+                     "context_y": (batch["context_y"].to(device) - ym) / ys,
+                     "target_y":  (batch["target_y"].to(device)  - ym) / ys}
         with t.set_grad_enabled(train):
             mean, var, loss, kl, nll = model_forward(model, conv, batch, device,
                                                      beta, with_target_y=True)
@@ -169,11 +198,12 @@ def run_epoch(model, conv, loader, device, beta, optimizer=None, desc=""):
                 loss.backward()
                 t.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
                 optimizer.step()
-        b = ty.size(0)
+        b = ty_raw.size(0)
         tot_loss += loss.item() * b
         tot_nll += nll.item() * b
         with t.no_grad():
-            dist = t.sqrt(((mean - ty) ** 2).sum(-1) + 1e-12)
+            mean_phys = mean * ys + ym if ym is not None else mean
+            dist = t.sqrt(((mean_phys - ty_raw) ** 2).sum(-1) + 1e-12)
             mae = dist.mean().item()
             tot_mae += mae * b
         n += b
@@ -201,6 +231,10 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", default="cuda" if t.cuda.is_available() else "cpu")
     ap.add_argument("--num-workers", type=int, default=1)
+    ap.add_argument("--normalize-y", action="store_true",
+                    help="Normalize targets to zero-mean/unit-std (stats from train set)")
+    ap.add_argument("--ctx-sample-mode", default="random", choices=["first", "random"],
+                    help="'first': ordered prefix context; 'random': random subset (default)")
     args = ap.parse_args()
 
     t.manual_seed(args.seed); np.random.seed(args.seed)
@@ -212,15 +246,22 @@ def main():
     print(f"[{args.model}] feat_dim={feat_dim} out_dim={out_dim} ppt={ppt} "
           f"| train={len(train_ds)} val={len(val_ds)}")
 
+    y_mean = y_std = None
+    if args.normalize_y:
+        y_mean, y_std = compute_y_stats(train_ds)
+        print(f"[{args.model}] y_mean={y_mean.numpy()}  y_std={y_std.numpy()}")
+
     train_loader = DataLoader(
         train_ds, batch_size=args.batch_size, shuffle=True,
         num_workers=args.num_workers, drop_last=True,
-        collate_fn=make_collate(args.ctx_min, args.ctx_max, seed=args.seed))
+        collate_fn=make_collate(args.ctx_min, args.ctx_max, seed=args.seed,
+                                ctx_sample_mode=args.ctx_sample_mode))
     val_loader = DataLoader(
         val_ds, batch_size=args.batch_size, shuffle=False,
         num_workers=args.num_workers,
         collate_fn=make_collate(args.ctx_min, args.ctx_max,
-                                fixed_ctx=args.val_ctx, seed=args.seed + 1))
+                                fixed_ctx=args.val_ctx, seed=args.seed + 1,
+                                ctx_sample_mode=args.ctx_sample_mode))
 
     device = t.device(args.device)
     model, conv = build_model(args.model, args.num_hidden, feat_dim, out_dim,
@@ -249,9 +290,9 @@ def main():
     for ep in epoch_bar:
         t0 = time.time()
         tr = run_epoch(model, conv, train_loader, device, beta, opt,
-                       desc=f"ep{ep} train")
+                       desc=f"ep{ep} train", y_mean=y_mean, y_std=y_std)
         va = run_epoch(model, conv, val_loader, device, beta, None,
-                       desc=f"ep{ep} val")
+                       desc=f"ep{ep} val", y_mean=y_mean, y_std=y_std)
         sched.step()
         dt = time.time() - t0
         lr_now = opt.param_groups[0]["lr"]
@@ -264,11 +305,13 @@ def main():
             best_val = va[0]
             t.save({"model": model.state_dict(), "config": vars(args),
                     "model_name": args.model, "convention": conv,
-                    "feat_dim": feat_dim, "out_dim": out_dim, "epoch": ep},
+                    "feat_dim": feat_dim, "out_dim": out_dim, "epoch": ep,
+                    "y_mean": y_mean, "y_std": y_std},
                    os.path.join(args.out_dir, "best.pt"))
     t.save({"model": model.state_dict(), "config": vars(args),
             "model_name": args.model, "convention": conv,
-            "feat_dim": feat_dim, "out_dim": out_dim, "epoch": args.epochs},
+            "feat_dim": feat_dim, "out_dim": out_dim, "epoch": args.epochs,
+            "y_mean": y_mean, "y_std": y_std},
            os.path.join(args.out_dir, "last.pt"))
     print(f"[{args.model}] done. best val loss={best_val:.4f} -> {args.out_dir}/best.pt")
 

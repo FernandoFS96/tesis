@@ -123,32 +123,45 @@ def forward_one(model, conv, X, y, idx, device, shuffle_temporal=False, perm=Non
 
 @t.no_grad()
 def per_geometry_mae(model, conv, ds, device, eval_ctx, n_draws, seed=0,
-                     shuffle_temporal=False):
+                     shuffle_temporal=False, y_mean=None, y_std=None,
+                     ctx_sample_mode="random"):
     rng = np.random.default_rng(seed)
     err_sum = defaultdict(float); err_cnt = defaultdict(int)
     model.eval()
+    ym = y_mean.to(device) if y_mean is not None else None
+    ys = y_std.to(device)  if y_std  is not None else None
     for _ in range(n_draws):
         for i in range(len(ds)):
             X, y, gid, th = ds[i]
             X = X.unsqueeze(0).to(device); y = y.unsqueeze(0).to(device)
+            y_raw = y
             ppt = X.size(1)
             n_ctx = max(1, min(eval_ctx, ppt))
-            idx = t.as_tensor(np.sort(rng.permutation(ppt)[:n_ctx]),
-                              device=device, dtype=t.long)
-            mean, var, *_ = forward_one(model, conv, X, y, idx, device,
+            if ctx_sample_mode == "first":
+                idx = t.arange(n_ctx, device=device, dtype=t.long)
+            else:
+                idx = t.as_tensor(np.sort(rng.permutation(ppt)[:n_ctx]),
+                                  device=device, dtype=t.long)
+            y_in = (y - ym) / ys if ym is not None else y
+            mean, var, *_ = forward_one(model, conv, X, y_in, idx, device,
                                         shuffle_temporal=shuffle_temporal)
-            dist = t.sqrt(((mean - y) ** 2).sum(-1) + 1e-12)
+            if ym is not None:
+                mean = mean * ys + ym
+            dist = t.sqrt(((mean - y_raw) ** 2).sum(-1) + 1e-12)
             err_sum[gid] += float(dist.sum()); err_cnt[gid] += dist.numel()
     return {g: err_sum[g] / err_cnt[g] for g in err_sum}
 
 
 def pool_means(model, conv, pools, labels, device, eval_ctx, n_draws,
-               shuffle_temporal=False):
+               shuffle_temporal=False, y_mean=None, y_std=None,
+               ctx_sample_mode="random"):
     """Returns {pool: mean_mae} and per-geometry rows for one context size."""
     pm = {}; rows = []
     for nm, ds in pools.items():
         gmae = per_geometry_mae(model, conv, ds, device, eval_ctx, n_draws,
-                                shuffle_temporal=shuffle_temporal)
+                                shuffle_temporal=shuffle_temporal,
+                                y_mean=y_mean, y_std=y_std,
+                                ctx_sample_mode=ctx_sample_mode)
         pm[nm] = float(np.mean(list(gmae.values())))
         for gid, m in sorted(gmae.items()):
             region = labels.get(gid, {}).get("region", "train")
@@ -172,6 +185,9 @@ def main():
     ap.add_argument("--shuffle-temporal", action="store_true",
                     help="permute trajectory point order at eval (diagnostic: "
                          "recurrent models collapse, acoustic models are invariant).")
+    ap.add_argument("--ctx-sample-mode", default=None, choices=["first", "random"],
+                    help="context sampling mode. If omitted, reads from checkpoint "
+                         "config (falls back to 'random' for old checkpoints).")
     ap.add_argument("--device", default="cuda" if t.cuda.is_available() else "cpu")
     args = ap.parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
@@ -194,6 +210,13 @@ def main():
     conv = conv or conv2
     model = model.to(device); model.load_state_dict(ck["model"])
 
+    # normalization stats: auto-loaded from checkpoint (None for old checkpoints)
+    y_mean = ck.get("y_mean")
+    y_std  = ck.get("y_std")
+
+    # context sampling mode: CLI flag overrides checkpoint config
+    ctx_sample_mode = args.ctx_sample_mode or cfg.get("ctx_sample_mode", "random")
+
     pools = {}
     for nm in ["train", "val", "test"]:
         pth = os.path.join(args.data_dir, f"{nm}_data.pkl")
@@ -209,7 +232,9 @@ def main():
         for c in tqdm(ctx_sizes, desc=f"{name} ctx-sweep"):
             pm, _ = pool_means(model, conv, pools, labels, device, c,
                                args.n_context_draws,
-                               shuffle_temporal=args.shuffle_temporal)
+                               shuffle_temporal=args.shuffle_temporal,
+                               y_mean=y_mean, y_std=y_std,
+                               ctx_sample_mode=ctx_sample_mode)
             row = {"model": name, "eval_ctx": c,
                    "train": pm.get("train", float("nan")),
                    "val": pm.get("val", float("nan")),
@@ -248,14 +273,18 @@ def main():
     line("=" * 64)
     line(f"checkpoint: {args.ckpt}  (epoch {ck.get('epoch','?')}, conv={conv})")
     line(f"eval context size: {args.eval_ctx}  draws: {args.n_context_draws}"
-         f"  shuffle_temporal={args.shuffle_temporal}")
+         f"  shuffle_temporal={args.shuffle_temporal}"
+         f"  ctx_sample_mode={ctx_sample_mode}"
+         f"  normalize_y={y_mean is not None}")
     line("")
 
     pool_mae = {}; geo_rows = []
     for nm, ds in pools.items():
         gmae = per_geometry_mae(model, conv, ds, device, args.eval_ctx,
                                 args.n_context_draws,
-                                shuffle_temporal=args.shuffle_temporal)
+                                shuffle_temporal=args.shuffle_temporal,
+                                y_mean=y_mean, y_std=y_std,
+                                ctx_sample_mode=ctx_sample_mode)
         pool_mae[nm] = float(np.mean(list(gmae.values())))
         for gid, m in sorted(gmae.items()):
             region = labels.get(gid, {}).get("region", "train")

@@ -17,6 +17,8 @@
   "seed": 0,
   "device": "cuda",
   "num_workers": 1,
+  "normalize_y": true,
+  "ctx_sample_mode": "first",
   "feat_dim": 1010,
   "out_dim": 3,
   "ppt": 50,
