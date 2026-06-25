@@ -1,0 +1,3 @@
+# Attentive latent NP (posterior + KL) -> anp.LatentModel
+name: anp
+num_hidden: 128

@@ -1,0 +1,3 @@
+# Attentive CNP (deterministic, no latent, no RNN) -> anp.DeterministicModel
+name: cnp
+num_hidden: 128
