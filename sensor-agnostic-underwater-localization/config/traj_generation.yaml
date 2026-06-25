@@ -12,7 +12,7 @@
 #      `channel` class (see data/acoustic_data_generator.py).
 # =============================================================================
 
-# Which trajectory-generation method to use ('spiral', ...).
+# Which trajectory-generation method to use ('spiral', 'hermite', ...).
 method: spiral
 
 # -----------------------------------------------------------------------------
@@ -27,3 +27,20 @@ spiral:
   angle_span: 1.4     # aux_1 spans [0, angle_span * ppt]
   radius_start: 0.2   # aux_2 spans [radius_start * ppt, radius_end * ppt]
   radius_end: 1.4
+
+# -----------------------------------------------------------------------------
+# Parameters for the "hermite" method (free-tangent piecewise-cubic Hermite).
+#
+# Each trajectory is n_segments cubic Hermite pieces joined with C1 continuity
+# (matched position and tangent at every knot). Knot tangent directions form a
+# slowly-turning sequence: the first is uniform over all directions, each later
+# one turns by at most `max_turn` radians, keeping consecutive tangents close
+# (small cosine distance -> no sudden turn-arounds). Segment length controls
+# speed, so speed varies along the trajectory (as it does for the spiral).
+# -----------------------------------------------------------------------------
+hermite:
+  n_segments: 3       # number of Hermite segments (-> n_segments + 1 knots)
+  seg_len_min: 150.0  # min segment chord length [m]
+  seg_len_max: 300.0  # max segment chord length [m]
+  max_turn: 0.7854    # max heading change between consecutive knots [rad] (~45 deg)
+  tension: 1.0        # scales knot tangent magnitude (curve tightness)

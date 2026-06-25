@@ -244,6 +244,8 @@ class channel():
         method = self.traj_config['method']
         if method == 'spiral':
             return self._generate_spiral_trajectories()
+        elif method == 'hermite':
+            return self._generate_hermite_trajectories()
         else:
             raise ValueError(f"Unknown trajectory generation method: {method}")
 
@@ -271,6 +273,93 @@ class channel():
                 omega0[it] / ppt * aux_1 + fase0[it])
             traj[1, it, :] = radio_t[it] / ppt * aux_2 * np.sin(
                 omega0[it] / ppt * aux_1 + fase0[it])
+            traj[2, it, :] = 0
+
+        return traj
+
+    def _generate_hermite_trajectories(self):
+        """Free-tangent piecewise-cubic Hermite trajectories.
+
+        Each trajectory is built from ``n_segments`` cubic Hermite segments
+        joined with C1 continuity (matched position *and* tangent at every
+        knot, so the path is smooth in xy). Parameters are read from the
+        ``hermite`` block of config/traj_generation.yaml.
+
+        Design notes
+        ------------
+        * The knot tangent *directions* form a slowly-turning sequence: the
+          first is uniform over all directions, and each subsequent one differs
+          from the previous by at most ``max_turn`` radians. This keeps the
+          cosine distance between consecutive tangents small -- no sudden
+          turn-arounds -- while still allowing the path to wander.
+        * Waypoints step along those same directions, so each segment leaves a
+          knot in its tangent direction (no cusps / overshoot).
+        * Tangent magnitudes are tied to the adjacent segment lengths
+          (Catmull-Rom-style tension scaling), so segment length controls speed
+          and the curve stays well-shaped. Speed therefore varies along the
+          trajectory, as it already does for the spiral.
+
+        Why this suits the context task: the first few points lie on the first
+        segment and reveal roughly the first knot/tangent, but the later
+        waypoints are sampled independently and stay hidden -- so the first 5
+        context points do not determine the rest of the trajectory.
+        """
+        assert self.params is not None, "params must be initialized"
+        n_traj = self.params['n_traj']
+        ppt = self.params['ppt']
+        cfg = self.traj_config['hermite']
+
+        K = int(cfg['n_segments'])          # number of segments
+        n_knots = K + 1                     # waypoints / knots
+        max_turn = float(cfg['max_turn'])
+        len_min = float(cfg['seg_len_min'])
+        len_max = float(cfg['seg_len_max'])
+        tension = float(cfg['tension'])
+
+        def hermite_segment(P0, M0, P1, M1, u):
+            """Evaluate a cubic Hermite segment at local params u in [0, 1]."""
+            u2 = u * u
+            u3 = u2 * u
+            h00 = 2 * u3 - 3 * u2 + 1
+            h10 = u3 - 2 * u2 + u
+            h01 = -2 * u3 + 3 * u2
+            h11 = u3 - u2
+            return (h00[:, None] * P0 + h10[:, None] * M0
+                    + h01[:, None] * P1 + h11[:, None] * M1)
+
+        traj = np.zeros([3, n_traj, ppt + 1])
+
+        # Knot times 0, 1, ..., K and the global sampling parameter in [0, K].
+        t_samples = np.linspace(0.0, K, ppt + 1)
+        seg_idx = np.clip(np.floor(t_samples).astype(int), 0, K - 1)
+        u_local = t_samples - seg_idx       # local param within each segment
+
+        for it in range(n_traj):
+            # --- slowly-turning knot tangent directions ---
+            thetas = np.empty(n_knots)
+            thetas[0] = 2 * np.pi * np.random.rand()            # first: any direction
+            thetas[1:] = np.random.uniform(-max_turn, max_turn, size=K)
+            thetas = np.cumsum(thetas)                          # bounded random walk
+            dirs = np.stack([np.cos(thetas), np.sin(thetas)], axis=1)  # (n_knots, 2)
+
+            # --- waypoints: step along the knot directions ---
+            seg_len = np.random.uniform(len_min, len_max, size=K)
+            P = np.zeros((n_knots, 2))
+            for k in range(K):
+                P[k + 1] = P[k] + seg_len[k] * dirs[k]
+
+            # --- knot tangent magnitudes (tension-scaled by adjacent lengths) ---
+            mag = np.empty(n_knots)
+            mag[0] = seg_len[0]
+            mag[-1] = seg_len[-1]
+            mag[1:-1] = 0.5 * (seg_len[:-1] + seg_len[1:])
+            M = tension * mag[:, None] * dirs                   # (n_knots, 2)
+
+            # --- evaluate the piecewise-Hermite curve ---
+            xy = hermite_segment(P[seg_idx], M[seg_idx],
+                                 P[seg_idx + 1], M[seg_idx + 1], u_local)
+            traj[0, it, :] = xy[:, 0]
+            traj[1, it, :] = xy[:, 1]
             traj[2, it, :] = 0
 
         return traj
