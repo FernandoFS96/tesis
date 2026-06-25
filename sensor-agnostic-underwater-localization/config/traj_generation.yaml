@@ -1,0 +1,52 @@
+# =============================================================================
+# Trajectory-generation config.
+#
+# This is used during DATA GENERATION (data/acoustic_data_generator.py), NOT
+# during training. It is therefore loaded directly via OmegaConf -- there is
+# deliberately no Hydra setup here.
+#
+# `method` selects which trajectory-generation routine is used. Each method has
+# its own parameter block below. To add a new method:
+#   1. add a parameter block here, and
+#   2. add a matching `_generate_<method>_trajectories` submethod in the
+#      `channel` class (see data/acoustic_data_generator.py).
+# =============================================================================
+
+# Which trajectory-generation method to use ('spiral', 'hermite', ...).
+method: spiral
+
+# -----------------------------------------------------------------------------
+# Parameters for the "spiral" method (the original outward-spiral trajectories).
+# -----------------------------------------------------------------------------
+spiral:
+  radio_min: 250.0    # min spiral radius scale [m]
+  radio_max: 350.0    # max spiral radius scale [m]
+  omega_min: 0.8      # min angular speed
+  omega_max: 2.5      # max angular speed
+  # Radial growth profile across a trajectory, expressed as multiples of ppt.
+  angle_span: 1.4     # aux_1 spans [0, angle_span * ppt]
+  radius_start: 0.2   # aux_2 spans [radius_start * ppt, radius_end * ppt]
+  radius_end: 1.4
+
+# -----------------------------------------------------------------------------
+# Parameters for the "hermite" method (free-tangent piecewise-cubic Hermite).
+#
+# Each trajectory is n_segments cubic Hermite pieces joined with C1 continuity
+# (matched position and tangent at every knot). Knot tangent directions form a
+# slowly-turning sequence: the first is uniform over all directions, each later
+# one turns by at most `max_turn` radians, keeping consecutive tangents close
+# (small cosine distance -> no sudden turn-arounds). Segment length controls
+# speed, so speed varies along the trajectory (as it does for the spiral).
+# -----------------------------------------------------------------------------
+hermite:
+  n_segments: 3       # number of Hermite segments (-> n_segments + 1 knots)
+  # Chord lengths chosen so the farthest-from-center distance matches the
+  # spiral (~420 m mean). Larger values increase both reach and per-hop speed.
+  seg_len_min: 100.0  # min segment chord length [m]
+  seg_len_max: 195.0  # max segment chord length [m]
+  max_turn: 0.7854    # max heading change between consecutive knots [rad] (~45 deg)
+  tension: 1.0        # scales knot tangent magnitude (curve tightness)
+  # First point: random angle at a radius in [start_radius_min, start_radius_max],
+  # matching the spiral's first point (radius_start * radio = 0.2 * [250, 350]).
+  start_radius_min: 50.0
+  start_radius_max: 70.0
