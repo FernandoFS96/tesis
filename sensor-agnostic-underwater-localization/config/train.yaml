@@ -16,14 +16,10 @@ defaults:
   - wandb: default
 
 # Experiment identity -- used as the wandb group name and to organise outputs.
-exp_name: np_geometry_baseline
+exp_name: np_geometry_baseline_2
 
 seed: 0
 device: auto  # 'auto' -> cuda if available else cpu; or set 'cuda' / 'cpu'
-
-# Output directory for checkpoints / logs.
-# null -> use Hydra's per-run output directory (recommended).
-out_dir: null
 
 # -----------------------------------------------------------------------------
 # Optimisation / training-loop hyperparameters
@@ -35,3 +31,17 @@ training:
   weight_decay: 1.0e-5
   beta: 1.0          # KL weight (used only by latent models: anp / ranp)
   num_workers: 1
+
+
+
+hydra:
+  run:
+    dir: ../../output/hydra/training/${now:%Y-%m-%d}/${exp_name}
+  sweep:
+    dir: ./output/hydra/training/${now:%Y-%m-%d}
+    subdir: ${exp_name}/${sub_dir_shortener:${hydra:job.override_dirname}, 3, False}/seed_${format:${seed}, '{:02d}'}
+  job:
+    config:
+      override_dirname:
+        exclude_keys:
+          - seed
