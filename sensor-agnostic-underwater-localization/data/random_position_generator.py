@@ -462,6 +462,8 @@ def main():
 
     # Inject collaboration spec (df / n_traj / ppt) into the imported physics.
     override_base_params(df=args.df, n_traj=args.n_traj, ppt=args.ppt)
+    # Suppress the hardcoded ./data/ side-effect write in channel.__init__.
+    base.channel.save_channel_info = lambda self, name: None
 
     # Report the resulting feature dimension so the user can set model input_dim.
     Lf = len(base.range_m(10000.0, 20000.0, args.df))
