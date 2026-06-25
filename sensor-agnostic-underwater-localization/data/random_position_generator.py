@@ -2,8 +2,7 @@
 data_generator_random_positions.py
 ==================================
 
-Revised acoustic-channel data generator for the *sensor-displacement* robustness
-study (collaboration with KIT-ALR).
+Revised acoustic-channel data generator for the *sensor-displacement* robustness study.
 
 WHAT THIS SCRIPT DOES
 ---------------------
@@ -21,8 +20,7 @@ for every channel-variability value ``theta`` (the ``channel_option``) the scrip
      trajectories, and crucially the sensor positions themselves (needed later
      for the spatial-encoder experiments).
 
-Compared with the original ``data_generator_topology.py`` the important changes
-are:
+Compared with the original ``acoustic_data_generator.py`` the important changes are:
 
   * Only the RANDOM topology is generated (per the collaboration plan).
   * The random sensor layout is NO LONGER hardcoded to a single seed. Each

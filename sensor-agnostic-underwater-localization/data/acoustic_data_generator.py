@@ -8,7 +8,7 @@ import argparse
 
 '''
 Use:
-    python data_generator_topology.py \
+    python acoustic_data_generator.py \
         --n_traj 150 \
         --snr 10 \
         --rep 1
