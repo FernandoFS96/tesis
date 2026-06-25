@@ -289,7 +289,7 @@ def main(cfg: DictConfig):
             tags=list(wb.tags) if wb.tags else None,
             mode="offline" if wb.offline else "online",
             job_type="dev" if wb.dev else None,
-            config=OmegaConf.to_container(cfg, resolve=True),
+            config=dict(OmegaConf.to_container(cfg, resolve=True)),  # type: ignore[arg-type]
             dir=out_dir,
         )
 
@@ -379,7 +379,7 @@ def main(cfg: DictConfig):
                     "feat_dim": feat_dim, "out_dim": out_dim, "epoch": ep,
                     "y_mean": y_mean, "y_std": y_std},
                    os.path.join(out_dir, "best.pt"))
-            if use_wandb:
+            if use_wandb and wandb.run is not None:
                 wandb.run.summary["best_val_loss"] = best_val
                 wandb.run.summary["best_epoch"] = ep
 
