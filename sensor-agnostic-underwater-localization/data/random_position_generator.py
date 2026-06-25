@@ -1,5 +1,5 @@
 """
-data_generator_random_positions.py
+random_position_generator.py
 ==================================
 
 Revised acoustic-channel data generator for the *sensor-displacement* robustness study.
@@ -76,7 +76,7 @@ Explicit / typical run::
 
     python random_position_generator.py \
         --channel_options "0.0,0.1,0.2,0.3,0.4,0.5" \
-        --n_position_sets 5 \
+        --n_position_sets 20 \
         --n_traj 100 \
         --ppt 50 \
         --df 100 \
@@ -88,7 +88,7 @@ Explicit / typical run::
 Then post-process each position-set with the existing splitter, e.g.::
 
     for p in $(seq -w 0 19); do
-        python data_process_topology.py \
+        python random_position_generator.py \
             --data-dir ./data_random_positions/position_set_$p \
             --mode separate
     done
