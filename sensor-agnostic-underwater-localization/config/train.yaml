@@ -1,0 +1,37 @@
+# =============================================================================
+# Main training config for the neural-process geometry baselines.
+#
+# Run examples:
+#   python scripts/train/train_np_geometry.py                # defaults (cnp)
+#   python scripts/train/train_np_geometry.py model=anp
+#   python scripts/train/train_np_geometry.py model=ranp training.epochs=500
+#   python scripts/train/train_np_geometry.py model=anp data.normalize_y=true \
+#       data.ctx_sample_mode=first
+#   python scripts/train/train_np_geometry.py wandb.enabled=false
+# =============================================================================
+defaults:
+  - _self_
+  - model: cnp
+  - data: geometry
+  - wandb: default
+
+# Experiment identity -- used as the wandb group name and to organise outputs.
+exp_name: np_geometry_baseline
+
+seed: 0
+device: auto  # 'auto' -> cuda if available else cpu; or set 'cuda' / 'cpu'
+
+# Output directory for checkpoints / logs.
+# null -> use Hydra's per-run output directory (recommended).
+out_dir: null
+
+# -----------------------------------------------------------------------------
+# Optimisation / training-loop hyperparameters
+# -----------------------------------------------------------------------------
+training:
+  epochs: 500
+  batch_size: 16
+  lr: 1.0e-4
+  weight_decay: 1.0e-5
+  beta: 1.0          # KL weight (used only by latent models: anp / ranp)
+  num_workers: 1

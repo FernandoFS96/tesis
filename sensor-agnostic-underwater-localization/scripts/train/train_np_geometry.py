@@ -2,65 +2,80 @@
 train_np_geometry.py
 ====================
 
-Unified trainer for the three neural-process baselines on the geometry-split data, selected with --model:
+Unified trainer for the three neural-process baselines on the geometry-split
+data, selected with the Hydra ``model`` group:
 
     cnp   -> anp.DeterministicModel      (attentive CNP, no latent, no RNN)
     anp   -> anp.LatentModel             (attentive latent NP)
     ranp  -> r_anp.LatentModel           (recurrent attentive latent NP; LSTM)
+    rcnp  -> r_anp.DeterministicModel    (bonus: recurrent CNP, indexed conv.)
 
-All three are trained as BASELINES with NO spatial encoding: 
-the model sees only the raw acoustic features, never sensor_pos. 
-They measure how much out-of-position degradation exists per architecture - the gap the spatial encoder will close.
+All baselines are trained with NO spatial encoding: the model sees only the raw
+acoustic features, never sensor_pos. They measure how much out-of-position
+degradation exists per architecture - the gap the spatial encoder will close.
 
 WHY TWO CALLING CONVENTIONS (the one thing that matters here)
 -------------------------------------------------------------
-* cnp / anp  (anp.py): forward(context_x, context_y, target_x, target_y, beta) 
-                        -- the caller pre-splits context and target into separate tensors.
+* cnp / anp  (anp.py): forward(context_x, context_y, target_x, target_y, beta)
+                        -- the caller pre-splits context and target into
+                        separate tensors.
 
-* ranp (r_anp.py): forward(x_seq, context_indices, context_y, target_indices, target_y, beta) 
-                        -- the caller passes the FULL sequence (B, T, Dx) plus integer index tensors; the model runs its internal LSTM over the whole sequence and splits by index.
+* ranp (r_anp.py): forward(x_seq, context_indices, context_y, target_indices,
+                        target_y, beta) -- the caller passes the FULL sequence
+                        (B, T, Dx) plus integer index tensors; the model runs
+                        its internal LSTM over the whole sequence and splits by
+                        index.
 
-The collate fn below produces BOTH forms; `model_forward` dispatches on the model family. 
-All three return the same 5-tuple (mean, var, loss, kl, nll), so the loss/optimization code is shared. 
-For ANP/RANP (latent models) target_y is passed during training so the posterior + KL term are active; beta controls the KL weight.
+The collate fn below produces BOTH forms; `model_forward` dispatches on the
+model family. All four return the same 5-tuple (mean, var, loss, kl, nll), so
+the loss/optimization code is shared. For ANP/RANP (latent models) target_y is
+passed during training so the posterior + KL term are active; beta controls the
+KL weight.
 
 DATA CONTRACT (data_process_random_positions.py, mode=geometry)
 ---------------------------------------------------------------
 <processed>/geometry_split/{train,val,test}_data.pkl  -> list of dicts:
-    {"X":(ppt,1010), "y":(ppt,3), "sensor_pos":(10,3), "geometry_id":int, "theta":float}
+    {"X":(ppt,1010), "y":(ppt,3), "sensor_pos":(10,3), "geometry_id":int,
+     "theta":float}
 
-USAGE
------
-    python train_np_geometry.py --model cnp \
-        --data-dir ../../data/data_random_positions/processed/geometry_split \
-        --out-dir  ../runs/cnp_baseline --epochs 200
+CONFIGURATION (Hydra)
+---------------------
+All hyperparameters live in ``config/`` and are composed by Hydra. Override
+anything from the command line, e.g.:
 
-    python train_np_geometry.py --model anp \
-        --data-dir ../../data/data_random_positions/processed/geometry_split \
-        --out-dir  ../runs/anp_baseline \
-        --normalize-y \
-        --ctx-sample-mode first \
-        --epochs 500 
+    python train_np_geometry.py model=cnp
+    python train_np_geometry.py model=anp data.normalize_y=true \
+        data.ctx_sample_mode=first training.epochs=500
+    python train_np_geometry.py model=ranp wandb.enabled=false
 
-    python train_np_geometry.py --model ranp \
-        --data-dir ../../data/data_random_positions/processed/geometry_split \
-        --out-dir ../runs/ranp_baseline --epochs 500
-
-Outputs to --out-dir: best.pt, last.pt, train_log.csv, config.json
+Outputs (to the Hydra run dir, or ``out_dir`` if set):
+    best.pt, last.pt, train_log.csv, config.yaml
 """
 
-import os, sys, json, pickle, argparse, time
+import os
+import sys
+import pickle
+import time
+
 import numpy as np
 import torch as t
 from torch.utils.data import Dataset, DataLoader
-
 from tqdm import tqdm
 
+import hydra
+from omegaconf import DictConfig, OmegaConf
+from hydra.core.hydra_config import HydraConfig
+
+import wandb
+
 # --- model imports: support both ../src/models and a local copy -------------
-# Add the repo root (parent of src/) so that `from src.models.anp import ...` works.
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-import src.models.anp as anp_mod  # type: ignore
-import src.models.r_anp as ranp_mod  # type: ignore
+# Add the repo root (parent of src/) so that `from src.models.anp import ...`
+# works regardless of the (Hydra-changed) current working directory.
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+sys.path.insert(0, _PROJECT_ROOT)
+import src.models.anp as anp_mod  # type: ignore  # noqa: E402
+import src.models.r_anp as ranp_mod  # type: ignore  # noqa: E402
+
 
 # --------------------------------------------------------------------------- #
 # Model factory
@@ -211,82 +226,127 @@ def run_epoch(model, conv, loader, device, beta, optimizer=None, desc="",
     return tot_loss / n, tot_nll / n, tot_mae / n
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--model", required=True, choices=["cnp", "anp", "ranp", "rcnp"])
-    ap.add_argument("--data-dir", required=True)
-    ap.add_argument("--out-dir", required=True)
-    ap.add_argument("--epochs", type=int, default=500)
-    ap.add_argument("--batch-size", type=int, default=16)
-    ap.add_argument("--num-hidden", type=int, default=128)
-    ap.add_argument("--lr", type=float, default=1e-4)
-    ap.add_argument("--ctx-min", type=int, default=5)
-    ap.add_argument("--ctx-max", type=int, default=40)
-    ap.add_argument("--val-ctx", type=int, default=20)
-    ap.add_argument("--weight-decay", type=float, default=1e-5)
-    ap.add_argument("--beta", type=float, default=1.0, help="KL weight (anp/ranp)")
-    ap.add_argument("--rnn-type", default="lstm", choices=["lstm", "gru"])
-    ap.add_argument("--rnn-layers", type=int, default=1)
-    ap.add_argument("--rnn-dropout", type=float, default=0.0)
-    ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--device", default="cuda" if t.cuda.is_available() else "cpu")
-    ap.add_argument("--num-workers", type=int, default=1)
-    ap.add_argument("--normalize-y", action="store_true",
-                    help="Normalize targets to zero-mean/unit-std (stats from train set)")
-    ap.add_argument("--ctx-sample-mode", default="random", choices=["first", "random"],
-                    help="'first': ordered prefix context; 'random': random subset (default)")
-    args = ap.parse_args()
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
+def resolve_device(device_cfg):
+    if device_cfg in (None, "auto"):
+        return "cuda" if t.cuda.is_available() else "cpu"
+    return device_cfg
 
-    t.manual_seed(args.seed); np.random.seed(args.seed)
-    os.makedirs(args.out_dir, exist_ok=True)
 
-    train_ds = TrajectoryDataset(os.path.join(args.data_dir, "train_data.pkl"))
-    val_ds = TrajectoryDataset(os.path.join(args.data_dir, "val_data.pkl"))
+def flat_ckpt_config(cfg, device):
+    """A flat dict stored in the checkpoint so eval_np_geometry.py can read
+    num_hidden / rnn_* / ctx_sample_mode etc. via simple ``.get`` calls."""
+    m = cfg.model
+    return {
+        "model": m.name,
+        "num_hidden": m.num_hidden,
+        "rnn_type": m.get("rnn_type", "lstm"),
+        "rnn_layers": m.get("rnn_layers", 1),
+        "rnn_dropout": m.get("rnn_dropout", 0.0),
+        "data_dir": cfg.data.data_dir,
+        "normalize_y": cfg.data.normalize_y,
+        "ctx_min": cfg.data.ctx_min,
+        "ctx_max": cfg.data.ctx_max,
+        "val_ctx": cfg.data.val_ctx,
+        "ctx_sample_mode": cfg.data.ctx_sample_mode,
+        "epochs": cfg.training.epochs,
+        "batch_size": cfg.training.batch_size,
+        "lr": cfg.training.lr,
+        "weight_decay": cfg.training.weight_decay,
+        "beta": cfg.training.beta,
+        "seed": cfg.seed,
+        "device": device,
+        "exp_name": cfg.exp_name,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Main (Hydra entry point)
+# --------------------------------------------------------------------------- #
+@hydra.main(version_base=None, config_path="../../config", config_name="train")
+def main(cfg: DictConfig):
+    model_name = cfg.model.name
+    seed = cfg.seed
+    t.manual_seed(seed); np.random.seed(seed)
+
+    # Output directory: explicit out_dir, otherwise Hydra's per-run dir.
+    out_dir = cfg.out_dir or HydraConfig.get().runtime.output_dir
+    os.makedirs(out_dir, exist_ok=True)
+
+    device = t.device(resolve_device(cfg.device))
+
+    # ---- wandb -------------------------------------------------------------
+    wb = cfg.wandb
+    use_wandb = bool(wb.enabled)
+    if use_wandb:
+        wandb.init(
+            project=wb.project_name,
+            entity=wb.entity,
+            group=wb.group_name,
+            name=wb.run_name,
+            tags=list(wb.tags) if wb.tags else None,
+            mode="offline" if wb.offline else "online",
+            job_type="dev" if wb.dev else None,
+            config=OmegaConf.to_container(cfg, resolve=True),
+            dir=out_dir,
+        )
+
+    # ---- data --------------------------------------------------------------
+    data_dir = cfg.data.data_dir
+    train_ds = TrajectoryDataset(os.path.join(data_dir, "train_data.pkl"))
+    val_ds = TrajectoryDataset(os.path.join(data_dir, "val_data.pkl"))
     feat_dim, out_dim, ppt = train_ds.feat_dim, train_ds.out_dim, train_ds.ppt
-    print(f"[{args.model}] feat_dim={feat_dim} out_dim={out_dim} ppt={ppt} "
+    print(f"[{model_name}] feat_dim={feat_dim} out_dim={out_dim} ppt={ppt} "
           f"| train={len(train_ds)} val={len(val_ds)}")
 
     y_mean = y_std = None
-    if args.normalize_y:
+    if cfg.data.normalize_y:
         y_mean, y_std = compute_y_stats(train_ds)
-        print(f"[{args.model}] y_mean={y_mean.numpy()}  y_std={y_std.numpy()}")
+        print(f"[{model_name}] y_mean={y_mean.numpy()}  y_std={y_std.numpy()}")
 
     train_loader = DataLoader(
-        train_ds, batch_size=args.batch_size, shuffle=True,
-        num_workers=args.num_workers, drop_last=True,
-        collate_fn=make_collate(args.ctx_min, args.ctx_max, seed=args.seed,
-                                ctx_sample_mode=args.ctx_sample_mode))
+        train_ds, batch_size=cfg.training.batch_size, shuffle=True,
+        num_workers=cfg.training.num_workers, drop_last=True,
+        collate_fn=make_collate(cfg.data.ctx_min, cfg.data.ctx_max, seed=seed,
+                                ctx_sample_mode=cfg.data.ctx_sample_mode))
     val_loader = DataLoader(
-        val_ds, batch_size=args.batch_size, shuffle=False,
-        num_workers=args.num_workers,
-        collate_fn=make_collate(args.ctx_min, args.ctx_max,
-                                fixed_ctx=args.val_ctx, seed=args.seed + 1,
-                                ctx_sample_mode=args.ctx_sample_mode))
+        val_ds, batch_size=cfg.training.batch_size, shuffle=False,
+        num_workers=cfg.training.num_workers,
+        collate_fn=make_collate(cfg.data.ctx_min, cfg.data.ctx_max,
+                                fixed_ctx=cfg.data.val_ctx, seed=seed + 1,
+                                ctx_sample_mode=cfg.data.ctx_sample_mode))
 
-    device = t.device(args.device)
-    model, conv = build_model(args.model, args.num_hidden, feat_dim, out_dim,
-                              rnn_type=args.rnn_type, rnn_layers=args.rnn_layers,
-                              rnn_dropout=args.rnn_dropout)
+    # ---- model -------------------------------------------------------------
+    model, conv = build_model(
+        model_name, cfg.model.num_hidden, feat_dim, out_dim,
+        rnn_type=cfg.model.get("rnn_type", "lstm"),
+        rnn_layers=cfg.model.get("rnn_layers", 1),
+        rnn_dropout=cfg.model.get("rnn_dropout", 0.0))
     model = model.to(device)
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"[{args.model}] convention={conv}  params={n_params/1e6:.2f}M  device={device}")
+    print(f"[{model_name}] convention={conv}  params={n_params/1e6:.2f}M  device={device}")
 
-    opt = t.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    sched = t.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs)
+    opt = t.optim.AdamW(model.parameters(), lr=cfg.training.lr,
+                        weight_decay=cfg.training.weight_decay)
+    sched = t.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=cfg.training.epochs)
 
-    with open(os.path.join(args.out_dir, "config.json"), "w") as f:
-        json.dump({**vars(args), "feat_dim": feat_dim, "out_dim": out_dim,
-                   "ppt": ppt, "n_params": n_params, "convention": conv}, f, indent=2)
+    # Resolved config snapshot for reproducibility.
+    with open(os.path.join(out_dir, "config.yaml"), "w") as f:
+        OmegaConf.save(config=cfg, f=f)
 
-    log_path = os.path.join(args.out_dir, "train_log.csv")
+    log_path = os.path.join(out_dir, "train_log.csv")
     with open(log_path, "w") as f:
         f.write("epoch,train_loss,train_nll,train_mae,val_loss,val_nll,val_mae,lr,sec\n")
 
     # latent models use beta; deterministic ignore it (no KL)
-    beta = args.beta if is_latent(args.model) else 0.0
+    beta = cfg.training.beta if is_latent(model_name) else 0.0
+
+    ckpt_cfg = flat_ckpt_config(cfg, str(device))
 
     best_val = float("inf")
-    epoch_bar = tqdm(range(1, args.epochs + 1), desc=f"{args.model} epochs")
+    epoch_bar = tqdm(range(1, cfg.training.epochs + 1), desc=f"{model_name} epochs")
     for ep in epoch_bar:
         t0 = time.time()
         tr = run_epoch(model, conv, train_loader, device, beta, opt,
@@ -301,19 +361,35 @@ def main():
                     f"{va[0]:.6f},{va[1]:.6f},{va[2]:.6f},{lr_now:.2e},{dt:.1f}\n")
         epoch_bar.set_postfix(tr_mae=f"{tr[2]:.2f}", va_mae=f"{va[2]:.2f}",
                               va_loss=f"{va[0]:.3f}")
+
+        if use_wandb:
+            wandb.log({
+                "epoch": ep,
+                "train/loss": tr[0], "train/nll": tr[1], "train/mae": tr[2],
+                "val/loss": va[0], "val/nll": va[1], "val/mae": va[2],
+                "lr": lr_now, "epoch_time_sec": dt,
+            }, step=ep)
+
         if va[0] < best_val:
             best_val = va[0]
-            t.save({"model": model.state_dict(), "config": vars(args),
-                    "model_name": args.model, "convention": conv,
+            t.save({"model": model.state_dict(), "config": ckpt_cfg,
+                    "model_name": model_name, "convention": conv,
                     "feat_dim": feat_dim, "out_dim": out_dim, "epoch": ep,
                     "y_mean": y_mean, "y_std": y_std},
-                   os.path.join(args.out_dir, "best.pt"))
-    t.save({"model": model.state_dict(), "config": vars(args),
-            "model_name": args.model, "convention": conv,
-            "feat_dim": feat_dim, "out_dim": out_dim, "epoch": args.epochs,
+                   os.path.join(out_dir, "best.pt"))
+            if use_wandb:
+                wandb.run.summary["best_val_loss"] = best_val
+                wandb.run.summary["best_epoch"] = ep
+
+    t.save({"model": model.state_dict(), "config": ckpt_cfg,
+            "model_name": model_name, "convention": conv,
+            "feat_dim": feat_dim, "out_dim": out_dim, "epoch": cfg.training.epochs,
             "y_mean": y_mean, "y_std": y_std},
-           os.path.join(args.out_dir, "last.pt"))
-    print(f"[{args.model}] done. best val loss={best_val:.4f} -> {args.out_dir}/best.pt")
+           os.path.join(out_dir, "last.pt"))
+    print(f"[{model_name}] done. best val loss={best_val:.4f} -> {out_dir}/best.pt")
+
+    if use_wandb:
+        wandb.finish()
 
 
 if __name__ == "__main__":

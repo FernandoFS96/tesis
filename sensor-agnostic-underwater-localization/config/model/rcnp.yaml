@@ -1,0 +1,6 @@
+# Recurrent CNP (deterministic, LSTM, indexed convention) -> r_anp.DeterministicModel
+name: rcnp
+num_hidden: 128
+rnn_type: lstm      # lstm | gru
+rnn_layers: 1
+rnn_dropout: 0.0
