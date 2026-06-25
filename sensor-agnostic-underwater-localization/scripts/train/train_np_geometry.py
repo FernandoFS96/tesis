@@ -295,6 +295,8 @@ def main(cfg: DictConfig):
 
     # ---- data --------------------------------------------------------------
     data_dir = cfg.data.data_dir
+    # print current working directory and data_dir for debugging
+    print(f"[{model_name}] cwd={os.getcwd()}  data_dir={data_dir}")
     train_ds = TrajectoryDataset(os.path.join(data_dir, "train_data.pkl"))
     val_ds = TrajectoryDataset(os.path.join(data_dir, "val_data.pkl"))
     feat_dim, out_dim, ppt = train_ds.feat_dim, train_ds.out_dim, train_ds.ppt
