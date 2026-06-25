@@ -16,21 +16,22 @@ USAGE
 -----
     python eval_np_geometry.py \
         --data-dir ../../data/data_random_positions/processed/geometry_split \
-        --ckpt     ../runs/ranp_baseline/best.pt \
-        --out-dir  ../runs/ranp_baseline/eval \
+        --ckpt     ../runs/anp_baseline/best.pt \
+        --out-dir  ../runs/anp_baseline/eval \
         --eval-ctx 20 --n-context-draws 5
 
     Context-size sweep (temporal-reliance diagnostic):
     python eval_np_geometry.py  \
         --data-dir ../../data/data_random_positions/processed/geometry_split \
-        --ckpt     ../runs/ranp_baseline/best.pt \
-        --out-dir  ../runs/ranp_baseline/eval --eval-ctx-sweep "1,2,3,5,10,20"
+        --ckpt     ../runs/anp_baseline/best.pt \
+        --out-dir  ../runs/anp_baseline/eval --eval-ctx-sweep "1,2,3,5,10,20" \
+        --ctx-sample-mode first
 
     Shuffle test:
     python eval_np_geometry.py \
         --data-dir ../../data/data_random_positions/processed/geometry_split \
-        --ckpt     ../runs/ranp_baseline/best.pt \
-        --out-dir  ../runs/ranp_baseline/eval_shuf --eval-ctx 20 --shuffle-temporal
+        --ckpt     ../runs/anp_baseline/best.pt \
+        --out-dir  ../runs/anp_baseline/eval_shuf --eval-ctx 20 --shuffle-temporal
 
 To see results for all three models (CNP, ANP, RANP) in one place, run the above three commands for each model.
 To compare all three at once, point --ckpt at each best.pt in turn.
