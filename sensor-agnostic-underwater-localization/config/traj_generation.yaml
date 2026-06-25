@@ -40,7 +40,9 @@ spiral:
 # -----------------------------------------------------------------------------
 hermite:
   n_segments: 3       # number of Hermite segments (-> n_segments + 1 knots)
-  seg_len_min: 150.0  # min segment chord length [m]
-  seg_len_max: 300.0  # max segment chord length [m]
+  # Chord lengths chosen so the farthest-from-center distance matches the
+  # spiral (~420 m mean). Larger values increase both reach and per-hop speed.
+  seg_len_min: 100.0  # min segment chord length [m]
+  seg_len_max: 195.0  # max segment chord length [m]
   max_turn: 0.7854    # max heading change between consecutive knots [rad] (~45 deg)
   tension: 1.0        # scales knot tangent magnitude (curve tightness)
