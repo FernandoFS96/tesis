@@ -1,0 +1,4 @@
+model,epoch,train_mae,val_mae,test_mae,deg_val_pct,deg_test_pct,interp_mae,extrap_mae,extrap_interp_gap
+anp,271,43.9659,69.1501,67.5797,57.3,53.7,66.0025,70.7273,4.7248
+cnp,372,44.5443,67.2732,65.3215,51.0,46.6,63.939,68.6557,4.7167
+ranp,437,2.8058,2.8269,2.8359,0.8,1.1,2.8483,2.8144,-0.0339
