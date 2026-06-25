@@ -32,9 +32,8 @@ USAGE
         --ckpt     ../runs/ranp_baseline/best.pt \
         --out-dir  ../runs/ranp_baseline/eval_shuf --eval-ctx 20 --shuffle-temporal
 
-
-To compare all three at once, point --ckpt at each best.pt in turn 
-(or see --compare-dir below to aggregate existing eval CSVs).
+To see results for all three models (CNP, ANP, RANP) in one place, run the above three commands for each model.
+To compare all three at once, point --ckpt at each best.pt in turn.
 """
 
 import os, sys, json, pickle, argparse
@@ -176,7 +175,7 @@ def main():
     ap.add_argument("--data-dir", required=True)
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--out-dir", required=True)
-    ap.add_argument("--eval-ctx", type=int, default=15)
+    ap.add_argument("--eval-ctx", type=int, default=20)
     ap.add_argument("--n-context-draws", type=int, default=5)
     ap.add_argument("--eval-ctx-sweep", default=None,
                     help="comma list of context sizes, e.g. '1,2,3,5,10,20'. "
