@@ -50,3 +50,19 @@ hermite:
   # matching the spiral's first point (radius_start * radio = 0.2 * [250, 350]).
   start_radius_min: 30.0
   start_radius_max: 70.0
+
+# -----------------------------------------------------------------------------
+# How trajectories vary across position-sets in random_position_generator.py.
+# This block ONLY affects the multi-position-set generator; it has no effect on
+# single-dataset generation in acoustic_data_generator.py.
+# -----------------------------------------------------------------------------
+per_set:
+  # false -> ONE shared trajectory ensemble reused by all position-sets
+  #          (sensor-displacement study: geometry is the only varying factor).
+  # true  -> each position-set gets its OWN trajectories as well as its own
+  #          sensor layout (20 distinct sensors+trajectories datasets).
+  distinct_trajectories: false
+  # Per-set trajectory seed = master_seed + traj_seed_offset + set_idx.
+  # Kept in a separate numeric band from layout seeds (master_seed + 1000 + p)
+  # so trajectory and layout RNG streams never collide.
+  traj_seed_offset: 2000
