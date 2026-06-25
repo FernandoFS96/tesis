@@ -88,5 +88,5 @@ if __name__ == '__main__':
     np.random.seed(args.seed)
     traj_config = load_traj_config(args.traj_config)
     traj = generate_trajectories(traj_config, n_traj=args.n_traj, ppt=args.ppt)
-    plot_trajectories(traj, method=traj_config['method'], n_context=args.n_context, out_path=args.out)
-    print(f"Saved {args.n_traj} '{traj_config['method']}' trajectories to: {args.out}")
+    plot_trajectories(traj, method=traj_config['method'], n_context=args.n_context, out_path=args.out) #type: ignore
+    print(f"Saved {args.n_traj} '{traj_config['method']}' trajectories to: {args.out}") #type: ignore
