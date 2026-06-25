@@ -272,7 +272,7 @@ def main(cfg: DictConfig):
     t.manual_seed(seed); np.random.seed(seed)
 
     # Output directory: explicit out_dir, otherwise Hydra's per-run dir.
-    out_dir = cfg.out_dir or HydraConfig.get().runtime.output_dir
+    out_dir = HydraConfig.get().runtime.output_dir
     os.makedirs(out_dir, exist_ok=True)
 
     device = t.device(resolve_device(cfg.device))
