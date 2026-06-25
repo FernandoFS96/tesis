@@ -46,3 +46,7 @@ hermite:
   seg_len_max: 195.0  # max segment chord length [m]
   max_turn: 0.7854    # max heading change between consecutive knots [rad] (~45 deg)
   tension: 1.0        # scales knot tangent magnitude (curve tightness)
+  # First point: random angle at a radius in [start_radius_min, start_radius_max],
+  # matching the spiral's first point (radius_start * radio = 0.2 * [250, 350]).
+  start_radius_min: 50.0
+  start_radius_max: 70.0
