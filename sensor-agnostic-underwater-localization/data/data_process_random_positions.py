@@ -49,7 +49,7 @@ not folded into X:
         "theta":       float,
     }
 
-For the spatial-encoder model you can reshape X to ``(ppt, tau, n_sensors)`` on
+For the spatial-encoder model we can reshape X to ``(ppt, tau, n_sensors)`` on
 the fly (tau = feat_dim // n_sensors = 101) and attend over the n_sensors axis
 using ``sensor_pos``; the processor records ``tau`` and ``n_sensors`` in metadata
 so this reshape is unambiguous.
