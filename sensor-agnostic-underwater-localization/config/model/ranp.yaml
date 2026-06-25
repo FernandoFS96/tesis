@@ -1,0 +1,6 @@
+# Recurrent attentive latent NP (LSTM, posterior + KL) -> r_anp.LatentModel
+name: ranp
+num_hidden: 128
+rnn_type: lstm      # lstm | gru
+rnn_layers: 1
+rnn_dropout: 0.0

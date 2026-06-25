@@ -5,6 +5,7 @@ import os
 from tqdm import tqdm
 import pickle
 import argparse
+from omegaconf import OmegaConf
 
 '''
 Use:
@@ -14,6 +15,19 @@ Use:
         --rep 1
 
 '''
+
+# Path to the trajectory-generation config. This is loaded directly (no Hydra)
+# because trajectory generation runs as a standalone data-generation step.
+DEFAULT_TRAJ_CONFIG_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    'config', 'traj_generation.yaml')
+
+
+def load_traj_config(path=None):
+    """Load the trajectory-generation config from YAML via OmegaConf."""
+    if path is None:
+        path = DEFAULT_TRAJ_CONFIG_PATH
+    return OmegaConf.load(path)
 
 def range_m(init, end, step):  # Matlab-like range, including end!
     out = np.arange(init, end, step)
@@ -25,17 +39,20 @@ def power(complex_array):
     return np.sum(np.power(np.absolute(complex_array), 2))
 
 class channel():
-    def __init__(self, params=None, number_of_processes=-1, load=False, name='0', topology='ellipsoidal', precomputed_trajectories=None):
+    def __init__(self, params=None, number_of_processes=-1, load=False, name='0', topology='ellipsoidal', precomputed_trajectories=None, traj_config=None):
         # params: channel parameters (default if None)
         # number of processes: for parallelization (1 for single, -1 for as much as possible)
         # topology: sensor arrangement ('ellipsoidal', 'random', 'aligned')
         # precomputed_trajectories: trajectories to reuse across topologies
-        
+        # traj_config: trajectory-generation config (loaded from
+        #   config/traj_generation.yaml if None)
+
         self.h = None  # To store the impulse response
         self.traj = None  # To store trajectories
         self.nop = number_of_processes
         self.topology = topology
         self.precomputed_trajectories = precomputed_trajectories
+        self.traj_config = traj_config if traj_config is not None else load_traj_config()
 
         if self.nop == -1:
             self.nop = cpu_count()
@@ -212,30 +229,146 @@ class channel():
         return r_posicion
 
     def generate_trajectories(self):
-        """Generate trajectories or use precomputed ones"""
+        """Generate trajectories or use precomputed ones.
+
+        Dispatches to a method-specific submethod selected by
+        ``self.traj_config.method`` so new trajectory shapes can be added
+        without touching the channel-processing code. To add a method, add a
+        parameter block to config/traj_generation.yaml and a matching
+        ``_generate_<method>_trajectories`` submethod here.
+        """
         if self.precomputed_trajectories is not None:
             return self.precomputed_trajectories
-        
-        # Generate new trajectories
+
+        assert self.params is not None, "params must be initialized"
+        method = self.traj_config['method']
+        if method == 'spiral':
+            return self._generate_spiral_trajectories()
+        elif method == 'hermite':
+            return self._generate_hermite_trajectories()
+        else:
+            raise ValueError(f"Unknown trajectory generation method: {method}")
+
+    def _generate_spiral_trajectories(self):
+        """Original outward-spiral trajectories.
+
+        Parameters are read from the ``spiral`` block of the trajectory
+        config (config/traj_generation.yaml).
+        """
         assert self.params is not None, "params must be initialized"
         n_traj = self.params['n_traj']
         ppt = self.params['ppt']
-        
-        radio_t = np.random.uniform(250.0, 350.0, size=n_traj) #100 + 1000 * np.random.rand(n_traj)
+        cfg = self.traj_config['spiral']
+
+        radio_t = np.random.uniform(cfg['radio_min'], cfg['radio_max'], size=n_traj)
         fase0 = 2 * np.pi * np.random.rand(n_traj)
-        omega0 = np.random.uniform(0.8,  2.5,  size=n_traj) #2 * np.pi * np.random.rand(n_traj)
+        omega0 = np.random.uniform(cfg['omega_min'], cfg['omega_max'], size=n_traj)
 
         traj = np.zeros([3, n_traj, ppt + 1])
-        aux_1 = np.linspace(0, 1.4 * ppt, ppt + 1)
-        aux_2 = np.linspace(0.2 * ppt, 1.4 * ppt, ppt + 1)#aux_2 = np.linspace(ppt, 2 * ppt, ppt + 1)
-        
+        aux_1 = np.linspace(0, cfg['angle_span'] * ppt, ppt + 1)
+        aux_2 = np.linspace(cfg['radius_start'] * ppt, cfg['radius_end'] * ppt, ppt + 1)
+
         for it in range(n_traj):
             traj[0, it, :] = radio_t[it] / ppt * aux_2 * np.cos(
                 omega0[it] / ppt * aux_1 + fase0[it])
             traj[1, it, :] = radio_t[it] / ppt * aux_2 * np.sin(
                 omega0[it] / ppt * aux_1 + fase0[it])
             traj[2, it, :] = 0
-        
+
+        return traj
+
+    def _generate_hermite_trajectories(self):
+        """Free-tangent piecewise-cubic Hermite trajectories.
+
+        Each trajectory is built from ``n_segments`` cubic Hermite segments
+        joined with C1 continuity (matched position *and* tangent at every
+        knot, so the path is smooth in xy). Parameters are read from the
+        ``hermite`` block of config/traj_generation.yaml.
+
+        Design notes
+        ------------
+        * The knot tangent *directions* form a slowly-turning sequence: the
+          first is uniform over all directions, and each subsequent one differs
+          from the previous by at most ``max_turn`` radians. This keeps the
+          cosine distance between consecutive tangents small -- no sudden
+          turn-arounds -- while still allowing the path to wander.
+        * Waypoints step along those same directions, so each segment leaves a
+          knot in its tangent direction (no cusps / overshoot).
+        * Tangent magnitudes are tied to the adjacent segment lengths
+          (Catmull-Rom-style tension scaling), so segment length controls speed
+          and the curve stays well-shaped. Speed therefore varies along the
+          trajectory, as it already does for the spiral.
+
+        Why this suits the context task: the first few points lie on the first
+        segment and reveal roughly the first knot/tangent, but the later
+        waypoints are sampled independently and stay hidden -- so the first 5
+        context points do not determine the rest of the trajectory.
+        """
+        assert self.params is not None, "params must be initialized"
+        n_traj = self.params['n_traj']
+        ppt = self.params['ppt']
+        cfg = self.traj_config['hermite']
+
+        K = int(cfg['n_segments'])          # number of segments
+        n_knots = K + 1                     # waypoints / knots
+        max_turn = float(cfg['max_turn'])
+        len_min = float(cfg['seg_len_min'])
+        len_max = float(cfg['seg_len_max'])
+        tension = float(cfg['tension'])
+        start_r_min = float(cfg['start_radius_min'])
+        start_r_max = float(cfg['start_radius_max'])
+
+        def hermite_segment(P0, M0, P1, M1, u):
+            """Evaluate a cubic Hermite segment at local params u in [0, 1]."""
+            u2 = u * u
+            u3 = u2 * u
+            h00 = 2 * u3 - 3 * u2 + 1
+            h10 = u3 - 2 * u2 + u
+            h01 = -2 * u3 + 3 * u2
+            h11 = u3 - u2
+            return (h00[:, None] * P0 + h10[:, None] * M0
+                    + h01[:, None] * P1 + h11[:, None] * M1)
+
+        traj = np.zeros([3, n_traj, ppt + 1])
+
+        # Knot times 0, 1, ..., K and the global sampling parameter in [0, K].
+        t_samples = np.linspace(0.0, K, ppt + 1)
+        seg_idx = np.clip(np.floor(t_samples).astype(int), 0, K - 1)
+        u_local = t_samples - seg_idx       # local param within each segment
+
+        for it in range(n_traj):
+            # --- slowly-turning knot tangent directions ---
+            thetas = np.empty(n_knots)
+            thetas[0] = 2 * np.pi * np.random.rand()            # first: any direction
+            thetas[1:] = np.random.uniform(-max_turn, max_turn, size=K)
+            thetas = np.cumsum(thetas)                          # bounded random walk
+            dirs = np.stack([np.cos(thetas), np.sin(thetas)], axis=1)  # (n_knots, 2)
+
+            # --- waypoints: step along the knot directions ---
+            # Start point sampled like the spiral's first point: random angle at
+            # a radius in [start_radius_min, start_radius_max] (not the origin).
+            start_r = np.random.uniform(start_r_min, start_r_max)
+            start_a = 2 * np.pi * np.random.rand()
+            seg_len = np.random.uniform(len_min, len_max, size=K)
+            P = np.zeros((n_knots, 2))
+            P[0] = [start_r * np.cos(start_a), start_r * np.sin(start_a)]
+            for k in range(K):
+                P[k + 1] = P[k] + seg_len[k] * dirs[k]
+
+            # --- knot tangent magnitudes (tension-scaled by adjacent lengths) ---
+            mag = np.empty(n_knots)
+            mag[0] = seg_len[0]
+            mag[-1] = seg_len[-1]
+            mag[1:-1] = 0.5 * (seg_len[:-1] + seg_len[1:])
+            M = tension * mag[:, None] * dirs                   # (n_knots, 2)
+
+            # --- evaluate the piecewise-Hermite curve ---
+            xy = hermite_segment(P[seg_idx], M[seg_idx],
+                                 P[seg_idx + 1], M[seg_idx + 1], u_local)
+            traj[0, it, :] = xy[:, 0]
+            traj[1, it, :] = xy[:, 1]
+            traj[2, it, :] = 0
+
         return traj
 
     def obtain_h(self):
@@ -823,23 +956,28 @@ def save_velocity_histogram(traj, T_tot, bins=40, option_idx=None):
 
     return {"mean": v_mean, "std": v_std, "min": v_min, "max": v_max}
 
-def process(channel_options, snr, rep, nop=-1, n_traj_override=None):
+def process(channel_options, snr, rep, nop=-1, n_traj_override=None, traj_config=None):
     """Process data for all topologies using the same trajectories"""
     topologies = ['ellipsoidal', 'random', 'aligned']
-    
+
+    # Trajectory-generation config (loaded from config/traj_generation.yaml).
+    if traj_config is None:
+        traj_config = load_traj_config()
+
     for option_idx, option in enumerate(tqdm(channel_options)):
         np.random.seed(11)
         print(f"\n\n --- Processing Channel Option: {option} ---")
-        
+
         # Generate parameters for this option
         params = generate_params(options=option)
-        
+
         if n_traj_override is not None:
             params['n_traj'] = int(n_traj_override)
         # First, generate trajectories that will be shared across all topologies
         # We create a temporary channel just to generate trajectories
-        temp_channel = channel(load=False, params=params, number_of_processes=nop, 
-                              name=str(option), topology='ellipsoidal')
+        temp_channel = channel(load=False, params=params, number_of_processes=nop,
+                              name=str(option), topology='ellipsoidal',
+                              traj_config=traj_config)
         shared_trajectories = temp_channel.traj  # Store the trajectories
         
         channels_for_validation = {}
@@ -853,9 +991,10 @@ def process(channel_options, snr, rep, nop=-1, n_traj_override=None):
             print(f"\nProcessing topology: {topology}")
             
             # Create channel with specific topology and shared trajectories
-            c = channel(load=False, params=params, number_of_processes=nop, 
-                       name=str(option), topology=topology, 
-                       precomputed_trajectories=shared_trajectories)
+            c = channel(load=False, params=params, number_of_processes=nop,
+                       name=str(option), topology=topology,
+                       precomputed_trajectories=shared_trajectories,
+                       traj_config=traj_config)
             
             # Store for validation plotting
             channels_for_validation[topology] = c
@@ -900,14 +1039,18 @@ if __name__ == '__main__':
     parser.add_argument('--snr', type=float, default=10, help="SNR para filtrado.")
     parser.add_argument('--rep', type=int, default=1, help="Repeticiones.")
     parser.add_argument('--nop', type=int, default=-1, help="Número de procesos para paralelismo (-1 == cpu_count()).")
+    parser.add_argument('--traj_config', type=str, default=None, help="Ruta al YAML de generación de trayectorias (por defecto: config/traj_generation.yaml).")
     args = parser.parse_args()
 
     # Parse channel options
     channel_options = parse_float_list(args.channel_options)
     if channel_options is None:
         channel_options = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
-    
+
+    # Load trajectory-generation config (no Hydra; plain YAML via OmegaConf).
+    traj_config = load_traj_config(args.traj_config)
+
     # Set random seed for reproducibility
     np.random.seed(11)
 
-    process(channel_options, snr=args.snr, rep=args.rep, nop=args.nop, n_traj_override=args.n_traj)
+    process(channel_options, snr=args.snr, rep=args.rep, nop=args.nop, n_traj_override=args.n_traj, traj_config=traj_config)
