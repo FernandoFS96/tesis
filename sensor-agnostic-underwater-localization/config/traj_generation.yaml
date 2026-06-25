@@ -1,0 +1,29 @@
+# =============================================================================
+# Trajectory-generation config.
+#
+# This is used during DATA GENERATION (data/acoustic_data_generator.py), NOT
+# during training. It is therefore loaded directly via OmegaConf -- there is
+# deliberately no Hydra setup here.
+#
+# `method` selects which trajectory-generation routine is used. Each method has
+# its own parameter block below. To add a new method:
+#   1. add a parameter block here, and
+#   2. add a matching `_generate_<method>_trajectories` submethod in the
+#      `channel` class (see data/acoustic_data_generator.py).
+# =============================================================================
+
+# Which trajectory-generation method to use ('spiral', ...).
+method: spiral
+
+# -----------------------------------------------------------------------------
+# Parameters for the "spiral" method (the original outward-spiral trajectories).
+# -----------------------------------------------------------------------------
+spiral:
+  radio_min: 250.0    # min spiral radius scale [m]
+  radio_max: 350.0    # max spiral radius scale [m]
+  omega_min: 0.8      # min angular speed
+  omega_max: 2.5      # max angular speed
+  # Radial growth profile across a trajectory, expressed as multiples of ppt.
+  angle_span: 1.4     # aux_1 spans [0, angle_span * ppt]
+  radius_start: 0.2   # aux_2 spans [radius_start * ppt, radius_end * ppt]
+  radius_end: 1.4
