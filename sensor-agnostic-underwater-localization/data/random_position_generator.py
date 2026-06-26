@@ -35,26 +35,31 @@ Compared with the original ``acoustic_data_generator.py`` the important changes 
 
 OUTPUT LAYOUT
 -------------
+By default the data is nested under a per-variant tag ``<method>_<mode>`` (e.g.
+``hermite_shared``, ``spiral_distinct``) so the four trajectory-method x
+cross-set-mode combinations never overwrite each other. Pass
+``--no-variant-subdir`` to write straight into ``<out-dir>`` (legacy flat).
 ::
 
     <out-dir>/
-      position_set_00/
-        channel_option_0.0/
-          random/
-            channel_info/
-              channel_h_0.0.npy          # raw impulse responses (tau, t, traj, sensor)
-              trajs_0.0.npy              # full trajectories (3, n_traj, ppt+1)
-              sensor_positions_0.0.npy   # (3, n_sensors) for THIS position-set
-            filtered_data/
-              filtered_data.npy          # (tau, ppt, n_traj*rep, n_sensors)
-            trajectory/
-              trajectories.npy           # (3, n_traj*rep, ppt) target coords
-          ...
-        channel_option_0.1/ ...
-      position_set_01/ ...
-      ...
-      position_set_19/ ...
-      _manifest.pkl                      # bookkeeping (seeds, positions, args)
+      <method>_<mode>/                     # e.g. hermite_shared (omit with --no-variant-subdir)
+        position_set_00/
+          channel_option_0.0/
+            random/
+              channel_info/
+                channel_h_0.0.npy          # raw impulse responses (tau, t, traj, sensor)
+                trajs_0.0.npy              # full trajectories (3, n_traj, ppt+1)
+                sensor_positions_0.0.npy   # (3, n_sensors) for THIS position-set
+              filtered_data/
+                filtered_data.npy          # (tau, ppt, n_traj*rep, n_sensors)
+              trajectory/
+                trajectories.npy           # (3, n_traj*rep, ppt) target coords
+            ...
+          channel_option_0.1/ ...
+        position_set_01/ ...
+        ...
+        position_set_19/ ...
+        _manifest.pkl                      # bookkeeping (seeds, positions, method, variant_tag)
 
 The per-(theta) sub-structure inside each ``position_set_XX`` directory is
 deliberately IDENTICAL to what the original ``data_process_topology.py`` expects
@@ -382,7 +387,8 @@ def make_trajectories(option, nop, physics_seed, traj_config=None):
 # --------------------------------------------------------------------------- #
 def run(channel_options, n_position_sets, out_dir, snr, rep, nop,
         master_seed, start_set, end_set, signal_n=1024,
-        distinct_trajectories=False, traj_seed_offset=2000, traj_config=None):
+        distinct_trajectories=False, traj_seed_offset=2000, traj_config=None,
+        traj_method=None, variant_tag=None):
     os.makedirs(out_dir, exist_ok=True)
 
     manifest = {
@@ -393,6 +399,8 @@ def run(channel_options, n_position_sets, out_dir, snr, rep, nop,
         'rep': rep,
         'distinct_trajectories': bool(distinct_trajectories),
         'traj_seed_offset': int(traj_seed_offset),
+        'traj_method': traj_method,
+        'variant_tag': variant_tag,
         'positions': {},  # (position_set_idx, theta) -> (3, n_sensors)
         'layout_seeds': {},
         'traj_seeds': {},  # only populated in distinct mode
@@ -507,6 +515,10 @@ def main():
                         action='store_false', default=None,
                         help="Override the config: reuse ONE trajectory ensemble "
                              "across all position-sets (sensor-displacement study).")
+    parser.add_argument('--no-variant-subdir', dest='variant_subdir',
+                        action='store_false', default=True,
+                        help="Write directly into --out-dir instead of a "
+                             "<method>_<mode> subfolder (legacy flat layout).")
     args = parser.parse_args()
 
     channel_options = parse_float_list(args.channel_options) or [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
@@ -523,14 +535,24 @@ def main():
     # Trajectory-generation config (method + the per_set toggle). Loaded here so
     # there is a single source of truth that we also hand to every channel.
     traj_config = base.load_traj_config(args.traj_config)
-    per_set = traj_config.get('per_set', {}) or {}
+    per_set = traj_config.get('per_set', {}) or {} #type: ignore
     # CLI flag (if given) overrides the config; otherwise use the config value.
     if args.distinct_trajectories is None:
         distinct_trajectories = bool(per_set.get('distinct_trajectories', False))
     else:
         distinct_trajectories = bool(args.distinct_trajectories)
     traj_seed_offset = int(per_set.get('traj_seed_offset', 2000))
-    method = traj_config.get('method', 'spiral')
+    method = traj_config.get('method', 'spiral') #type: ignore
+
+    # Variant tag keeps each (trajectory method, cross-set mode) dataset in its
+    # own folder so combinations never overwrite one another. By default the
+    # output is nested as <out-dir>/<method>_<mode>/; --no-variant-subdir writes
+    # straight into --out-dir (legacy flat layout).
+    variant_tag = f"{method}_{'distinct' if distinct_trajectories else 'shared'}"
+    if args.variant_subdir:
+        out_dir = os.path.join(args.out_dir, variant_tag)
+    else:
+        out_dir = args.out_dir
 
     # Report the resulting feature dimension so the user can set model input_dim.
     Lf = len(base.range_m(10000.0, 20000.0, args.df))
@@ -550,13 +572,15 @@ def main():
               f"seed offset {traj_seed_offset})")
     else:
         print(f"  trajectory mode    : SHARED (one ensemble reused across sets)")
-    print(f"  out dir            : {args.out_dir}")
+    print(f"  variant tag        : {variant_tag}"
+          f"{'' if args.variant_subdir else ' (flat layout; tag not used)'}")
+    print(f"  out dir            : {out_dir}")
     print("=" * 64)
 
     run(
         channel_options=channel_options,
         n_position_sets=args.n_position_sets,
-        out_dir=args.out_dir,
+        out_dir=out_dir,
         snr=args.snr,
         rep=args.rep,
         nop=args.nop,
@@ -566,6 +590,8 @@ def main():
         distinct_trajectories=distinct_trajectories,
         traj_seed_offset=traj_seed_offset,
         traj_config=traj_config,
+        traj_method=method,
+        variant_tag=variant_tag,
     )
 
 

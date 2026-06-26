@@ -73,20 +73,20 @@ USAGE
 -----
 Legacy baseline (old behaviour, new data root):
     python data_process_random_positions.py \
-        --data-root ./data_random_positions --mode legacy
+        --data-root ./data_random_positions/hermite_shared --mode legacy
 
 New geometry split (auto interp/extrap from geometry, 12/4/4):
     python data_process_random_positions.py \
-        --data-root ./data_random_positions --mode geometry \
+        --data-root ./data_random_positions/hermite_shared --mode geometry \
         --train-geoms 12 --val-geoms 4 --test-geoms 4
 
 Reproduce a previously frozen split:
     python data_process_random_positions.py \
-        --data-root ./data_random_positions --mode geometry \
-        --splits-file ./data_random_positions/geometry_split/splits.json
+        --data-root ./data_random_positions/hermite_shared --mode geometry \
+        --splits-file ./data_random_positions/hermite_shared/processed/geometry_split/splits.json
 
 Both:
-    python data_process_random_positions.py --data-root ./data_random_positions --mode all
+    python data_process_random_positions.py --data-root ./data_random_positions/hermite_shared --mode all
 """
 
 import os
