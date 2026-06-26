@@ -15,21 +15,21 @@ Reported (identically to the original CNP eval):
 USAGE
 -----
     python eval_np_geometry.py \
-        --data-dir ../../data/data_random_positions/processed/geometry_split \
+        --data-dir ../../data/data_random_positions/hermite_shared/processed/geometry_split \
         --ckpt     ../runs/anp_baseline/best.pt \
         --out-dir  ../runs/anp_baseline/eval \
         --eval-ctx 20 --n-context-draws 5
 
     Context-size sweep (temporal-reliance diagnostic):
     python eval_np_geometry.py  \
-        --data-dir ../../data/data_random_positions/processed/geometry_split \
+        --data-dir ../../data/data_random_positions/hermite_shared/processed/geometry_split \
         --ckpt     ../runs/anp_baseline/best.pt \
         --out-dir  ../runs/anp_baseline/eval --eval-ctx-sweep "1,2,3,5,10,20" \
         --ctx-sample-mode first
 
     Shuffle test:
     python eval_np_geometry.py \
-        --data-dir ../../data/data_random_positions/processed/geometry_split \
+        --data-dir ../../data/data_random_positions/hermite_shared/processed/geometry_split \
         --ckpt     ../runs/anp_baseline/best.pt \
         --out-dir  ../runs/anp_baseline/eval_shuf --eval-ctx 20 --shuffle-temporal
 

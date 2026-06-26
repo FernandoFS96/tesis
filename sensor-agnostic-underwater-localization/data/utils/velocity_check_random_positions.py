@@ -58,15 +58,15 @@ OUTPUTS  (under --out-dir, default <data-root>/velocity_report)
 
 USAGE
 -----
-    python velocity_check_random_positions.py --data-root ./data_random_positions
+    python velocity_check_random_positions.py --data-root ./data_random_positions/hermite_shared
 
     # If your T_tot differs from the default 6.0 s, pass it explicitly so the
     # per-jump speed units match your channel exactly:
-    python velocity_check_random_positions.py --data-root ./data_random_positions \
+    python velocity_check_random_positions.py --data-root ./data_random_positions/hermite_shared \
         --t-tot 6.0
 
     # restrict thetas / sets while iterating
-    python velocity_check_random_positions.py --data-root ./data_random_positions \
+    python velocity_check_random_positions.py --data-root ./data_random_positions/hermite_shared \
         --thetas 0.0,0.3 --max-sets 5
 
 NOTE ON UNITS

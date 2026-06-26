@@ -1,11 +1,20 @@
 # Geometry-split dataset and context-sampling configuration.
-data_dir: ../../data/data_random_positions/processed/geometry_split
+
+# Dataset variant selection. The generator writes each (trajectory method,
+# cross-set mode) combination into its own <method>_<mode> folder; pick one here.
+#   traj_method: spiral | hermite
+#   traj_mode:   shared | distinct
+# Override on the CLI to switch variants, e.g.:
+#   python scripts/train/train_np_geometry.py data.traj_method=spiral data.traj_mode=distinct
+traj_method: hermite
+traj_mode: distinct
+data_dir: ../../data/data_random_positions/${data.traj_method}_${data.traj_mode}/processed/geometry_split
 
 # Target normalisation (zero-mean / unit-std, stats computed on the train set).
-normalize_y: false
+normalize_y: true
 
 # Context-set sampling.
 ctx_min: 5            # min number of context points (random mode, train)
 ctx_max: 40           # max number of context points (random mode, train)
 val_ctx: 20           # fixed number of context points used for validation
-ctx_sample_mode: random   # 'first': ordered prefix context | 'random': random subset
+ctx_sample_mode: first   # 'first': ordered prefix context | 'random': random subset

@@ -43,13 +43,13 @@ hermite:
   # Chord lengths chosen so the farthest-from-center distance matches the
   # spiral (~420 m mean). Larger values increase both reach and per-hop speed.
   seg_len_min: 100.0  # min segment chord length [m]
-  seg_len_max: 195.0  # max segment chord length [m]
+  seg_len_max: 225.0  # max segment chord length [m]
   max_turn: 1.4    # max heading change between consecutive knots [rad] (~45 deg)
   tension: 1.0        # scales knot tangent magnitude (curve tightness)
   # First point: random angle at a radius in [start_radius_min, start_radius_max],
   # matching the spiral's first point (radius_start * radio = 0.2 * [250, 350]).
   start_radius_min: 30.0
-  start_radius_max: 70.0
+  start_radius_max: 80.0
 
 # -----------------------------------------------------------------------------
 # How trajectories vary across position-sets in random_position_generator.py.
@@ -61,7 +61,7 @@ per_set:
   #          (sensor-displacement study: geometry is the only varying factor).
   # true  -> each position-set gets its OWN trajectories as well as its own
   #          sensor layout (20 distinct sensors+trajectories datasets).
-  distinct_trajectories: false
+  distinct_trajectories: true
   # Per-set trajectory seed = master_seed + traj_seed_offset + set_idx.
   # Kept in a separate numeric band from layout seeds (master_seed + 1000 + p)
   # so trajectory and layout RNG streams never collide.

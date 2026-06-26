@@ -35,14 +35,14 @@ Everything reads the REAL output layout written by the generator:
 
 USAGE
 -----
-    python qc_random_positions.py --data-root ./data_random_positions
+    python qc_random_positions.py --data-root ./data_random_positions/hermite_shared
 
     # restrict to a subset while iterating
-    python qc_random_positions.py --data-root ./data_random_positions \
+    python qc_random_positions.py --data-root ./data_random_positions/hermite_shared \
         --thetas 0.0,0.3 --max-sets 5
 
     # control where figures/tables go
-    python qc_random_positions.py --data-root ./data_random_positions \
+    python qc_random_positions.py --data-root ./data_random_positions/hermite_shared \
         --out-dir ./qc_report
 
 OUTPUTS (under --out-dir, default <data-root>/qc_report)
