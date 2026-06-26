@@ -81,21 +81,23 @@ import src.models.r_anp as ranp_mod  # type: ignore  # noqa: E402
 # Model factory
 # --------------------------------------------------------------------------- #
 def build_model(name, num_hidden, input_dim, output_dim,
-                rnn_type="lstm", rnn_layers=1, rnn_dropout=0.0):
+                rnn_type="lstm", rnn_layers=1, rnn_dropout=0.0, dropout=0.1):
     name = name.lower()
     if name == "cnp":
-        return anp_mod.DeterministicModel(num_hidden, input_dim, output_dim), "split"
+        return anp_mod.DeterministicModel(num_hidden, input_dim, output_dim,
+                                          dropout=dropout), "split"
     if name == "anp":
-        return anp_mod.LatentModel(num_hidden, input_dim, output_dim), "split"
+        return anp_mod.LatentModel(num_hidden, input_dim, output_dim,
+                                   dropout=dropout), "split"
     if name == "ranp":
         return (ranp_mod.LatentModel(num_hidden, input_dim, output_dim,
                                      rnn_type=rnn_type, rnn_layers=rnn_layers,
-                                     rnn_dropout=rnn_dropout),
+                                     rnn_dropout=rnn_dropout, dropout=dropout),
                 "indexed")
     if name == "rcnp":  # bonus: recurrent CNP, same indexed convention
         return (ranp_mod.DeterministicModel(num_hidden, input_dim, output_dim,
                                             rnn_type=rnn_type, rnn_layers=rnn_layers,
-                                            rnn_dropout=rnn_dropout),
+                                            rnn_dropout=rnn_dropout, dropout=dropout),
                 "indexed")
     raise ValueError(f"unknown model '{name}' (use cnp|anp|ranp|rcnp)")
 
@@ -245,6 +247,7 @@ def flat_ckpt_config(cfg, device):
         "rnn_type": m.get("rnn_type", "lstm"),
         "rnn_layers": m.get("rnn_layers", 1),
         "rnn_dropout": m.get("rnn_dropout", 0.0),
+        "dropout": m.get("dropout", 0.1),
         "data_dir": cfg.data.data_dir,
         "normalize_y": cfg.data.normalize_y,
         "ctx_min": cfg.data.ctx_min,
@@ -325,7 +328,8 @@ def main(cfg: DictConfig):
         model_name, cfg.model.num_hidden, feat_dim, out_dim,
         rnn_type=cfg.model.get("rnn_type", "lstm"),
         rnn_layers=cfg.model.get("rnn_layers", 1),
-        rnn_dropout=cfg.model.get("rnn_dropout", 0.0))
+        rnn_dropout=cfg.model.get("rnn_dropout", 0.0),
+        dropout=cfg.model.get("dropout", 0.1))
     model = model.to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"[{model_name}] convention={conv}  params={n_params/1e6:.2f}M  device={device}")

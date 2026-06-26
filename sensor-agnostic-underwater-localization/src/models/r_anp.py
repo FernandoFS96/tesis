@@ -26,10 +26,10 @@ class Linear(nn.Module):
 # AHORA: se toma el último paso temporal del contexto como representación global.
 # ─────────────────────────────────────────────────────────────────────────────
 class LatentEncoder(nn.Module):
-    def __init__(self, num_hidden, num_latent, input_dim, output_dim):
+    def __init__(self, num_hidden, num_latent, input_dim, output_dim, dropout=0.1):
         super(LatentEncoder, self).__init__()
         self.input_projection = Linear(input_dim + output_dim, num_hidden)
-        self.self_attentions = nn.ModuleList([Attention(num_hidden) for _ in range(2)])
+        self.self_attentions = nn.ModuleList([Attention(num_hidden, dropout=dropout) for _ in range(2)])
         self.penultimate_layer = Linear(num_hidden, num_hidden, w_init='relu')
         self.mu = Linear(num_hidden, num_latent)
         self.log_var = Linear(num_hidden, num_latent)
@@ -57,10 +57,10 @@ class LatentEncoder(nn.Module):
         return mu, log_var, z
 
 class DeterministicEncoder(nn.Module):
-    def __init__(self, num_hidden, num_latent, input_dim, output_dim):
+    def __init__(self, num_hidden, num_latent, input_dim, output_dim, dropout=0.1):
         super(DeterministicEncoder, self).__init__()
-        self.self_attentions = nn.ModuleList([Attention(num_hidden) for _ in range(2)])
-        self.cross_attentions = nn.ModuleList([Attention(num_hidden) for _ in range(2)])
+        self.self_attentions = nn.ModuleList([Attention(num_hidden, dropout=dropout) for _ in range(2)])
+        self.cross_attentions = nn.ModuleList([Attention(num_hidden, dropout=dropout) for _ in range(2)])
         self.input_projection = Linear(input_dim + output_dim, num_hidden)
         self.context_projection = Linear(input_dim, num_hidden)
         self.target_projection = Linear(input_dim, num_hidden)
@@ -81,10 +81,13 @@ class DeterministicEncoder(nn.Module):
         return query
 
 class Decoder(nn.Module):
-    def __init__(self, num_hidden, input_dim, output_dim):
+    def __init__(self, num_hidden, input_dim, output_dim, dropout=0.1):
         super(Decoder, self).__init__()
         self.target_projection = Linear(input_dim, num_hidden)
         self.linears = nn.ModuleList([Linear(num_hidden * 3, num_hidden * 3, w_init='relu') for _ in range(3)])
+        # Per-layer LayerNorm + dropout in the decoder MLP.
+        self.norms = nn.ModuleList([nn.LayerNorm(num_hidden * 3) for _ in range(3)])
+        self.dropout = nn.Dropout(p=dropout)
         self.mean_projection = Linear(num_hidden*3, output_dim)
         self.log_var_projection = Linear(num_hidden*3, output_dim)
 
@@ -93,17 +96,19 @@ class Decoder(nn.Module):
         batch_size, num_targets, _ = target_x.size()
         target_x = self.target_projection(target_x)
         hidden = t.cat([t.cat([r, z], dim=-1), target_x], dim=-1)
-        for linear in self.linears:
+        for linear, norm in zip(self.linears, self.norms):
             hidden = t.relu(linear(hidden))
+            hidden = norm(hidden)
+            hidden = self.dropout(hidden)
         mean = self.mean_projection(hidden)
         var = 1e-3 + F.softplus(self.log_var_projection(hidden))
         return mean, var
 
 class MultiheadAttention(nn.Module):
-    def __init__(self, num_hidden_k):
+    def __init__(self, num_hidden_k, dropout=0.1):
         super().__init__()
         self.num_hidden_k = num_hidden_k
-        self.attn_dropout = nn.Dropout(p=0.1)
+        self.attn_dropout = nn.Dropout(p=dropout)
 
     def forward(self, key, value, query):
         """
@@ -127,7 +132,7 @@ class MultiheadAttention(nn.Module):
 
 
 class Attention(nn.Module):
-    def __init__(self, num_hidden, h=4):
+    def __init__(self, num_hidden, h=4, dropout=0.1):
         super(Attention, self).__init__()
         self.num_hidden = num_hidden
         self.num_hidden_per_attn = num_hidden // h
@@ -135,8 +140,8 @@ class Attention(nn.Module):
         self.key = Linear(num_hidden, num_hidden, bias=False)
         self.value = Linear(num_hidden, num_hidden, bias=False)
         self.query = Linear(num_hidden, num_hidden, bias=False)
-        self.multihead = MultiheadAttention(self.num_hidden_per_attn)
-        self.residual_dropout = nn.Dropout(p=0.1)
+        self.multihead = MultiheadAttention(self.num_hidden_per_attn, dropout=dropout)
+        self.residual_dropout = nn.Dropout(p=dropout)
         self.final_linear = Linear(num_hidden * 2, num_hidden)
         self.layer_norm = nn.LayerNorm(num_hidden)
 
@@ -241,6 +246,7 @@ class LatentModel(nn.Module):
         rnn_type: str = "lstm",
         rnn_layers: int = 1,
         rnn_dropout: float = 0.0,
+        dropout: float = 0.1,  # dropout for attention + decoder MLP
         ):
         super(LatentModel, self).__init__()
         # RNN integrado: input_dim → num_hidden
@@ -258,16 +264,19 @@ class LatentModel(nn.Module):
             num_hidden, num_latent=num_hidden,
             input_dim=num_hidden,
             output_dim=output_dim,
+            dropout=dropout,
         )
         self.deterministic_encoder = DeterministicEncoder(
             num_hidden, num_latent=num_hidden,
             input_dim=num_hidden,
             output_dim=output_dim,
+            dropout=dropout,
         )
         self.decoder = Decoder(
             num_hidden,
             input_dim=num_hidden,
             output_dim=output_dim,
+            dropout=dropout,
         )
 
     def forward(
@@ -325,18 +334,23 @@ class LatentModel(nn.Module):
 
 class DeterministicDecoder(nn.Module):
     """Decoder for RCNP: takes only the deterministic representation r (no latent z)."""
-    def __init__(self, num_hidden, input_dim, output_dim):
+    def __init__(self, num_hidden, input_dim, output_dim, dropout=0.1):
         super(DeterministicDecoder, self).__init__()
         self.target_projection = Linear(input_dim, num_hidden)
         self.linears = nn.ModuleList([Linear(num_hidden * 2, num_hidden * 2, w_init='relu') for _ in range(3)])
+        # Per-layer LayerNorm + dropout in the decoder MLP.
+        self.norms = nn.ModuleList([nn.LayerNorm(num_hidden * 2) for _ in range(3)])
+        self.dropout = nn.Dropout(p=dropout)
         self.mean_projection = Linear(num_hidden * 2, output_dim)
         self.log_var_projection = Linear(num_hidden * 2, output_dim)
 
     def forward(self, r, target_x):
         target_x = self.target_projection(target_x)
         hidden = t.cat([r, target_x], dim=-1)
-        for linear in self.linears:
+        for linear, norm in zip(self.linears, self.norms):
             hidden = t.relu(linear(hidden))
+            hidden = norm(hidden)
+            hidden = self.dropout(hidden)
         mean = self.mean_projection(hidden)
         var = 1e-3 + F.softplus(self.log_var_projection(hidden))
         return mean, var
@@ -352,6 +366,7 @@ class DeterministicModel(nn.Module):
         rnn_type: str = "lstm",
         rnn_layers: int = 1,
         rnn_dropout: float = 0.0,
+        dropout: float = 0.1,  # dropout for attention + decoder MLP
     ):
         super(DeterministicModel, self).__init__()
         self.temporal_encoder = TemporalEncoder(
@@ -366,11 +381,13 @@ class DeterministicModel(nn.Module):
             num_hidden, num_latent=num_hidden,
             input_dim=num_hidden,
             output_dim=output_dim,
+            dropout=dropout,
         )
         self.decoder = DeterministicDecoder(
             num_hidden,
             input_dim=num_hidden,
             output_dim=output_dim,
+            dropout=dropout,
         )
 
     def forward(
