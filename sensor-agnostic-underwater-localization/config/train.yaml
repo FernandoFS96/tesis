@@ -16,17 +16,17 @@ defaults:
   - wandb: default
 
 # Experiment identity -- used as the wandb group name and to organise outputs.
-exp_name: np_geometry_baseline_2
+exp_name: np_geometry_hermite_shared
 
-seed: 0
+seed: 1
 device: auto  # 'auto' -> cuda if available else cpu; or set 'cuda' / 'cpu'
 
 # -----------------------------------------------------------------------------
 # Optimisation / training-loop hyperparameters
 # -----------------------------------------------------------------------------
 training:
-  epochs: 500
-  batch_size: 16
+  epochs: 1000
+  batch_size: 32
   lr: 1.0e-4
   weight_decay: 1.0e-5
   beta: 1.0          # KL weight (used only by latent models: anp / ranp)

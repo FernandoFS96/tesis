@@ -1,0 +1,24 @@
+2026-06-26 11:30:52,373 INFO    MainThread:675415 [wandb_setup.py:_flush():81] Current SDK version is 0.28.0
+2026-06-26 11:30:52,373 INFO    MainThread:675415 [wandb_setup.py:_flush():81] Configure stats pid to 675415
+2026-06-26 11:30:52,373 INFO    MainThread:675415 [wandb_setup.py:_flush():81] Loading settings from environment variables
+2026-06-26 11:30:52,373 INFO    MainThread:675415 [wandb_init.py:setup_run_log_directory():725] Logging user logs to /home/fer/tesis/sensor-agnostic-underwater-localization/output/hydra/training/2026-06-26/np_geometry_baseline_2/wandb/run-20260626_113052-n4en5c77/logs/debug.log
+2026-06-26 11:30:52,373 INFO    MainThread:675415 [wandb_init.py:setup_run_log_directory():726] Logging internal logs to /home/fer/tesis/sensor-agnostic-underwater-localization/output/hydra/training/2026-06-26/np_geometry_baseline_2/wandb/run-20260626_113052-n4en5c77/logs/debug-internal.log
+2026-06-26 11:30:52,373 INFO    MainThread:675415 [wandb_init.py:init():768] calling init triggers
+2026-06-26 11:30:52,373 INFO    MainThread:675415 [wandb_init.py:init():773] wandb.init called with sweep_config: {}
+config: {'exp_name': 'np_geometry_baseline_2', 'seed': 1, 'device': 'auto', 'training': {'epochs': 1000, 'batch_size': 32, 'lr': 0.0001, 'weight_decay': 1e-05, 'beta': 1.0, 'num_workers': 1}, 'model': {'name': 'cnp', 'num_hidden': 128, 'dropout': 0.2}, 'data': {'traj_method': 'hermite', 'traj_mode': 'distinct', 'data_dir': '../../data/data_random_positions/hermite_distinct/processed/geometry_split', 'normalize_y': True, 'ctx_min': 5, 'ctx_max': 40, 'val_ctx': 20, 'ctx_sample_mode': 'first'}, 'wandb': {'enabled': True, 'offline': False, 'project_name': 'sensor-agnostic-underwater-localization', 'entity': 'fernandofs', 'group_name': 'np_geometry_baseline_2', 'run_name': 'cnp_seed_1', 'dev': False, 'tags': None}, '_wandb': {}}
+2026-06-26 11:30:52,373 INFO    MainThread:675415 [wandb_init.py:init():816] starting backend
+2026-06-26 11:30:52,373 INFO    MainThread:675415 [wandb_init.py:init():831] sending inform_init request
+2026-06-26 11:30:52,625 INFO    MainThread:675415 [wandb_init.py:init():836] backend started and connected
+2026-06-26 11:30:52,626 INFO    MainThread:675415 [wandb_init.py:init():906] updated telemetry
+2026-06-26 11:30:52,630 INFO    MainThread:675415 [wandb_init.py:init():929] communicating run to backend with 90.0 second timeout
+2026-06-26 11:30:52,936 INFO    MainThread:675415 [wandb_init.py:init():974] starting run threads in backend
+2026-06-26 11:30:53,033 INFO    MainThread:675415 [wandb_run.py:_console_start():2523] atexit reg
+2026-06-26 11:30:53,033 INFO    MainThread:675415 [wandb_run.py:_redirect():2373] redirect: wrap_raw
+2026-06-26 11:30:53,033 INFO    MainThread:675415 [wandb_run.py:_redirect():2442] Wrapping output streams.
+2026-06-26 11:30:53,033 INFO    MainThread:675415 [wandb_run.py:_redirect():2465] Redirects installed.
+2026-06-26 11:30:53,035 INFO    MainThread:675415 [wandb_init.py:init():1012] run started, returning control to user process
+2026-06-26 12:39:56,236 INFO    MainThread:675415 [wandb_run.py:_finish():2285] finishing run fernandofs/sensor-agnostic-underwater-localization/n4en5c77
+2026-06-26 12:39:56,236 INFO    MainThread:675415 [wandb_run.py:_atexit_cleanup():2490] got exitcode: 0
+2026-06-26 12:39:56,237 INFO    MainThread:675415 [wandb_run.py:_restore():2472] restore
+2026-06-26 12:39:56,237 INFO    MainThread:675415 [wandb_run.py:_restore():2478] restore done
+2026-06-26 12:39:57,203 INFO    MainThread:675415 [wandb_run.py:_footer_sync_info():3895] logging synced files

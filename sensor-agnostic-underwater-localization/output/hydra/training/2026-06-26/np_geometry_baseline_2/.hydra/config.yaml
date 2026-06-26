@@ -1,19 +1,17 @@
 exp_name: np_geometry_baseline_2
-seed: 0
+seed: 1
 device: auto
 training:
-  epochs: 500
-  batch_size: 16
+  epochs: 1000
+  batch_size: 32
   lr: 0.0001
   weight_decay: 1.0e-05
   beta: 1.0
   num_workers: 1
 model:
-  name: ranp
+  name: cnp
   num_hidden: 128
-  rnn_type: lstm
-  rnn_layers: 1
-  rnn_dropout: 0.0
+  dropout: 0.2
 data:
   traj_method: hermite
   traj_mode: distinct

@@ -146,7 +146,7 @@ hydra:
     choices:
       wandb: default
       data: geometry
-      model: ranp
+      model: cnp
       hydra/env: default
       hydra/callbacks: null
       hydra/job_logging: default

@@ -1,3 +1,4 @@
 # Attentive CNP (deterministic, no latent, no RNN) -> anp.DeterministicModel
 name: cnp
 num_hidden: 128
+dropout: 0.2        # dropout prob for attention + decoder-MLP LayerNorm/dropout

@@ -54,20 +54,22 @@ import src.models.r_anp as ranp_mod  # type: ignore
 
 
 def build_model(name, num_hidden, input_dim, output_dim,
-                rnn_type="lstm", rnn_layers=1, rnn_dropout=0.0):
+                rnn_type="lstm", rnn_layers=1, rnn_dropout=0.0, dropout=0.1):
     name = name.lower()
     if name == "cnp":
-        return anp_mod.DeterministicModel(num_hidden, input_dim, output_dim), "split"
+        return anp_mod.DeterministicModel(num_hidden, input_dim, output_dim,
+                                          dropout=dropout), "split"
     if name == "anp":
-        return anp_mod.LatentModel(num_hidden, input_dim, output_dim), "split"
+        return anp_mod.LatentModel(num_hidden, input_dim, output_dim,
+                                   dropout=dropout), "split"
     if name == "ranp":
         return ranp_mod.LatentModel(num_hidden, input_dim, output_dim,
                                     rnn_type=rnn_type, rnn_layers=rnn_layers,
-                                    rnn_dropout=rnn_dropout), "indexed"
+                                    rnn_dropout=rnn_dropout, dropout=dropout), "indexed"
     if name == "rcnp":
         return ranp_mod.DeterministicModel(num_hidden, input_dim, output_dim,
                                            rnn_type=rnn_type, rnn_layers=rnn_layers,
-                                           rnn_dropout=rnn_dropout), "indexed"
+                                           rnn_dropout=rnn_dropout, dropout=dropout), "indexed"
     raise ValueError(f"unknown model '{name}'")
 
 
@@ -206,7 +208,8 @@ def main():
     model, conv2 = build_model(name, nh, feat_dim, out_dim,
                                rnn_type=cfg.get("rnn_type", "lstm"),
                                rnn_layers=cfg.get("rnn_layers", 1),
-                               rnn_dropout=cfg.get("rnn_dropout", 0.0))
+                               rnn_dropout=cfg.get("rnn_dropout", 0.0),
+                               dropout=cfg.get("dropout", 0.1))
     conv = conv or conv2
     model = model.to(device); model.load_state_dict(ck["model"])
 
