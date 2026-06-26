@@ -19,8 +19,12 @@ It serves two purposes at once (both are reported):
        * pairwise layout-distance matrix (how different the 20 sets are);
        * per-set / per-theta feature statistics (level, dynamic range);
        * feature-distribution overlap across sets (is the displacement actually changing the acoustic features?);
-       * trajectory ensemble plot (the shared paths);
+       * trajectory ensemble plot -- the single shared ensemble (shared mode) or several sets' own ensembles overlaid (distinct mode);
        * coverage of the operational area by sensors vs. by the source.
+
+Note: in DISTINCT mode trajectories ALSO differ per set, so the between-set
+feature variation is confounded (geometry + trajectory) and is reported
+descriptively rather than as a geometry-only well-posedness gate.
 
 Everything reads the REAL output layout written by the generator:
 
@@ -143,6 +147,43 @@ def reshape_features(filtered):
        (tau, ppt, n_traj, n_sensors) -> (n_traj, ppt, tau*n_sensors)."""
     tau, ppt, n_traj, n_sensors = filtered.shape
     return filtered.transpose(2, 1, 0, 3).reshape(n_traj, ppt, tau * n_sensors)
+
+
+def traj_shape_metrics(traj):
+    """Permutation-free descriptors of a trajectory ENSEMBLE's spatial
+    configuration, averaged over its trajectories. Used to quantify how the
+    per-set trajectory configuration differs between position-sets (in distinct
+    mode these vary across sets; in shared mode they are identical by design).
+
+    traj: (3, n_traj, ppt). Returns a dict of scalar metrics.
+    """
+    xy = traj[:2]                                  # (2, n_traj, ppt)
+    steps = np.diff(xy, axis=2)                     # (2, n_traj, ppt-1)
+    step_len = np.linalg.norm(steps, axis=0)        # (n_traj, ppt-1)
+    path_len = step_len.sum(axis=1)                 # (n_traj,) total path length
+    net_disp = np.linalg.norm(xy[:, :, -1] - xy[:, :, 0], axis=0)  # (n_traj,)
+    radius = np.linalg.norm(xy, axis=0)             # (n_traj, ppt) dist from origin
+    radial_max = radius.max(axis=1)                 # (n_traj,) farthest reach
+
+    # Mean absolute turning angle between consecutive step vectors [deg].
+    a = steps[:, :, :-1]
+    b = steps[:, :, 1:]
+    dot = (a * b).sum(axis=0)
+    cross = a[0] * b[1] - a[1] * b[0]
+    turn = np.abs(np.arctan2(cross, dot))           # (n_traj, ppt-2) radians
+    mean_turn_deg = np.degrees(turn).mean() if turn.size else float("nan")
+
+    # Start-point spread across trajectories (how dispersed the launch points are).
+    start = xy[:, :, 0]                             # (2, n_traj)
+    start_spread = float(np.mean(start.std(axis=1)))
+
+    return {
+        "traj_path_len_mean": float(path_len.mean()),
+        "traj_net_disp_mean": float(net_disp.mean()),
+        "traj_radial_max_mean": float(radial_max.mean()),
+        "traj_mean_turn_deg": float(mean_turn_deg),
+        "traj_start_spread": start_spread,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -284,15 +325,23 @@ def check_validity(data_root, set_dirs, thetas, rep, n_sensors_expected,
 # --------------------------------------------------------------------------- #
 # B. CHARACTERIZATION + FIGURES
 # --------------------------------------------------------------------------- #
-def fig_layouts_scatter(layouts, theta_ref, traj_ref, fig_dir):
-    """All sensor layouts overlaid, plus the shared source trajectory cloud."""
+def fig_layouts_scatter(layouts, theta_ref, source_clouds, fig_dir,
+                        distinct=False):
+    """All sensor layouts overlaid, plus the source-position cloud(s).
+
+    ``source_clouds`` is a list of (3, n_traj, ppt+1) trajectory arrays: a single
+    shared ensemble in shared mode, or one ensemble per set in distinct mode (so
+    the grey cloud honestly reflects that the source paths differ per set)."""
     lay = layouts[theta_ref]
     fig, ax = plt.subplots(figsize=(7, 6))
 
-    # source trajectory cloud (shared) in light grey
-    xs = traj_ref[0].ravel()
-    ys = traj_ref[1].ravel()
-    ax.scatter(xs, ys, s=2, c="0.8", alpha=0.4, label="source positions (shared)")
+    # Source trajectory cloud(s) in light grey. Pool every provided ensemble so
+    # the cloud reflects the true source coverage (1 ensemble shared, or N).
+    xs = np.concatenate([c[0].ravel() for c in source_clouds])
+    ys = np.concatenate([c[1].ravel() for c in source_clouds])
+    cloud_lbl = ("source positions (varies per set)" if distinct
+                 else "source positions (shared)")
+    ax.scatter(xs, ys, s=2, c="0.8", alpha=0.4, label=cloud_lbl)
 
     cmap = matplotlib.colormaps['viridis']
     n = len(lay)
@@ -411,7 +460,7 @@ def fig_feature_distributions(data_root, set_dirs, theta_ref, fig_dir, max_sets=
 
 
 def fig_trajectories(traj_ref, theta_ref, fig_dir, max_traj=40):
-    """The shared trajectory ensemble (top-down)."""
+    """The single shared trajectory ensemble (top-down), for SHARED mode."""
     fig, ax = plt.subplots(figsize=(7, 6))
     n = min(max_traj, traj_ref.shape[1])
     for k in range(n):
@@ -430,10 +479,115 @@ def fig_trajectories(traj_ref, theta_ref, fig_dir, max_traj=40):
     return p
 
 
-def fig_between_vs_within(data_root, set_dirs, theta_ref, fig_dir, max_sets=10):
-    """Quantify how much displacement changes features: compare the spread of
-    per-set MEAN feature vectors (between-set) against the within-set spread.
-    A between/within ratio > 1 means geometry meaningfully changes the data."""
+def fig_trajectories_by_set(per_set_trajs, theta_ref, fig_dir,
+                            max_sets=6, max_traj=20):
+    """DISTINCT mode: each position-set has its OWN trajectory ensemble, so plot
+    several sets in different colours to make the per-set difference visible
+    (this is the figure that 'shared_trajectories.png' cannot represent)."""
+    fig, ax = plt.subplots(figsize=(7, 6))
+    sel = per_set_trajs[:max_sets]
+    cmap = matplotlib.colormaps['viridis']
+    for i, (si, traj) in enumerate(sel):
+        c = cmap(i / max(len(sel) - 1, 1))
+        n = min(max_traj, traj.shape[1])
+        for k in range(n):
+            ax.plot(traj[0, k], traj[1, k], lw=0.7, alpha=0.5, color=c)
+        # one labelled proxy line per set
+        ax.plot([], [], color=c, lw=1.5, label=f"set {si}")
+    ax.set_xlabel("x [m]"); ax.set_ylabel("y [m]")
+    ax.set_title(f"Per-set source trajectories (theta={theta_ref}, "
+                 f"{len(sel)} sets, {max_traj} traj/set shown)")
+    ax.set_aspect("equal", adjustable="datalim")
+    ax.legend(fontsize=8, ncol=2)
+    fig.tight_layout()
+    p = os.path.join(fig_dir, "trajectories_by_set.png")
+    fig.savefig(p, dpi=300)
+    plt.close(fig)
+    return p
+
+
+def fig_trajectories_grid(per_set_trajs, theta_ref, fig_dir, max_traj=30):
+    """DISTINCT mode: one small panel PER position-set, each showing that set's
+    own trajectory ensemble side by side -- so the per-set configuration
+    differences are directly comparable across all sets. Shared x/y limits so
+    panels are visually comparable."""
+    n = len(per_set_trajs)
+    if n == 0:
+        return None
+    ncols = min(5, n)
+    nrows = int(np.ceil(n / ncols))
+    # Common limits across all panels.
+    allx = np.concatenate([t[0].ravel() for _, t in per_set_trajs])
+    ally = np.concatenate([t[1].ravel() for _, t in per_set_trajs])
+    xlim = (allx.min(), allx.max())
+    ylim = (ally.min(), ally.max())
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(2.6 * ncols, 2.6 * nrows),
+                             squeeze=False)
+    for ax in axes.ravel():
+        ax.axis("off")
+    for i, (si, traj) in enumerate(per_set_trajs):
+        ax = axes[i // ncols][i % ncols]
+        ax.axis("on")
+        m = min(max_traj, traj.shape[1])
+        for k in range(m):
+            ax.plot(traj[0, k], traj[1, k], lw=0.5, alpha=0.6)
+        ax.set_title(f"set {si}", fontsize=8)
+        ax.set_xlim(xlim); ax.set_ylim(ylim)
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_xticks([]); ax.set_yticks([])
+    fig.suptitle(f"Per-set trajectory configurations (theta={theta_ref}, "
+                 f"{n} sets)", fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    p = os.path.join(fig_dir, "trajectories_grid_by_set.png")
+    fig.savefig(p, dpi=200)
+    plt.close(fig)
+    return p
+
+
+def fig_traj_metrics_by_set(summary_rows, theta_ref, fig_dir):
+    """DISTINCT mode: per-set trajectory-configuration metrics across sets at a
+    fixed theta -- shows numerically how each set's trajectory ensemble differs
+    (path length, reach, turning)."""
+    rs = sorted((r for r in summary_rows if r["theta"] == theta_ref),
+                key=lambda r: r["set"])
+    sets = [r["set"] for r in rs]
+    metrics = [
+        ("traj_path_len_mean", "mean path length [m]"),
+        ("traj_radial_max_mean", "mean farthest reach [m]"),
+        ("traj_mean_turn_deg", "mean turn / step [deg]"),
+        ("traj_start_spread", "start-point spread [m]"),
+    ]
+    fig, axes = plt.subplots(2, 2, figsize=(11, 7))
+    for ax, (key, label) in zip(axes.ravel(), metrics):
+        vals = [r[key] for r in rs]
+        ax.plot(sets, vals, marker="o")
+        ax.set_xlabel("position-set"); ax.set_ylabel(label)
+        ax.grid(alpha=0.3)
+        rng = (max(vals) - min(vals)) if vals else 0.0
+        ax.set_title(f"{label}  (spread={rng:.3g})", fontsize=9)
+    fig.suptitle(f"Per-set trajectory-configuration metrics (theta={theta_ref})",
+                 fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    p = os.path.join(fig_dir, "traj_metrics_by_set.png")
+    fig.savefig(p, dpi=300)
+    plt.close(fig)
+    return p
+
+
+def fig_between_vs_within(data_root, set_dirs, theta_ref, fig_dir, max_sets=10,
+                          distinct=False):
+    """Compare the spread of per-set MEAN feature vectors (between-set) against
+    the within-set spread.
+
+    Interpretation depends on the mode:
+      * SHARED   -- trajectories are identical across sets, so between-set
+        variation isolates the effect of SENSOR GEOMETRY. ratio > 1 => the
+        displacement task is well-posed.
+      * DISTINCT -- both geometry AND trajectories differ across sets, so the
+        between-set term is CONFOUNDED (geometry + trajectory) and cannot be
+        attributed to geometry alone. The ratio is still reported but labelled
+        accordingly."""
     means = []
     within = []
     sel = set_dirs[:max_sets]
@@ -447,12 +601,21 @@ def fig_between_vs_within(data_root, set_dirs, theta_ref, fig_dir, max_sets=10):
     within = float(np.mean(within))
     ratio = between / (within + 1e-12)
 
+    if distinct:
+        between_lbl = "between-set\n(geometry + trajectory)"
+        title = (f"Between-set vs within-set feature variation\n"
+                 f"ratio = {ratio:.2f}  (theta={theta_ref}; "
+                 f"confounded: geometry AND trajectory differ)")
+    else:
+        between_lbl = "between-set\n(geometry)"
+        title = (f"Geometry vs. trajectory variation\n"
+                 f"between/within ratio = {ratio:.2f}  (theta={theta_ref})")
+
     fig, ax = plt.subplots(figsize=(5.5, 4.5))
-    ax.bar(["between-set\n(geometry)", "within-set\n(trajectory)"],
+    ax.bar([between_lbl, "within-set\n(trajectory)"],
            [between, within], color=["#c0392b", "#2980b9"])
     ax.set_ylabel("mean feature-magnitude spread")
-    ax.set_title(f"Geometry vs. trajectory variation\n"
-                 f"between/within ratio = {ratio:.2f}  (theta={theta_ref})")
+    ax.set_title(title)
     fig.tight_layout()
     p = os.path.join(fig_dir, "between_vs_within.png")
     fig.savefig(p, dpi=300)
@@ -475,7 +638,7 @@ def build_summary(set_dirs, thetas):
             # array aperture = max pairwise sensor distance
             aperture = max(np.linalg.norm(xy[a] - xy[b])
                            for a, b in combinations(range(xy.shape[0]), 2))
-            rows.append({
+            row = {
                 "set": si,
                 "theta": th,
                 "tau": filtered.shape[0],
@@ -488,7 +651,11 @@ def build_summary(set_dirs, thetas):
                 "array_aperture_m": float(aperture),
                 "sensor_centroid_x": float(pos[0].mean()),
                 "sensor_centroid_y": float(pos[1].mean()),
-            })
+            }
+            # Per-set trajectory-configuration metrics (vary across sets in
+            # distinct mode; identical across sets in shared mode).
+            row.update(traj_shape_metrics(traj))
+            rows.append(row)
     return rows
 
 
@@ -595,31 +762,75 @@ def main():
     theta_ref = thetas[0]
     _, traj_ref, _ = load_arrays(set_dirs[0], theta_ref)
 
+    # Source-position cloud(s) for the layout scatter: one shared ensemble, or
+    # every set's own ensemble in distinct mode. In distinct mode we also keep a
+    # per-set list of (set_idx, traj) for the per-set trajectory figure.
+    per_set_trajs = []
+    if distinct_trajectories:
+        for si, sd in enumerate(set_dirs):
+            try:
+                per_set_trajs.append((si, load_arrays(sd, theta_ref)[1]))
+            except FileNotFoundError:
+                continue
+        source_clouds = [t for _, t in per_set_trajs] or [traj_ref]
+    else:
+        source_clouds = [traj_ref]
+
     rows = build_summary(set_dirs, thetas)
     write_csv(rows, os.path.join(out_dir, "qc_summary.csv"))
     report.ok(f"wrote qc_summary.csv ({len(rows)} rows)")
 
     figs = []
-    figs.append(fig_layouts_scatter(layouts, theta_ref, traj_ref, fig_dir))
+    figs.append(fig_layouts_scatter(layouts, theta_ref, source_clouds, fig_dir,
+                                    distinct=distinct_trajectories))
     dm_path, _ = fig_layout_distance_matrix(layouts, theta_ref, fig_dir)
     figs.append(dm_path)
     figs.append(fig_feature_stats(rows, fig_dir))
     figs.append(fig_feature_distributions(args.data_root, set_dirs, theta_ref, fig_dir))
-    figs.append(fig_trajectories(traj_ref, theta_ref, fig_dir))
-    bw_path, ratio = fig_between_vs_within(args.data_root, set_dirs, theta_ref, fig_dir)
+    if distinct_trajectories:
+        figs.append(fig_trajectories_by_set(per_set_trajs, theta_ref, fig_dir))
+        grid = fig_trajectories_grid(per_set_trajs, theta_ref, fig_dir)
+        if grid:
+            figs.append(grid)
+        figs.append(fig_traj_metrics_by_set(rows, theta_ref, fig_dir))
+    else:
+        figs.append(fig_trajectories(traj_ref, theta_ref, fig_dir))
+    bw_path, ratio = fig_between_vs_within(args.data_root, set_dirs, theta_ref,
+                                           fig_dir, distinct=distinct_trajectories)
     figs.append(bw_path)
     for fpath in figs:
         report.ok(f"figure: {os.path.relpath(fpath, out_dir)}")
 
-    report.info(f"between/within feature-variation ratio (theta={theta_ref}): "
-                f"{ratio:.2f}")
-    if ratio < 1.0:
-        report.warn("between/within ratio < 1: sensor displacement changes the "
-                    "features LESS than trajectory variation -- the robustness "
-                    "task may be weak. Inspect feature_distributions.png.")
+    # Between/within interpretation. In distinct mode the between-set term mixes
+    # geometry AND trajectory differences, so it cannot certify a geometry-only
+    # task -- report it as descriptive rather than a pass/fail gate.
+    if distinct_trajectories:
+        # Summarise how much the trajectory CONFIGURATION varies across sets.
+        rs = [r for r in rows if r["theta"] == theta_ref]
+        if rs:
+            def spread(key):
+                v = [r[key] for r in rs]
+                return min(v), max(v), float(np.std(v))
+            pl = spread("traj_path_len_mean")
+            rr = spread("traj_radial_max_mean")
+            report.info(f"per-set trajectory config (theta={theta_ref}, "
+                        f"{len(rs)} sets): path_len mean-range "
+                        f"[{pl[0]:.1f},{pl[1]:.1f}] std={pl[2]:.1f} m; "
+                        f"reach mean-range [{rr[0]:.1f},{rr[1]:.1f}] std={rr[2]:.1f} m "
+                        f"-- see traj_metrics_by_set.png / trajectories_grid_by_set.png")
+        report.info(f"between/within feature-variation ratio (theta={theta_ref}): "
+                    f"{ratio:.2f} -- CONFOUNDED (both geometry and trajectories "
+                    f"differ across sets); not attributable to geometry alone.")
     else:
-        report.ok("sensor displacement induces a clear between-set feature shift "
-                  "(ratio >= 1): the robustness task is well-posed.")
+        report.info(f"between/within feature-variation ratio (theta={theta_ref}): "
+                    f"{ratio:.2f}")
+        if ratio < 1.0:
+            report.warn("between/within ratio < 1: sensor displacement changes the "
+                        "features LESS than trajectory variation -- the robustness "
+                        "task may be weak. Inspect feature_distributions.png.")
+        else:
+            report.ok("sensor displacement induces a clear between-set feature shift "
+                      "(ratio >= 1): the robustness task is well-posed.")
 
     report.dump(os.path.join(out_dir, "qc_report.txt"))
     print(f"\nReport written to: {out_dir}")

@@ -160,14 +160,15 @@ def speed_stats(speeds):
 # --------------------------------------------------------------------------- #
 # Figures
 # --------------------------------------------------------------------------- #
-def fig_hist_for_theta(speeds, theta, stats, fig_dir, bins=40):
-    """Per-theta histogram in the original generator's visual style."""
+def fig_hist_for_theta(speeds, theta, stats, fig_dir, bins=40, note=""):
+    """Per-theta histogram in the original generator's visual style. ``note`` is
+    appended to the title (e.g. 'pooled over N sets' for distinct mode)."""
     flat = speeds.ravel()
     plt.figure(figsize=(8, 5))
     plt.hist(flat, bins=bins, edgecolor="k")
     plt.xlabel("Per-jump speed (Δs / T_tot) [m/s]")
     plt.ylabel("Frequency")
-    plt.title(f"Velocity histogram — theta={theta}")
+    plt.title(f"Velocity histogram — theta={theta}" + (f"  [{note}]" if note else ""))
     txt = (f"mean={stats['mean']:.2f} m/s\nstd={stats['std']:.2f} m/s\n"
            f"min={stats['min']:.2f} m/s\nmax={stats['max']:.2f} m/s")
     plt.gca().text(0.98, 0.95, txt, ha="right", va="top",
@@ -199,6 +200,28 @@ def fig_summary_by_theta(per_theta_stats, fig_dir):
     ax.grid(alpha=0.3)
     fig.tight_layout()
     p = os.path.join(fig_dir, "velocity_by_theta_summary.png")
+    fig.savefig(p, dpi=300)
+    plt.close(fig)
+    return p
+
+
+def fig_hist_by_set(all_trajs, theta, t_tot, fig_dir, bins=40, max_sets=10):
+    """DISTINCT mode: overlay each set's OWN per-jump speed histogram so the
+    per-set velocity differences are visible instead of pooled away."""
+    fig, ax = plt.subplots(figsize=(8, 5))
+    cmap = matplotlib.colormaps['viridis']
+    sel = all_trajs[:max_sets]
+    for i, traj in enumerate(sel):
+        flat = compute_speeds(traj, t_tot).ravel()
+        ax.hist(flat, bins=bins, histtype="step", density=True,
+                color=cmap(i / max(len(sel) - 1, 1)), label=f"set {i}")
+    ax.set_xlabel("Per-jump speed (Δs / T_tot) [m/s]")
+    ax.set_ylabel("density")
+    ax.set_title(f"Per-set velocity distribution — theta={theta} "
+                 f"({len(sel)} sets)")
+    ax.legend(fontsize=7, ncol=2)
+    fig.tight_layout()
+    p = os.path.join(fig_dir, f"velocity_hist_by_set_theta_{theta}.png")
     fig.savefig(p, dpi=300)
     plt.close(fig)
     return p
@@ -315,6 +338,7 @@ def main():
     per_theta_stats = {}
     ref_traj_by_theta = {}
     rows = []
+    per_set_rows = []   # distinct mode: one row per (theta, set)
     hard_failures = 0
 
     # For each theta group, iterate over ALL position-sets, check the cross-set
@@ -407,21 +431,50 @@ def main():
         per_theta_stats[th] = st
         ref_traj_by_theta[th] = profile_traj
 
+        pooled = distinct_trajectories and n_checked > 1
+        hist_note = f"pooled over {n_checked} sets" if pooled else ""
+        scope = " (pooled over sets)" if pooled else ""
         line(f"         theta {th}: speed mean={st['mean']:.3f} "
              f"std={st['std']:.3f} min={st['min']:.3f} max={st['max']:.3f} "
              f"median={st['median']:.3f} p95={st['p95']:.3f} [m/s]  "
-             f"(n_traj={profile_traj.shape[1]}, jumps={speeds.shape[1]})")
+             f"(n_traj={profile_traj.shape[1]}, jumps={speeds.shape[1]}){scope}")
 
-        # Per-theta histogram (original style).
-        fig_hist_for_theta(speeds, th, st, fig_dir, bins=args.bins)
+        # Distinct mode: each set has its OWN trajectories, so the velocity
+        # profile is NOT one shared distribution. Report how much the per-set
+        # mean speed varies across sets, add a per-set breakdown to the CSV, and
+        # draw an overlaid per-set histogram so the spread is visible, not hidden
+        # by pooling.
+        set_mean_spread = float("nan")
+        if pooled:
+            per_set_stats = [speed_stats(compute_speeds(t, args.t_tot))
+                             for t in all_trajs]
+            set_means = [s["mean"] for s in per_set_stats]
+            set_mean_spread = float(np.std(set_means))
+            line(f"         theta {th}: per-set mean speed varies across "
+                 f"{n_checked} sets: min={min(set_means):.3f} "
+                 f"max={max(set_means):.3f} std={set_mean_spread:.3f} [m/s] "
+                 f"(reflects distinct per-set trajectories)")
+            for si_idx, s in enumerate(per_set_stats):
+                per_set_rows.append({
+                    "theta": th, "set": si_idx,
+                    "v_mean": s["mean"], "v_std": s["std"],
+                    "v_min": s["min"], "v_max": s["max"],
+                    "v_median": s["median"], "v_p95": s["p95"],
+                })
+            ps = fig_hist_by_set(all_trajs, th, args.t_tot, fig_dir, bins=args.bins)
+            line(f"         figure: {os.path.relpath(ps, out_dir)}")
+
+        # Per-theta histogram (original style; pooled across sets in distinct mode).
+        fig_hist_for_theta(speeds, th, st, fig_dir, bins=args.bins, note=hist_note)
 
         rows.append({
             "theta": th,
             "n_sets_checked": n_checked,
             "cross_set_max_diff": max_disagreement,
             "distinct_mode": int(distinct_trajectories),
-            "invariant_ok": int((not identical) if (distinct_trajectories and n_checked > 1)
-                                else identical),
+            "invariant_ok": int((not identical) if pooled else identical),
+            "pooled_over_sets": int(pooled),
+            "set_mean_speed_spread": set_mean_spread,
             "n_traj": profile_traj.shape[1],
             "n_jumps": speeds.shape[1],
             "v_mean": st["mean"], "v_std": st["std"],
@@ -438,6 +491,10 @@ def main():
 
     write_csv(rows, os.path.join(out_dir, "velocity_summary.csv"))
     line(f"         wrote velocity_summary.csv ({len(rows)} theta rows)")
+    if per_set_rows:
+        write_csv(per_set_rows, os.path.join(out_dir, "velocity_per_set.csv"))
+        line(f"         wrote velocity_per_set.csv ({len(per_set_rows)} "
+             f"(theta,set) rows)")
 
     line("=" * 64)
     line(f"Hard failures: {hard_failures}")
