@@ -139,13 +139,20 @@ class TrajectoryDataset(Dataset):
         return X, y, int(s.get("geometry_id", -1)), float(s.get("theta", -1.0))
 
 
-def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None, ctx_sample_mode="random"):
+def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None, ctx_sample_mode="random",
+                 exclude_ctx_from_target=True):
     """Builds a batch carrying BOTH calling conventions:
        - context_x/context_y/target_x/target_y  (for cnp/anp)
        - x_seq + context_indices/target_indices (for ranp)
-       Targets are ALL points; context is a subset determined by ctx_sample_mode.
+       Context is a subset of the points determined by ctx_sample_mode.
        ctx_sample_mode='first'  -> take the first n_ctx points (ordered prefix)
-       ctx_sample_mode='random' -> random permutation (original behaviour)"""
+       ctx_sample_mode='random' -> random permutation (original behaviour)
+
+       Target-set composition (exclude_ctx_from_target):
+         True  -> targets are the COMPLEMENT of the context (non-overlapping;
+                  the model is scored only on unseen points). [default]
+         False -> targets are ALL points (context is a subset of the targets,
+                  the standard NP convention)."""
     rng = np.random.default_rng(seed)
 
     def collate(batch):
@@ -160,12 +167,21 @@ def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None, ctx_sample_mode="r
             ctx_idx = t.arange(n_ctx, dtype=t.long)
         else:
             ctx_idx = t.as_tensor(np.sort(rng.permutation(ppt)[:n_ctx]), dtype=t.long)
-        tgt_idx = t.arange(ppt, dtype=t.long)   # predict all points
+        if exclude_ctx_from_target:
+            mask = t.ones(ppt, dtype=t.bool)
+            mask[ctx_idx] = False
+            tgt_idx = t.nonzero(mask, as_tuple=False).squeeze(-1)  # complement of context
+            # Guard: if context covers every point, fall back to all points so
+            # the batch is never empty.
+            if tgt_idx.numel() == 0:
+                tgt_idx = t.arange(ppt, dtype=t.long)
+        else:
+            tgt_idx = t.arange(ppt, dtype=t.long)   # predict all points
         return {
             "x_seq": Xs, "y_full": ys,
             "context_indices": ctx_idx, "target_indices": tgt_idx,
             "context_x": Xs[:, ctx_idx, :], "context_y": ys[:, ctx_idx, :],
-            "target_x": Xs, "target_y": ys,
+            "target_x": Xs[:, tgt_idx, :], "target_y": ys[:, tgt_idx, :],
             "gids": gids, "thetas": ths,
         }
     return collate
@@ -254,6 +270,7 @@ def flat_ckpt_config(cfg, device):
         "ctx_max": cfg.data.ctx_max,
         "val_ctx": cfg.data.val_ctx,
         "ctx_sample_mode": cfg.data.ctx_sample_mode,
+        "exclude_ctx_from_target": cfg.data.get("exclude_ctx_from_target", True),
         "epochs": cfg.training.epochs,
         "batch_size": cfg.training.batch_size,
         "lr": cfg.training.lr,
@@ -311,17 +328,20 @@ def main(cfg: DictConfig):
         y_mean, y_std = compute_y_stats(train_ds)
         print(f"[{model_name}] y_mean={y_mean.numpy()}  y_std={y_std.numpy()}")
 
+    excl_ctx = cfg.data.get("exclude_ctx_from_target", True)
     train_loader = DataLoader(
         train_ds, batch_size=cfg.training.batch_size, shuffle=True,
         num_workers=cfg.training.num_workers, drop_last=True,
         collate_fn=make_collate(cfg.data.ctx_min, cfg.data.ctx_max, seed=seed,
-                                ctx_sample_mode=cfg.data.ctx_sample_mode))
+                                ctx_sample_mode=cfg.data.ctx_sample_mode,
+                                exclude_ctx_from_target=excl_ctx))
     val_loader = DataLoader(
         val_ds, batch_size=cfg.training.batch_size, shuffle=False,
         num_workers=cfg.training.num_workers,
         collate_fn=make_collate(cfg.data.ctx_min, cfg.data.ctx_max,
                                 fixed_ctx=cfg.data.val_ctx, seed=seed + 1,
-                                ctx_sample_mode=cfg.data.ctx_sample_mode))
+                                ctx_sample_mode=cfg.data.ctx_sample_mode,
+                                exclude_ctx_from_target=excl_ctx))
 
     # ---- model -------------------------------------------------------------
     model, conv = build_model(

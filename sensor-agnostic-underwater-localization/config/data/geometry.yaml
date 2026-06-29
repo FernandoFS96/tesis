@@ -18,3 +18,10 @@ ctx_min: 5            # min number of context points (random mode, train)
 ctx_max: 80           # max number of context points (random mode, train)
 val_ctx: 20           # fixed number of context points used for validation
 ctx_sample_mode: first   # 'first': ordered prefix context | 'random': random subset
+
+# Target-set composition relative to the context set.
+#   true  -> targets are the COMPLEMENT of the context (non-overlapping; the
+#            model is only scored on points it did not see as context).
+#   false -> targets are ALL points (context is a subset of the target set,
+#            the standard NP convention).
+exclude_ctx_from_target: true
