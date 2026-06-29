@@ -11,12 +11,12 @@
 # =============================================================================
 defaults:
   - _self_
-  - model: cnp
+  - model: ranp # cnp | anp | ranp | online_ranp
   - data: geometry
   - wandb: default
 
 # Experiment identity -- used as the wandb group name and to organise outputs.
-exp_name: np_geometry_hermite_shared
+exp_name: context_target_separated
 
 seed: 1
 device: auto  # 'auto' -> cuda if available else cpu; or set 'cuda' / 'cpu'

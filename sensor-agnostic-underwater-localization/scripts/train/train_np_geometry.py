@@ -75,13 +75,15 @@ _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 sys.path.insert(0, _PROJECT_ROOT)
 import src.models.anp as anp_mod  # type: ignore  # noqa: E402
 import src.models.r_anp as ranp_mod  # type: ignore  # noqa: E402
+import src.models.online_r_anp as online_mod  # type: ignore  # noqa: E402
 
 
 # --------------------------------------------------------------------------- #
 # Model factory
 # --------------------------------------------------------------------------- #
 def build_model(name, num_hidden, input_dim, output_dim,
-                rnn_type="lstm", rnn_layers=1, rnn_dropout=0.0, dropout=0.1):
+                rnn_type="lstm", rnn_layers=1, rnn_dropout=0.0, dropout=0.1,
+                max_context=128):
     name = name.lower()
     if name == "cnp":
         return anp_mod.DeterministicModel(num_hidden, input_dim, output_dim,
@@ -99,11 +101,17 @@ def build_model(name, num_hidden, input_dim, output_dim,
                                             rnn_type=rnn_type, rnn_layers=rnn_layers,
                                             rnn_dropout=rnn_dropout, dropout=dropout),
                 "indexed")
-    raise ValueError(f"unknown model '{name}' (use cnp|anp|ranp|rcnp)")
+    if name == "online_ranp":  # streaming / online-deployable latent RANP
+        return (online_mod.OnlineLatentModel(num_hidden, input_dim, output_dim,
+                                             rnn_type=rnn_type, rnn_layers=rnn_layers,
+                                             rnn_dropout=rnn_dropout, dropout=dropout,
+                                             max_context=max_context),
+                "online")
+    raise ValueError(f"unknown model '{name}' (use cnp|anp|ranp|rcnp|online_ranp)")
 
 
 def is_latent(name):
-    return name.lower() in ("anp", "ranp")  # models with a posterior + KL
+    return name.lower() in ("anp", "ranp", "online_ranp")  # posterior + KL
 
 
 # --------------------------------------------------------------------------- #
@@ -187,10 +195,50 @@ def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None, ctx_sample_mode="r
     return collate
 
 
+def make_online_collate(ctx_min, ctx_max, chunk_size, fixed_ctx=None, seed=None,
+                        ctx_sample_mode="random"):
+    """Collate for the 'online' (streaming) convention. Emits the FULL ordered
+    trajectory plus the timesteps that become context ('fixes') and the chunk
+    size. Temporal order is preserved (never shuffled). ctx_idx are the fix
+    timesteps, shared across the batch; the model reveals them causally.
+       ctx_sample_mode='random' -> fixes scattered across the trajectory
+                                    (realistic: periodic position fixes)
+       ctx_sample_mode='first'  -> fixes are an initial prefix (known start,
+                                    then dead-reckon)."""
+    rng = np.random.default_rng(seed)
+
+    def collate(batch):
+        Xs = t.stack([b[0] for b in batch], dim=0)   # (B, ppt, feat)
+        ys = t.stack([b[1] for b in batch], dim=0)   # (B, ppt, 3)
+        gids = t.tensor([b[2] for b in batch])
+        ths = t.tensor([b[3] for b in batch])
+        B, ppt, _ = Xs.shape
+        n_ctx = int(fixed_ctx) if fixed_ctx is not None else int(rng.integers(ctx_min, ctx_max + 1))
+        n_ctx = max(1, min(n_ctx, ppt))
+        if ctx_sample_mode == "first":
+            ctx_idx = t.arange(n_ctx, dtype=t.long)
+        else:  # scattered fixes, kept in temporal (sorted) order
+            ctx_idx = t.as_tensor(np.sort(rng.permutation(ppt)[:n_ctx]), dtype=t.long)
+        return {
+            "x_seq": Xs, "y_seq": ys,
+            "ctx_idx": ctx_idx, "chunk_size": int(chunk_size),
+            "gids": gids, "thetas": ths,
+        }
+    return collate
+
+
 # --------------------------------------------------------------------------- #
 # Forward dispatch (the family-dependent call)
 # --------------------------------------------------------------------------- #
-def model_forward(model, conv, batch, device, beta, with_target_y=True):
+def model_forward(model, conv, batch, device, beta, with_target_y=True,
+                  predict_with_prior=False):
+    if conv == "online":
+        x_seq = batch["x_seq"].to(device)
+        y_seq = batch["y_seq"].to(device)
+        ctx_idx = batch["ctx_idx"].to(device)
+        chunk = int(batch["chunk_size"])
+        return model.forward_streaming(x_seq, y_seq, ctx_idx, chunk, beta,
+                                       predict_with_prior=predict_with_prior)
     cy = batch["context_y"].to(device)
     ty = batch["target_y"].to(device) if with_target_y else None
     if conv == "split":
@@ -217,15 +265,25 @@ def run_epoch(model, conv, loader, device, beta, optimizer=None, desc="",
     ym = y_mean.to(device) if y_mean is not None else None
     ys = y_std.to(device)  if y_std  is not None else None
     bar = tqdm(loader, desc=desc, leave=False)
+    online = (conv == "online")
     for batch in bar:
-        ty_raw = batch["target_y"].to(device)   # physical units, for MAE
+        # 'online' carries the full trajectory in y_seq; others split into target_y.
+        y_key = "y_seq" if online else "target_y"
+        ty_raw = batch[y_key].to(device)        # physical units, for MAE
         if ym is not None:
-            batch = {**batch,
-                     "context_y": (batch["context_y"].to(device) - ym) / ys,
-                     "target_y":  (batch["target_y"].to(device)  - ym) / ys}
+            if online:
+                batch = {**batch, "y_seq": (batch["y_seq"].to(device) - ym) / ys}
+            else:
+                batch = {**batch,
+                         "context_y": (batch["context_y"].to(device) - ym) / ys,
+                         "target_y":  (batch["target_y"].to(device)  - ym) / ys}
         with t.set_grad_enabled(train):
-            mean, var, loss, kl, nll = model_forward(model, conv, batch, device,
-                                                     beta, with_target_y=True)
+            # Validation of the online model uses the PRIOR latent (no peeking at
+            # target labels) so val MAE reflects real deployment; training uses
+            # the posterior (teacher forcing).
+            mean, var, loss, kl, nll = model_forward(
+                model, conv, batch, device, beta, with_target_y=True,
+                predict_with_prior=(online and not train))
             if train:
                 optimizer.zero_grad()
                 loss.backward()
@@ -271,6 +329,8 @@ def flat_ckpt_config(cfg, device):
         "val_ctx": cfg.data.val_ctx,
         "ctx_sample_mode": cfg.data.ctx_sample_mode,
         "exclude_ctx_from_target": cfg.data.get("exclude_ctx_from_target", True),
+        "max_context": m.get("max_context", 128),     # online-only
+        "chunk_size": cfg.data.get("chunk_size", 8),   # online-only (streaming granularity)
         "epochs": cfg.training.epochs,
         "batch_size": cfg.training.batch_size,
         "lr": cfg.training.lr,
@@ -328,20 +388,36 @@ def main(cfg: DictConfig):
         y_mean, y_std = compute_y_stats(train_ds)
         print(f"[{model_name}] y_mean={y_mean.numpy()}  y_std={y_std.numpy()}")
 
+    online = model_name.lower() == "online_ranp"
     excl_ctx = cfg.data.get("exclude_ctx_from_target", True)
+    if online:
+        chunk_size = cfg.data.get("chunk_size", 8)
+        train_collate = make_online_collate(
+            cfg.data.ctx_min, cfg.data.ctx_max, chunk_size, seed=seed,
+            ctx_sample_mode=cfg.data.ctx_sample_mode)
+        val_collate = make_online_collate(
+            cfg.data.ctx_min, cfg.data.ctx_max, chunk_size,
+            fixed_ctx=cfg.data.val_ctx, seed=seed + 1,
+            ctx_sample_mode=cfg.data.ctx_sample_mode)
+    else:
+        train_collate = make_collate(
+            cfg.data.ctx_min, cfg.data.ctx_max, seed=seed,
+            ctx_sample_mode=cfg.data.ctx_sample_mode,
+            exclude_ctx_from_target=excl_ctx)
+        val_collate = make_collate(
+            cfg.data.ctx_min, cfg.data.ctx_max,
+            fixed_ctx=cfg.data.val_ctx, seed=seed + 1,
+            ctx_sample_mode=cfg.data.ctx_sample_mode,
+            exclude_ctx_from_target=excl_ctx)
+
     train_loader = DataLoader(
         train_ds, batch_size=cfg.training.batch_size, shuffle=True,
         num_workers=cfg.training.num_workers, drop_last=True,
-        collate_fn=make_collate(cfg.data.ctx_min, cfg.data.ctx_max, seed=seed,
-                                ctx_sample_mode=cfg.data.ctx_sample_mode,
-                                exclude_ctx_from_target=excl_ctx))
+        collate_fn=train_collate)
     val_loader = DataLoader(
         val_ds, batch_size=cfg.training.batch_size, shuffle=False,
         num_workers=cfg.training.num_workers,
-        collate_fn=make_collate(cfg.data.ctx_min, cfg.data.ctx_max,
-                                fixed_ctx=cfg.data.val_ctx, seed=seed + 1,
-                                ctx_sample_mode=cfg.data.ctx_sample_mode,
-                                exclude_ctx_from_target=excl_ctx))
+        collate_fn=val_collate)
 
     # ---- model -------------------------------------------------------------
     model, conv = build_model(
@@ -349,7 +425,8 @@ def main(cfg: DictConfig):
         rnn_type=cfg.model.get("rnn_type", "lstm"),
         rnn_layers=cfg.model.get("rnn_layers", 1),
         rnn_dropout=cfg.model.get("rnn_dropout", 0.0),
-        dropout=cfg.model.get("dropout", 0.1))
+        dropout=cfg.model.get("dropout", 0.1),
+        max_context=cfg.model.get("max_context", 128))
     model = model.to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"[{model_name}] convention={conv}  params={n_params/1e6:.2f}M  device={device}")

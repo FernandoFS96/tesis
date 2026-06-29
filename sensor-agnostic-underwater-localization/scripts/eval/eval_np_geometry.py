@@ -51,10 +51,12 @@ from tqdm import tqdm
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import src.models.anp as anp_mod  # type: ignore
 import src.models.r_anp as ranp_mod  # type: ignore
+import src.models.online_r_anp as online_mod  # type: ignore
 
 
 def build_model(name, num_hidden, input_dim, output_dim,
-                rnn_type="lstm", rnn_layers=1, rnn_dropout=0.0, dropout=0.1):
+                rnn_type="lstm", rnn_layers=1, rnn_dropout=0.0, dropout=0.1,
+                max_context=128):
     name = name.lower()
     if name == "cnp":
         return anp_mod.DeterministicModel(num_hidden, input_dim, output_dim,
@@ -70,6 +72,11 @@ def build_model(name, num_hidden, input_dim, output_dim,
         return ranp_mod.DeterministicModel(num_hidden, input_dim, output_dim,
                                            rnn_type=rnn_type, rnn_layers=rnn_layers,
                                            rnn_dropout=rnn_dropout, dropout=dropout), "indexed"
+    if name == "online_ranp":
+        return online_mod.OnlineLatentModel(num_hidden, input_dim, output_dim,
+                                            rnn_type=rnn_type, rnn_layers=rnn_layers,
+                                            rnn_dropout=rnn_dropout, dropout=dropout,
+                                            max_context=max_context), "online"
     raise ValueError(f"unknown model '{name}'")
 
 
@@ -168,13 +175,80 @@ def per_geometry_mae(model, conv, ds, device, eval_ctx, n_draws, seed=0,
     return {g: err_sum[g] / err_cnt[g] for g in err_sum}
 
 
+@t.no_grad()
+def per_geometry_mae_online(model, ds, device, eval_ctx, n_draws, chunk_size,
+                            seed=0, y_mean=None, y_std=None,
+                            ctx_sample_mode="random", exclude_ctx_from_target=False):
+    """Deployment-faithful streaming eval for the online model.
+
+    Drives the ACTUAL deployment API (model.step / model.register_context) over
+    each trajectory in temporal order: reveal one chunk at a time, predict it
+    from the prior using context seen SO FAR, then register the chunk's 'fixes'.
+    The context-fix indices are drawn identically to per_geometry_mae (same rng
+    seed + draw order), so an offline and an online model can be compared under
+    the EXACT same scenario."""
+    rng = np.random.default_rng(seed)
+    err_sum = defaultdict(float); err_cnt = defaultdict(int)
+    model.eval()
+    ym = y_mean.to(device) if y_mean is not None else None
+    ys = y_std.to(device)  if y_std  is not None else None
+    for _ in range(n_draws):
+        for i in range(len(ds)):
+            X, y, gid, th = ds[i]
+            X = X.unsqueeze(0).to(device); y = y.unsqueeze(0).to(device)
+            ppt = X.size(1)
+            n_ctx = max(1, min(eval_ctx, ppt))
+            if ctx_sample_mode == "first":
+                idx = t.arange(n_ctx, device=device, dtype=t.long)
+            else:
+                idx = t.as_tensor(np.sort(rng.permutation(ppt)[:n_ctx]),
+                                  device=device, dtype=t.long)
+            ctx_set = set(int(j) for j in idx.tolist())
+
+            # ---- streaming loop (the real deployment code path) -------------
+            state = model.init_state(1, device)
+            preds = t.zeros_like(y)                       # physical units
+            for s in range(0, ppt, chunk_size):
+                e = min(s + chunk_size, ppt)
+                mean, var, h = model.step(X[:, s:e], state)   # prior prediction
+                preds[:, s:e] = mean * ys + ym if ym is not None else mean
+                # register any fixes that land in this chunk (context y must be
+                # in the model's normalized space)
+                local = [j for j in range(s, e) if j in ctx_set]
+                if local:
+                    sel = t.tensor(local, device=device, dtype=t.long)
+                    loc = t.tensor([j - s for j in local], device=device, dtype=t.long)
+                    y_fix = y[:, sel, :]
+                    if ym is not None:
+                        y_fix = (y_fix - ym) / ys
+                    model.register_context(h[:, loc, :], y_fix, state)
+
+            if exclude_ctx_from_target:
+                mask = t.ones(ppt, dtype=t.bool, device=device); mask[idx] = False
+                tgt_idx = t.nonzero(mask, as_tuple=False).squeeze(-1)
+                if tgt_idx.numel() == 0:
+                    tgt_idx = t.arange(ppt, device=device, dtype=t.long)
+            else:
+                tgt_idx = t.arange(ppt, device=device, dtype=t.long)
+            dist = t.sqrt(((preds[:, tgt_idx] - y[:, tgt_idx]) ** 2).sum(-1) + 1e-12)
+            err_sum[gid] += float(dist.sum()); err_cnt[gid] += dist.numel()
+    return {g: err_sum[g] / err_cnt[g] for g in err_sum}
+
+
 def pool_means(model, conv, pools, labels, device, eval_ctx, n_draws,
                shuffle_temporal=False, y_mean=None, y_std=None,
-               ctx_sample_mode="random", exclude_ctx_from_target=False):
+               ctx_sample_mode="random", exclude_ctx_from_target=False,
+               chunk_size=8):
     """Returns {pool: mean_mae} and per-geometry rows for one context size."""
     pm = {}; rows = []
     for nm, ds in pools.items():
-        gmae = per_geometry_mae(model, conv, ds, device, eval_ctx, n_draws,
+        if conv == "online":
+            gmae = per_geometry_mae_online(
+                model, ds, device, eval_ctx, n_draws, chunk_size,
+                y_mean=y_mean, y_std=y_std, ctx_sample_mode=ctx_sample_mode,
+                exclude_ctx_from_target=exclude_ctx_from_target)
+        else:
+            gmae = per_geometry_mae(model, conv, ds, device, eval_ctx, n_draws,
                                 shuffle_temporal=shuffle_temporal,
                                 y_mean=y_mean, y_std=y_std,
                                 ctx_sample_mode=ctx_sample_mode,
@@ -211,6 +285,10 @@ def main():
                          "points only). If omitted, reads from checkpoint config "
                          "(falls back to 'false' for old checkpoints, matching how "
                          "they were trained).")
+    ap.add_argument("--chunk-size", type=int, default=None,
+                    help="streaming chunk size for online_ranp checkpoints. If "
+                         "omitted, reads from checkpoint config (default 8). "
+                         "Ignored by offline models.")
     ap.add_argument("--device", default="cuda" if t.cuda.is_available() else "cpu")
     args = ap.parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
@@ -230,9 +308,16 @@ def main():
                                rnn_type=cfg.get("rnn_type", "lstm"),
                                rnn_layers=cfg.get("rnn_layers", 1),
                                rnn_dropout=cfg.get("rnn_dropout", 0.0),
-                               dropout=cfg.get("dropout", 0.1))
+                               dropout=cfg.get("dropout", 0.1),
+                               max_context=cfg.get("max_context", 128))
     conv = conv or conv2
     model = model.to(device); model.load_state_dict(ck["model"])
+
+    # online streaming granularity: CLI overrides checkpoint config
+    chunk_size = args.chunk_size if args.chunk_size is not None \
+        else int(cfg.get("chunk_size", 8))
+    if conv == "online" and args.shuffle_temporal:
+        print("[warn] --shuffle-temporal is ignored for online (streaming) models.")
 
     # normalization stats: auto-loaded from checkpoint (None for old checkpoints)
     y_mean = ck.get("y_mean")
@@ -266,7 +351,8 @@ def main():
                                shuffle_temporal=args.shuffle_temporal,
                                y_mean=y_mean, y_std=y_std,
                                ctx_sample_mode=ctx_sample_mode,
-                               exclude_ctx_from_target=exclude_ctx)
+                               exclude_ctx_from_target=exclude_ctx,
+                               chunk_size=chunk_size)
             row = {"model": name, "eval_ctx": c,
                    "train": pm.get("train", float("nan")),
                    "val": pm.get("val", float("nan")),
@@ -308,17 +394,25 @@ def main():
          f"  shuffle_temporal={args.shuffle_temporal}"
          f"  ctx_sample_mode={ctx_sample_mode}"
          f"  exclude_ctx_from_target={exclude_ctx}"
+         f"{f'  chunk_size={chunk_size}' if conv == 'online' else ''}"
          f"  normalize_y={y_mean is not None}")
     line("")
 
     pool_mae = {}; geo_rows = []
     for nm, ds in pools.items():
-        gmae = per_geometry_mae(model, conv, ds, device, args.eval_ctx,
-                                args.n_context_draws,
-                                shuffle_temporal=args.shuffle_temporal,
-                                y_mean=y_mean, y_std=y_std,
-                                ctx_sample_mode=ctx_sample_mode,
-                                exclude_ctx_from_target=exclude_ctx)
+        if conv == "online":
+            gmae = per_geometry_mae_online(
+                model, ds, device, args.eval_ctx, args.n_context_draws,
+                chunk_size, y_mean=y_mean, y_std=y_std,
+                ctx_sample_mode=ctx_sample_mode,
+                exclude_ctx_from_target=exclude_ctx)
+        else:
+            gmae = per_geometry_mae(model, conv, ds, device, args.eval_ctx,
+                                    args.n_context_draws,
+                                    shuffle_temporal=args.shuffle_temporal,
+                                    y_mean=y_mean, y_std=y_std,
+                                    ctx_sample_mode=ctx_sample_mode,
+                                    exclude_ctx_from_target=exclude_ctx)
         pool_mae[nm] = float(np.mean(list(gmae.values())))
         for gid, m in sorted(gmae.items()):
             region = labels.get(gid, {}).get("region", "train")
