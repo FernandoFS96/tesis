@@ -11,7 +11,7 @@
 # =============================================================================
 defaults:
   - _self_
-  - model: ranp
+  - model: cnp
   - data: geometry
   - wandb: default
 
