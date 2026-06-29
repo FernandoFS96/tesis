@@ -1,0 +1,14 @@
+# Streaming / online-deployable latent RANP -> online_r_anp.OnlineLatentModel
+# Trained with a CAUSAL streaming loop (context comes only from the past); the
+# RNN is run once over the full trajectory for efficiency, but the NP context
+# aggregation is restricted to past 'fixes'. See src/models/online_r_anp.py.
+name: online_ranp
+num_hidden: 128
+rnn_type: lstm      # lstm | gru
+rnn_layers: 1
+rnn_dropout: 0.1    # dropout between stacked RNN layers (needs rnn_layers > 1)
+dropout: 0.2        # dropout prob for attention + decoder-MLP LayerNorm/dropout
+
+# Max number of labelled context tokens ('fixes') kept in the online ring
+# buffer. Bounds per-step attention cost at deployment.
+max_context: 128

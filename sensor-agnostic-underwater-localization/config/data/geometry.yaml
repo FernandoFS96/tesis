@@ -7,7 +7,7 @@
 # Override on the CLI to switch variants, e.g.:
 #   python scripts/train/train_np_geometry.py data.traj_method=spiral data.traj_mode=distinct
 traj_method: hermite
-traj_mode: shared
+traj_mode: distinct
 data_dir: ../../data/data_random_positions/${data.traj_method}_${data.traj_mode}/processed/geometry_split
 
 # Target normalisation (zero-mean / unit-std, stats computed on the train set).
@@ -25,3 +25,8 @@ ctx_sample_mode: first   # 'first': ordered prefix context | 'random': random su
 #   false -> targets are ALL points (context is a subset of the target set,
 #            the standard NP convention).
 exclude_ctx_from_target: true
+
+# Streaming granularity for the online model (model=online_ranp). Number of
+# trajectory timesteps revealed per step; smaller = finer-grained streaming.
+# Ignored by the offline models.
+chunk_size: 2

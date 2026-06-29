@@ -1,0 +1,40 @@
+{
+  "os": "Linux-6.8.0-124-generic-x86_64-with-glibc2.35",
+  "python": "CPython 3.13.5",
+  "startedAt": "2026-06-29T08:25:29.429784Z",
+  "program": "/home/fer/tesis/sensor-agnostic-underwater-localization/scripts/train/train_np_geometry.py",
+  "codePath": "sensor-agnostic-underwater-localization/scripts/train/train_np_geometry.py",
+  "codePathLocal": "train_np_geometry.py",
+  "git": {
+    "remote": "https://github.com/FernandoFS96/tesis.git",
+    "commit": "8ff9ea611ac0addfecea1acc5440f627cccecd5b"
+  },
+  "email": "fernando.fsalvador@upm.es",
+  "root": "/home/fer/tesis/sensor-agnostic-underwater-localization/output/hydra/training/2026-06-29/context_target_separated",
+  "host": "kraken",
+  "executable": "/home/fer/miniconda3/envs/tfm/bin/python",
+  "cpu_count": 32,
+  "cpu_count_logical": 64,
+  "gpu": "NVIDIA GeForce RTX 4090",
+  "gpu_count": 1,
+  "disk": {
+    "/": {
+      "total": "941955575808",
+      "used": "208365060096"
+    }
+  },
+  "memory": {
+    "total": "134878117888"
+  },
+  "gpu_nvidia": [
+    {
+      "name": "NVIDIA GeForce RTX 4090",
+      "memoryTotal": "25757220864",
+      "cudaCores": 16384,
+      "architecture": "Ada",
+      "uuid": "GPU-57264918-b185-c3fa-dbc2-1cb337133026"
+    }
+  ],
+  "cudaVersion": "12.9",
+  "writerId": "mw3keh4sjomouizsyqn2r6le90djjp3m"
+}

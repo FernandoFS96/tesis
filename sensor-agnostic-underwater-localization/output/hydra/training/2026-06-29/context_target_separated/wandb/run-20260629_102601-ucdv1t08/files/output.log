@@ -1,0 +1,93 @@
+[ranp] cwd=/home/fer/tesis/sensor-agnostic-underwater-localization/scripts/train  data_dir=../../data/data_random_positions/hermite_shared/processed/geometry_split
+[ranp] feat_dim=1010 out_dim=3 ppt=50 | train=7200 val=2400
+[ranp] y_mean=[-0.14255264 -0.15776742  0.        ]  y_std=[1.8655098e+02 1.8094292e+02 1.0000000e-06]
+[ranp] convention=indexed  params=1.79M  device=cuda
+ranp epochs:  69%|███████████████████████████████████████████████████████████████▎                            | 688/1000 [2:10:55<59:22, 11.42s/it, tr_mae=17.39, va_loss=-1.956, va_mae=7.28]
+Traceback (most recent call last):                                                                                                                                                                                                                     
+  File "/home/fer/tesis/sensor-agnostic-underwater-localization/scripts/train/train_np_geometry.py", line 423, in <module>
+    model, conv = build_model(
+    ^^^^^^
+  File "/home/fer/miniconda3/envs/tfm/lib/python3.13/site-packages/hydra/main.py", line 94, in decorated_main
+    _run_hydra(
+    ~~~~~~~~~~^
+        args=args,
+        ^^^^^^^^^^
+    ...<3 lines>...
+        config_name=config_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/fer/miniconda3/envs/tfm/lib/python3.13/site-packages/hydra/_internal/utils.py", line 394, in _run_hydra
+    _run_app(
+    ~~~~~~~~^
+        run=args.run,
+        ^^^^^^^^^^^^^
+    ...<5 lines>...
+        overrides=overrides,
+        ^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/fer/miniconda3/envs/tfm/lib/python3.13/site-packages/hydra/_internal/utils.py", line 457, in _run_app
+    run_and_report(
+    ~~~~~~~~~~~~~~^
+        lambda: hydra.run(
+        ^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+        )
+        ^
+    )
+    ^
+  File "/home/fer/miniconda3/envs/tfm/lib/python3.13/site-packages/hydra/_internal/utils.py", line 220, in run_and_report
+    return func()
+  File "/home/fer/miniconda3/envs/tfm/lib/python3.13/site-packages/hydra/_internal/utils.py", line 458, in <lambda>
+    lambda: hydra.run(
+            ~~~~~~~~~^
+        config_name=config_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+        task_function=task_function,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        overrides=overrides,
+        ^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/fer/miniconda3/envs/tfm/lib/python3.13/site-packages/hydra/_internal/hydra.py", line 119, in run
+    ret = run_job(
+        hydra_context=HydraContext(
+    ...<6 lines>...
+        configure_logging=with_log_configuration,
+    )
+  File "/home/fer/miniconda3/envs/tfm/lib/python3.13/site-packages/hydra/core/utils.py", line 186, in run_job
+    ret.return_value = task_function(task_cfg)
+                       ~~~~~~~~~~~~~^^^^^^^^^^
+  File "/home/fer/tesis/sensor-agnostic-underwater-localization/scripts/train/train_np_geometry.py", line 378, in main
+    # print current working directory and data_dir for debugging
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    print(f"[{model_name}] cwd={os.getcwd()}  data_dir={data_dir}")
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fer/tesis/sensor-agnostic-underwater-localization/scripts/train/train_np_geometry.py", line 231, in run_epoch
+    # Forward dispatch (the family-dependent call)
+  File "/home/fer/miniconda3/envs/tfm/lib/python3.13/site-packages/torch/_tensor.py", line 647, in backward
+    torch.autograd.backward(
+    ~~~~~~~~~~~~~~~~~~~~~~~^
+        self, gradient, retain_graph, create_graph, inputs=inputs
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/fer/miniconda3/envs/tfm/lib/python3.13/site-packages/torch/autograd/__init__.py", line 354, in backward
+    _engine_run_backward(
+    ~~~~~~~~~~~~~~~~~~~~^
+        tensors,
+        ^^^^^^^^
+    ...<5 lines>...
+        accumulate_grad=True,
+        ^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/fer/miniconda3/envs/tfm/lib/python3.13/site-packages/torch/autograd/graph.py", line 829, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        t_outputs, *args, **kwargs
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )  # Calls into the C++ engine to run the backward pass
+    ^
+KeyboardInterrupt

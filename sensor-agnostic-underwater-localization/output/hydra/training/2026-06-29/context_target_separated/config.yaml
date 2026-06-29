@@ -1,0 +1,37 @@
+exp_name: context_target_separated
+seed: 1
+device: auto
+training:
+  epochs: 1000
+  batch_size: 32
+  lr: 0.0001
+  weight_decay: 1.0e-05
+  beta: 1.0
+  num_workers: 1
+model:
+  name: ranp
+  num_hidden: 128
+  rnn_type: lstm
+  rnn_layers: 1
+  rnn_dropout: 0.1
+  dropout: 0.2
+data:
+  traj_method: hermite
+  traj_mode: distinct
+  data_dir: ../../data/data_random_positions/${data.traj_method}_${data.traj_mode}/processed/geometry_split
+  normalize_y: true
+  ctx_min: 5
+  ctx_max: 80
+  val_ctx: 20
+  ctx_sample_mode: first
+  exclude_ctx_from_target: true
+  chunk_size: 2
+wandb:
+  enabled: true
+  offline: false
+  project_name: sensor-agnostic-underwater-localization
+  entity: fernandofs
+  group_name: ${exp_name}
+  run_name: ${model.name}_seed_${seed}
+  dev: false
+  tags: null
