@@ -1,7 +1,0 @@
-[cnp] cwd=/home/fer/tesis/sensor-agnostic-underwater-localization/scripts/train  data_dir=../../data/data_random_positions/hermite_shared/processed/geometry_split
-[cnp] feat_dim=1010 out_dim=3 ppt=50 | train=7200 val=2400
-[cnp] y_mean=[-0.14255264 -0.15776742  0.        ]  y_std=[1.8655098e+02 1.8094292e+02 1.0000000e-06]
-[cnp] convention=split  params=1.05M  device=cuda
-cnp epochs: 100%|██████████████████████████████████████████████████████| 1000/1000 [1:10:22<00:00,  4.22s/it, tr_mae=31.79, va_loss=1.054, va_mae=74.73]
-                                                                                                                                                        
-[cnp] done. best val loss=-0.3798 -> /home/fer/tesis/sensor-agnostic-underwater-localization/output/hydra/training/2026-06-26/np_geometry_hermite_shared/best.pt

@@ -29,4 +29,4 @@ exclude_ctx_from_target: true
 # Streaming granularity for the online model (model=online_ranp). Number of
 # trajectory timesteps revealed per step; smaller = finer-grained streaming.
 # Ignored by the offline models.
-chunk_size: 2
+chunk_size: 8

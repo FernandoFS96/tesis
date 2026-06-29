@@ -175,7 +175,7 @@ class OnlineLatentModel(nn.Module):
                 t.cat([ctx_y, target_y], dim=1))
 
         use_post = (target_y is not None) and (not predict_with_prior)
-        z = post if use_post else prior
+        z = post if use_post else prior #type: ignore
 
         z = z.unsqueeze(1).repeat(1, num_targets, 1)
         r = self.deterministic_encoder(ctx_h, ctx_y, target_h)
