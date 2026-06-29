@@ -87,46 +87,51 @@ class TrajectoryDataset:
 
 
 @t.no_grad()
-def forward_one(model, conv, X, y, idx, device, shuffle_temporal=False, perm=None):
+def forward_one(model, conv, X, y, idx, device, shuffle_temporal=False, perm=None,
+                tgt_idx=None):
     """Single-trajectory forward for either convention. X,y: (1, ppt, ·).
 
+    `tgt_idx` selects which points are predicted/returned. If None, all ppt
+    points are targets (original behaviour). Predictions are returned ALIGNED
+    with tgt_idx, i.e. output row k corresponds to point tgt_idx[k]; the caller
+    must therefore score against y[:, tgt_idx, :].
+
     If shuffle_temporal is True, the trajectory point ORDER is permuted before
-    the forward pass (and predictions are unpermuted before returning). This is
-    a diagnostic: a recurrent model that relies on temporal smoothness will
-    degrade sharply under shuffling, whereas a purely acoustic model is
-    order-invariant. `perm` (a fixed permutation) can be supplied so the same
-    shuffle is applied across draws/models for comparability."""
+    the forward pass. This is a diagnostic: a recurrent model that relies on
+    temporal smoothness will degrade sharply under shuffling, whereas a purely
+    acoustic model is order-invariant. `perm` (a fixed permutation) can be
+    supplied so the same shuffle is applied across draws/models for
+    comparability."""
     ppt = X.size(1)
+    if tgt_idx is None:
+        tgt_idx = t.arange(ppt, device=device, dtype=t.long)
     if shuffle_temporal:
         if perm is None:
             perm = t.randperm(ppt, device=device)
-        inv = t.argsort(perm)
         Xs = X[:, perm, :]; ys = y[:, perm, :]
-        # remap context indices into the permuted order
+        # remap context + target indices into the permuted order
         pos = t.empty(ppt, dtype=t.long, device=device); pos[perm] = t.arange(ppt, device=device)
-        idx_s = pos[idx]
+        idx_s = pos[idx]; ti_s = pos[tgt_idx]
         cy = ys[:, idx_s, :]
         if conv == "split":
-            cx = Xs[:, idx_s, :]
-            mean, var, *rest = model(cx, cy, Xs, None)
+            cx = Xs[:, idx_s, :]; tx = Xs[:, ti_s, :]
+            mean, var, *rest = model(cx, cy, tx, None)
         else:
-            ti = t.arange(ppt, device=device, dtype=t.long)
-            mean, var, *rest = model(Xs, idx_s, cy, ti, None)
-        # unpermute predictions back to original order
-        return (mean[:, inv, :], var[:, inv, :], *rest)
+            mean, var, *rest = model(Xs, idx_s, cy, ti_s, None)
+        # predictions are already in tgt_idx order (we queried those points)
+        return (mean, var, *rest)
     cy = y[:, idx, :]
     if conv == "split":
-        cx = X[:, idx, :]
-        return model(cx, cy, X, None)
+        cx = X[:, idx, :]; tx = X[:, tgt_idx, :]
+        return model(cx, cy, tx, None)
     else:
-        ti = t.arange(ppt, device=device, dtype=t.long)
-        return model(X, idx, cy, ti, None)
+        return model(X, idx, cy, tgt_idx, None)
 
 
 @t.no_grad()
 def per_geometry_mae(model, conv, ds, device, eval_ctx, n_draws, seed=0,
                      shuffle_temporal=False, y_mean=None, y_std=None,
-                     ctx_sample_mode="random"):
+                     ctx_sample_mode="random", exclude_ctx_from_target=False):
     rng = np.random.default_rng(seed)
     err_sum = defaultdict(float); err_cnt = defaultdict(int)
     model.eval()
@@ -144,26 +149,36 @@ def per_geometry_mae(model, conv, ds, device, eval_ctx, n_draws, seed=0,
             else:
                 idx = t.as_tensor(np.sort(rng.permutation(ppt)[:n_ctx]),
                                   device=device, dtype=t.long)
+            if exclude_ctx_from_target:
+                mask = t.ones(ppt, dtype=t.bool, device=device); mask[idx] = False
+                tgt_idx = t.nonzero(mask, as_tuple=False).squeeze(-1)  # complement
+                if tgt_idx.numel() == 0:                              # context = all
+                    tgt_idx = t.arange(ppt, device=device, dtype=t.long)
+            else:
+                tgt_idx = t.arange(ppt, device=device, dtype=t.long)
             y_in = (y - ym) / ys if ym is not None else y
             mean, var, *_ = forward_one(model, conv, X, y_in, idx, device,
-                                        shuffle_temporal=shuffle_temporal)
+                                        shuffle_temporal=shuffle_temporal,
+                                        tgt_idx=tgt_idx)
             if ym is not None:
                 mean = mean * ys + ym
-            dist = t.sqrt(((mean - y_raw) ** 2).sum(-1) + 1e-12)
+            y_tgt = y_raw[:, tgt_idx, :]                              # score targets only
+            dist = t.sqrt(((mean - y_tgt) ** 2).sum(-1) + 1e-12)
             err_sum[gid] += float(dist.sum()); err_cnt[gid] += dist.numel()
     return {g: err_sum[g] / err_cnt[g] for g in err_sum}
 
 
 def pool_means(model, conv, pools, labels, device, eval_ctx, n_draws,
                shuffle_temporal=False, y_mean=None, y_std=None,
-               ctx_sample_mode="random"):
+               ctx_sample_mode="random", exclude_ctx_from_target=False):
     """Returns {pool: mean_mae} and per-geometry rows for one context size."""
     pm = {}; rows = []
     for nm, ds in pools.items():
         gmae = per_geometry_mae(model, conv, ds, device, eval_ctx, n_draws,
                                 shuffle_temporal=shuffle_temporal,
                                 y_mean=y_mean, y_std=y_std,
-                                ctx_sample_mode=ctx_sample_mode)
+                                ctx_sample_mode=ctx_sample_mode,
+                                exclude_ctx_from_target=exclude_ctx_from_target)
         pm[nm] = float(np.mean(list(gmae.values())))
         for gid, m in sorted(gmae.items()):
             region = labels.get(gid, {}).get("region", "train")
@@ -190,6 +205,12 @@ def main():
     ap.add_argument("--ctx-sample-mode", default=None, choices=["first", "random"],
                     help="context sampling mode. If omitted, reads from checkpoint "
                          "config (falls back to 'random' for old checkpoints).")
+    ap.add_argument("--exclude-ctx-from-target", dest="exclude_ctx",
+                    default=None, choices=["true", "false"],
+                    help="score targets on the COMPLEMENT of the context (unseen "
+                         "points only). If omitted, reads from checkpoint config "
+                         "(falls back to 'false' for old checkpoints, matching how "
+                         "they were trained).")
     ap.add_argument("--device", default="cuda" if t.cuda.is_available() else "cpu")
     args = ap.parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
@@ -220,6 +241,13 @@ def main():
     # context sampling mode: CLI flag overrides checkpoint config
     ctx_sample_mode = args.ctx_sample_mode or cfg.get("ctx_sample_mode", "random")
 
+    # target-set composition: CLI flag overrides checkpoint config (old
+    # checkpoints, trained on all points, default to False).
+    if args.exclude_ctx is not None:
+        exclude_ctx = args.exclude_ctx == "true"
+    else:
+        exclude_ctx = bool(cfg.get("exclude_ctx_from_target", False))
+
     pools = {}
     for nm in ["train", "val", "test"]:
         pth = os.path.join(args.data_dir, f"{nm}_data.pkl")
@@ -237,7 +265,8 @@ def main():
                                args.n_context_draws,
                                shuffle_temporal=args.shuffle_temporal,
                                y_mean=y_mean, y_std=y_std,
-                               ctx_sample_mode=ctx_sample_mode)
+                               ctx_sample_mode=ctx_sample_mode,
+                               exclude_ctx_from_target=exclude_ctx)
             row = {"model": name, "eval_ctx": c,
                    "train": pm.get("train", float("nan")),
                    "val": pm.get("val", float("nan")),
@@ -278,6 +307,7 @@ def main():
     line(f"eval context size: {args.eval_ctx}  draws: {args.n_context_draws}"
          f"  shuffle_temporal={args.shuffle_temporal}"
          f"  ctx_sample_mode={ctx_sample_mode}"
+         f"  exclude_ctx_from_target={exclude_ctx}"
          f"  normalize_y={y_mean is not None}")
     line("")
 
@@ -287,7 +317,8 @@ def main():
                                 args.n_context_draws,
                                 shuffle_temporal=args.shuffle_temporal,
                                 y_mean=y_mean, y_std=y_std,
-                                ctx_sample_mode=ctx_sample_mode)
+                                ctx_sample_mode=ctx_sample_mode,
+                                exclude_ctx_from_target=exclude_ctx)
         pool_mae[nm] = float(np.mean(list(gmae.values())))
         for gid, m in sorted(gmae.items()):
             region = labels.get(gid, {}).get("region", "train")
