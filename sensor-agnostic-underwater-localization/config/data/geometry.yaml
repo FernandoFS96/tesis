@@ -15,6 +15,6 @@ normalize_y: true
 
 # Context-set sampling.
 ctx_min: 5            # min number of context points (random mode, train)
-ctx_max: 40           # max number of context points (random mode, train)
+ctx_max: 80           # max number of context points (random mode, train)
 val_ctx: 20           # fixed number of context points used for validation
 ctx_sample_mode: first   # 'first': ordered prefix context | 'random': random subset

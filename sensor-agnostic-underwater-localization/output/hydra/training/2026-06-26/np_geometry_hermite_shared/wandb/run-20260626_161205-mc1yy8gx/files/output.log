@@ -1,0 +1,18 @@
+[cnp] cwd=/home/fer/tesis/sensor-agnostic-underwater-localization/scripts/train  data_dir=../../data/data_random_positions/hermite_shared/processed/geometry_split
+[cnp] feat_dim=1010 out_dim=3 ppt=50 | train=7200 val=2400
+[cnp] y_mean=[-0.14255264 -0.15776742  0.        ]  y_std=[1.8655098e+02 1.8094292e+02 1.0000000e-06]
+Error executing job with overrides: []
+Traceback (most recent call last):
+  File "/home/fer/tesis/sensor-agnostic-underwater-localization/scripts/train/train_np_geometry.py", line 314, in main
+    train_loader = DataLoader(
+        train_ds, batch_size=cfg.training.batch_size, shuffle=True,
+        num_workers=cfg.training.num_workers, drop_last=True,
+        collate_fn=make_collate(cfg.data.ctx_min, cfg.data.ctx_max, seed=seed,
+                                ctx_sample_mode=cfg.data.ctx_sample_mode))
+  File "/home/fer/miniconda3/envs/tfm/lib/python3.13/site-packages/torch/utils/data/dataloader.py", line 266, in __init__
+    raise ValueError(
+    ...<2 lines>...
+    )
+ValueError: num_workers option should be non-negative; use num_workers=0 to disable multiprocessing.
+
+Set the environment variable HYDRA_FULL_ERROR=1 for a complete stack trace.

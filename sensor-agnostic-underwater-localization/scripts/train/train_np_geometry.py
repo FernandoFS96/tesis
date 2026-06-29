@@ -351,7 +351,7 @@ def main(cfg: DictConfig):
 
     ckpt_cfg = flat_ckpt_config(cfg, str(device))
 
-    best_val = float("inf")
+    best_val_mae = float("inf")  # best.pt is selected by validation MAE (physical units)
     epoch_bar = tqdm(range(1, cfg.training.epochs + 1), desc=f"{model_name} epochs")
     for ep in epoch_bar:
         t0 = time.time()
@@ -376,15 +376,16 @@ def main(cfg: DictConfig):
                 "lr": lr_now, "epoch_time_sec": dt,
             }, step=ep)
 
-        if va[0] < best_val:
-            best_val = va[0]
+        if va[2] < best_val_mae:
+            best_val_mae = va[2]
             t.save({"model": model.state_dict(), "config": ckpt_cfg,
                     "model_name": model_name, "convention": conv,
                     "feat_dim": feat_dim, "out_dim": out_dim, "epoch": ep,
                     "y_mean": y_mean, "y_std": y_std},
                    os.path.join(out_dir, "best.pt"))
             if use_wandb and wandb.run is not None:
-                wandb.run.summary["best_val_loss"] = best_val
+                wandb.run.summary["best_val_mae"] = best_val_mae
+                wandb.run.summary["best_val_loss"] = va[0]
                 wandb.run.summary["best_epoch"] = ep
 
     t.save({"model": model.state_dict(), "config": ckpt_cfg,
@@ -392,7 +393,7 @@ def main(cfg: DictConfig):
             "feat_dim": feat_dim, "out_dim": out_dim, "epoch": cfg.training.epochs,
             "y_mean": y_mean, "y_std": y_std},
            os.path.join(out_dir, "last.pt"))
-    print(f"[{model_name}] done. best val loss={best_val:.4f} -> {out_dir}/best.pt")
+    print(f"[{model_name}] done. best val mae={best_val_mae:.4f} -> {out_dir}/best.pt")
 
     if use_wandb:
         wandb.finish()
