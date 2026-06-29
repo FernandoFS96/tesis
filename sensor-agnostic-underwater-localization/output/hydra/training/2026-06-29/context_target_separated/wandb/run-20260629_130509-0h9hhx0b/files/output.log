@@ -2,5 +2,96 @@
 [ranp] feat_dim=1010 out_dim=3 ppt=50 | train=7200 val=2400
 [ranp] y_mean=[-4.133606    0.27088156  0.        ]  y_std=[1.8792415e+02 1.8510999e+02 1.0000000e-06]
 [ranp] convention=indexed  params=1.79M  device=cuda
-ranp epochs:  32%|███████████████████████████████████████████████▌                                                                                                    | 321/1000 [40:33<1:13:03,  6.46s/it, tr_mae=39.62, va_loss=-1.155, va_mae=46.85]
-ep322 train:  65%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████▋                                                           | 147/225 [00:03<00:01, 44.01it/s, loss=-1.376, mae=27.12]
+ranp epochs:  32%|███████████████████████████████████████████████▊                                                                                                    | 323/1000 [40:49<1:25:33,  7.58s/it, tr_mae=39.31, va_loss=-1.142, va_mae=46.96]
+Traceback (most recent call last):                                                                                                                                                                                                                     
+  File "/home/fer/tesis/sensor-agnostic-underwater-localization/scripts/train/train_np_geometry.py", line 500, in <module>
+    main()
+    ~~~~^^
+  File "/home/fer/miniconda3/envs/tfm/lib/python3.13/site-packages/hydra/main.py", line 94, in decorated_main
+    _run_hydra(
+    ~~~~~~~~~~^
+        args=args,
+        ^^^^^^^^^^
+    ...<3 lines>...
+        config_name=config_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/fer/miniconda3/envs/tfm/lib/python3.13/site-packages/hydra/_internal/utils.py", line 394, in _run_hydra
+    _run_app(
+    ~~~~~~~~^
+        run=args.run,
+        ^^^^^^^^^^^^^
+    ...<5 lines>...
+        overrides=overrides,
+        ^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/fer/miniconda3/envs/tfm/lib/python3.13/site-packages/hydra/_internal/utils.py", line 457, in _run_app
+    run_and_report(
+    ~~~~~~~~~~~~~~^
+        lambda: hydra.run(
+        ^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+        )
+        ^
+    )
+    ^
+  File "/home/fer/miniconda3/envs/tfm/lib/python3.13/site-packages/hydra/_internal/utils.py", line 220, in run_and_report
+    return func()
+  File "/home/fer/miniconda3/envs/tfm/lib/python3.13/site-packages/hydra/_internal/utils.py", line 458, in <lambda>
+    lambda: hydra.run(
+            ~~~~~~~~~^
+        config_name=config_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+        task_function=task_function,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        overrides=overrides,
+        ^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/fer/miniconda3/envs/tfm/lib/python3.13/site-packages/hydra/_internal/hydra.py", line 119, in run
+    ret = run_job(
+        hydra_context=HydraContext(
+    ...<6 lines>...
+        configure_logging=with_log_configuration,
+    )
+  File "/home/fer/miniconda3/envs/tfm/lib/python3.13/site-packages/hydra/core/utils.py", line 186, in run_job
+    ret.return_value = task_function(task_cfg)
+                       ~~~~~~~~~~~~~^^^^^^^^^^
+  File "/home/fer/tesis/sensor-agnostic-underwater-localization/scripts/train/train_np_geometry.py", line 455, in main
+    tr = run_epoch(model, conv, train_loader, device, beta, opt,
+                   desc=f"ep{ep} train", y_mean=y_mean, y_std=y_std)
+  File "/home/fer/tesis/sensor-agnostic-underwater-localization/scripts/train/train_np_geometry.py", line 284, in run_epoch
+    mean, var, loss, kl, nll = model_forward(
+                               ~~~~~~~~~~~~~^
+        model, conv, batch, device, beta, with_target_y=True,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        predict_with_prior=(online and not train))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fer/tesis/sensor-agnostic-underwater-localization/scripts/train/train_np_geometry.py", line 252, in model_forward
+    return model(x_seq, ci, cy, ti, ty, beta)
+  File "/home/fer/miniconda3/envs/tfm/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/home/fer/miniconda3/envs/tfm/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/fer/tesis/sensor-agnostic-underwater-localization/src/models/r_anp.py", line 311, in forward
+    r = self.deterministic_encoder(context_x, context_y, target_x)
+  File "/home/fer/miniconda3/envs/tfm/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/home/fer/miniconda3/envs/tfm/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/fer/tesis/sensor-agnostic-underwater-localization/src/models/r_anp.py", line 79, in forward
+    query, _ = attention(keys, encoder_input, query)
+               ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/fer/miniconda3/envs/tfm/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/home/fer/miniconda3/envs/tfm/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/fer/tesis/sensor-agnostic-underwater-localization/src/models/r_anp.py", line 158, in forward
+    key = key.permute(2, 0, 1, 3).contiguous().view(-1, seq_k, self.num_hidden_per_attn)
+          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+KeyboardInterrupt
