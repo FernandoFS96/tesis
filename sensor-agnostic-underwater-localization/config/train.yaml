@@ -11,14 +11,14 @@
 # =============================================================================
 defaults:
   - _self_
-  - model: online_ranp # cnp | anp | rcnp | ranp | online_ranp
+  - model: anp # cnp | anp | rcnp | ranp | online_ranp
   - data: geometry
   - wandb: default
 
 # Experiment identity -- used as the wandb group name and to organise outputs.
-exp_name: ranp_offline_vs_online
+exp_name: testing_visualization_tools
 
-seed: 1
+seed: 0
 device: auto  # 'auto' -> cuda if available else cpu; or set 'cuda' / 'cpu'
 
 # -----------------------------------------------------------------------------
@@ -36,7 +36,7 @@ training:
 
 hydra:
   run:
-    dir: ../../output/hydra/training/${now:%Y-%m-%d}/${exp_name}
+    dir: ../../output/hydra/training/${now:%Y-%m-%d}/${exp_name}/${model.name}_seed_${seed}
   sweep:
     dir: ./output/hydra/training/${now:%Y-%m-%d}
     subdir: ${exp_name}/${sub_dir_shortener:${hydra:job.override_dirname}, 3, False}/seed_${format:${seed}, '{:02d}'}

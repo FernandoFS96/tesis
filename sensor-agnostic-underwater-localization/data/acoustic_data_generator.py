@@ -241,7 +241,7 @@ class channel():
             return self.precomputed_trajectories
 
         assert self.params is not None, "params must be initialized"
-        method = self.traj_config['method']
+        method = self.traj_config['method'] #type: ignore
         if method == 'spiral':
             return self._generate_spiral_trajectories()
         elif method == 'hermite':
@@ -258,7 +258,7 @@ class channel():
         assert self.params is not None, "params must be initialized"
         n_traj = self.params['n_traj']
         ppt = self.params['ppt']
-        cfg = self.traj_config['spiral']
+        cfg = self.traj_config['spiral'] #type: ignore
 
         radio_t = np.random.uniform(cfg['radio_min'], cfg['radio_max'], size=n_traj)
         fase0 = 2 * np.pi * np.random.rand(n_traj)
@@ -307,7 +307,7 @@ class channel():
         assert self.params is not None, "params must be initialized"
         n_traj = self.params['n_traj']
         ppt = self.params['ppt']
-        cfg = self.traj_config['hermite']
+        cfg = self.traj_config['hermite'] #type: ignore
 
         K = int(cfg['n_segments'])          # number of segments
         n_knots = K + 1                     # waypoints / knots
