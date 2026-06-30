@@ -7,7 +7,7 @@
 # Override on the CLI to switch variants, e.g.:
 #   python scripts/train/train_np_geometry.py data.traj_method=spiral data.traj_mode=distinct
 traj_method: hermite
-traj_mode: distinct
+traj_mode: shared
 data_dir: ../../data/data_random_positions/${data.traj_method}_${data.traj_mode}/processed/geometry_split
 
 # Target normalisation (zero-mean / unit-std, stats computed on the train set).
