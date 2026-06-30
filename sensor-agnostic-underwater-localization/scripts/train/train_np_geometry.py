@@ -266,7 +266,7 @@ def run_epoch(model, conv, loader, device, beta, optimizer=None, desc="",
     tot_loss = tot_nll = tot_mae = 0.0; n = 0
     ym = y_mean.to(device) if y_mean is not None else None
     ys = y_std.to(device)  if y_std  is not None else None
-    bar = tqdm(loader, desc=desc, leave=False)
+    bar = tqdm(loader, desc=desc, leave=False, dynamic_ncols=True)
     online = (conv == "online")
     for batch in bar:
         # 'online' carries the full trajectory in y_seq; others split into target_y.
@@ -479,7 +479,7 @@ def main(cfg: DictConfig):
               f"every {viz_cfg.get('every_n_epochs', 50)} epochs")
 
     best_val_mae = float("inf")  # best.pt is selected by validation MAE (physical units)
-    epoch_bar = tqdm(range(1, cfg.training.epochs + 1), desc=f"{model_name} epochs")
+    epoch_bar = tqdm(range(1, cfg.training.epochs + 1), desc=f"{model_name} epochs",dynamic_ncols=True)
     for ep in epoch_bar:
         t0 = time.time()
         tr = run_epoch(model, conv, train_loader, device, beta, opt,
