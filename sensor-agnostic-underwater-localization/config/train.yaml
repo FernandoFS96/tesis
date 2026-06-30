@@ -11,12 +11,12 @@
 # =============================================================================
 defaults:
   - _self_
-  - model: ranp # cnp | anp | rcnp | ranp | online_ranp
+  - model: rcnp # cnp | anp | rcnp | ranp | online_ranp
   - data: geometry
   - wandb: default
 
 # Experiment identity -- used as the wandb group name and to organise outputs.
-exp_name: ranp_offline_vs_online
+exp_name: testing_visualization_tools
 
 seed: 1
 device: auto  # 'auto' -> cuda if available else cpu; or set 'cuda' / 'cpu'
