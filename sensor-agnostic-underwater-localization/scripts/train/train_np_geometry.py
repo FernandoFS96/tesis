@@ -77,6 +77,8 @@ import src.models.anp as anp_mod  # type: ignore  # noqa: E402
 import src.models.r_anp as ranp_mod  # type: ignore  # noqa: E402
 import src.models.online_r_anp as online_mod  # type: ignore  # noqa: E402
 
+import viz  # type: ignore  # noqa: E402  # periodic W&B training visualizations
+
 
 # --------------------------------------------------------------------------- #
 # Model factory
@@ -264,7 +266,7 @@ def run_epoch(model, conv, loader, device, beta, optimizer=None, desc="",
     tot_loss = tot_nll = tot_mae = 0.0; n = 0
     ym = y_mean.to(device) if y_mean is not None else None
     ys = y_std.to(device)  if y_std  is not None else None
-    bar = tqdm(loader, desc=desc, leave=False)
+    bar = tqdm(loader, desc=desc, leave=False, dynamic_ncols=True)
     online = (conv == "online")
     for batch in bar:
         # 'online' carries the full trajectory in y_seq; others split into target_y.
@@ -448,8 +450,36 @@ def main(cfg: DictConfig):
 
     ckpt_cfg = flat_ckpt_config(cfg, str(device))
 
+    # ---- periodic visualizations (optional) --------------------------------
+    viz_cfg = wb.get("viz", None)
+    use_viz = use_wandb and viz_cfg is not None and bool(viz_cfg.get("enabled", False))
+    fixed_idx = []
+    deg_pools = deg_labels = None
+    if use_viz:
+        fixed_idx = viz.select_fixed_trajectories(
+            val_ds, int(viz_cfg.get("n_trajectories", 6)), seed=seed)
+        if viz_cfg.get("plots", {}).get("degradation_scatter", False):
+            # The degradation scatter needs the train/val/test pools + region
+            # labels (from splits.json). Loaded once here, reused every log step.
+            import json
+            splits_path = os.path.join(data_dir, "splits.json")
+            if os.path.exists(splits_path):
+                with open(splits_path) as f:
+                    split = json.load(f)
+                deg_labels = {int(k): v for k, v in split.get("labels", {}).items()}
+                deg_pools = {"train": train_ds, "val": val_ds}
+                test_path = os.path.join(data_dir, "test_data.pkl")
+                if os.path.exists(test_path):
+                    deg_pools["test"] = TrajectoryDataset(test_path)
+            else:
+                print(f"[{model_name}] no splits.json; degradation_scatter disabled")
+        if viz_cfg.get("watch_gradients", False) and wandb.run is not None:
+            wandb.watch(model, log="all", log_freq=max(1, int(viz_cfg.get("every_n_epochs", 50))))
+        print(f"[{model_name}] viz on: {len(fixed_idx)} fixed trajectories, "
+              f"every {viz_cfg.get('every_n_epochs', 50)} epochs")
+
     best_val_mae = float("inf")  # best.pt is selected by validation MAE (physical units)
-    epoch_bar = tqdm(range(1, cfg.training.epochs + 1), desc=f"{model_name} epochs")
+    epoch_bar = tqdm(range(1, cfg.training.epochs + 1), desc=f"{model_name} epochs",dynamic_ncols=True)
     for ep in epoch_bar:
         t0 = time.time()
         tr = run_epoch(model, conv, train_loader, device, beta, opt,
@@ -472,6 +502,22 @@ def main(cfg: DictConfig):
                 "val/loss": va[0], "val/nll": va[1], "val/mae": va[2],
                 "lr": lr_now, "epoch_time_sec": dt,
             }, step=ep)
+
+        # periodic figures (also on the final epoch so the last state is logged)
+        if use_viz and (ep % int(viz_cfg.get("every_n_epochs", 50)) == 0
+                        or ep == cfg.training.epochs):
+            try:
+                viz.log_visualizations(
+                    model, conv, ep=ep, viz_cfg=viz_cfg, val_ds=val_ds,
+                    fixed_idx=fixed_idx, device=device,
+                    val_ctx=cfg.data.val_ctx,
+                    ctx_sample_mode=cfg.data.ctx_sample_mode,
+                    exclude_ctx_from_target=excl_ctx,
+                    chunk_size=cfg.data.get("chunk_size", 8),
+                    y_mean=y_mean, y_std=y_std,
+                    deg_pools=deg_pools, deg_labels=deg_labels)
+            except Exception as e:  # viz must never crash training
+                print(f"[{model_name}] viz failed at epoch {ep}: {e}")
 
         if va[2] < best_val_mae:
             best_val_mae = va[2]
