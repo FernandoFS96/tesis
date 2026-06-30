@@ -11,7 +11,7 @@
 # =============================================================================
 defaults:
   - _self_
-  - model: online_ranp # cnp | anp | rcnp | ranp | online_ranp
+  - model: ranp # cnp | anp | rcnp | ranp | online_ranp
   - data: geometry
   - wandb: default
 

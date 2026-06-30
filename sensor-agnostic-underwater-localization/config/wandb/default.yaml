@@ -8,3 +8,22 @@ dev: false           # mark this run in wandb as a development run
 #  job_type: ${hydra:job.override_dirname}
 # only used for categorizing wandb projects
 tags: null           # list of custom tags to sort/find these runs by
+
+# -----------------------------------------------------------------------------
+# Periodic training-time visualizations (logged as wandb.Image media). Logging
+# under a stable key every N epochs gives a step slider in the W&B UI, so you
+# can scrub through epochs and watch each figure evolve as the model trains.
+# All of this is ignored when enabled=false above.
+# -----------------------------------------------------------------------------
+viz:
+  enabled: true
+  every_n_epochs: 50     # build + log the figures every N epochs (and at the end)
+  n_trajectories: 6      # how many FIXED val trajectories to track in pred_trajectory
+  plot_uncertainty: true # draw predicted 1-std ellipses on the trajectory plot
+  watch_gradients: false # wandb.watch(model): log gradient/param histograms
+  plots:                 # toggle each figure independently
+    pred_trajectory: true      # predicted-vs-true trajectory overlay (the headline one)
+    degradation_scatter: true  # per-geometry MAE vs out-of-position distance
+    calibration: true          # predicted std vs realized error (latent models)
+    error_histogram: true      # distribution of per-point localization errors
+    streaming_drift: true      # online_ranp only: drift between position fixes
