@@ -1,7 +1,7 @@
 enabled: true        # whether to use the wandb logger or not
 offline: false       # log in offline mode (saved locally, synced later). Useful with no internet access.
 project_name: sensor-agnostic-underwater-localization  # name of the project
-entity: fernandofs   # wandb entity. null -> your default (private) account
+entity: fernandofs   # wandb entity. null -> default (private) account
 group_name: ${exp_name}
 run_name: ${model.name}_seed_${seed}
 dev: false           # mark this run in wandb as a development run
@@ -11,7 +11,7 @@ tags: null           # list of custom tags to sort/find these runs by
 
 # -----------------------------------------------------------------------------
 # Periodic training-time visualizations (logged as wandb.Image media). Logging
-# under a stable key every N epochs gives a step slider in the W&B UI, so you
+# under a stable key every N epochs gives a step slider in the W&B UI, so we
 # can scrub through epochs and watch each figure evolve as the model trains.
 # All of this is ignored when enabled=false above.
 # -----------------------------------------------------------------------------

@@ -14,9 +14,9 @@ data_dir: ../../data/data_random_positions/${data.traj_method}_${data.traj_mode}
 normalize_y: true
 
 # Context-set sampling.
-ctx_min: 5            # min number of context points (random mode, train)
-ctx_max: 80           # max number of context points (random mode, train)
-val_ctx: 20           # fixed number of context points used for validation
+ctx_min: 2            # min number of context points (random mode, train)
+ctx_max: 40           # max number of context points (random mode, train)
+val_ctx: 10           # fixed number of context points used for validation
 ctx_sample_mode: first   # 'first': ordered prefix context | 'random': random subset
 
 # Target-set composition relative to the context set.
