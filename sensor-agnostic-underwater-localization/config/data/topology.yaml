@@ -1,11 +1,12 @@
 # TOPOLOGY task -- one model per sensor topology (within-topology trajectory
 # split). Pick the topology with data.topology; override on the CLI to sweep.
-# The processed path is method-independent (topology_<name>), so it reflects
-# whichever `method` you last generated+preprocessed for the topology task.
+# data_dir is method-aware (derived from the composed dataset identity), so
+# spiral and hermite processed datasets coexist and training picks the right one
+# from `dataset=topology_<method>`.
 defaults:
   - _base
   - _self_
 
 topology: random         # ellipsoidal | random | aligned
-data_dir: data/topology_task/processed/topology_${data.topology}
+data_dir: data/topology_task/${dataset.method}/processed/topology_${data.topology}
 exclude_ctx_from_target: true

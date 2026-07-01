@@ -114,7 +114,7 @@ mode emits the **same sample schema**:
 
 | `--mode` | For task | Split axis | Output dir |
 |---|---|---|---|
-| `topology` | topology | **trajectory index** 70/20/10, pooling all θ; one dataset per topology | `data/topology_task/processed/topology_<name>/` |
+| `topology` | topology | **trajectory index** 70/20/10, pooling all θ; one dataset per topology | `data/topology_task/<method>/processed/topology_<name>/` |
 | `legacy` | random | **within-geometry** 70/20/10 (all layouts seen in train) | `data/random_task/<m>_<mode>/processed/within_geometry_split/` |
 | `geometry` | random | **held-out layouts** (disjoint geometry pools, interp/extrap labels + `splits.json`) | `…/processed/geometry_split/` |
 | `all` | random | `legacy` + `geometry` | both dirs |
@@ -123,8 +123,10 @@ mode emits the **same sample schema**:
 random modes need `--data-root data/random_task/<method>_<mode>`.
 
 ```bash
-# Topology (default data_root):
-python data/data_process_random_positions.py --mode topology
+# Topology -- one run PER method; outputs auto-separate to
+# data/topology_task/<method>/processed/topology_<name>/ (no --save-dir needed):
+python data/data_process_random_positions.py --mode topology --method spiral
+python data/data_process_random_positions.py --mode topology --method hermite
 
 # Random, within-geometry (reproduces the old converging task):
 python data/data_process_random_positions.py \
@@ -191,10 +193,11 @@ Outputs land in `output/hydra/training/<date>/<exp_name>/<model>_seed_<seed>/`
 (`best.pt`, `last.pt`, `train_log.csv`, `config.yaml`) regardless of launch dir.
 
 ### The one consistency rule
-Use the **same `dataset=<id>`** at generation and training. For the random task,
-training's `data_dir` interpolates `…/${dataset.method}_${dataset.mode}/…`, so a
-mismatch points at a folder you never generated. (Topology's processed path is
-method-independent, so it reflects whichever method you last generated.)
+Use the **same `dataset=<id>`** at generation and training — `data_dir` is
+derived from the dataset identity (`${dataset.method}` for topology,
+`${dataset.method}_${dataset.mode}` for random), so a mismatch points at a folder
+you never generated. Both methods' processed datasets now coexist
+(`topology_task/spiral/processed/…` and `topology_task/hermite/processed/…`).
 
 ---
 
@@ -213,9 +216,10 @@ otherwise.
 **A. Three-topology study, spiral, ANP per topology**
 ```bash
 python data/generate.py dataset=topology_spiral
-python data/data_process_random_positions.py --mode topology
+python data/data_process_random_positions.py --mode topology --method spiral
 for topo in ellipsoidal random aligned; do
-  python scripts/train/train_np_geometry.py experiment=topology data.topology=$topo
+  python scripts/train/train_np_geometry.py experiment=topology \
+      dataset=topology_spiral data.topology=$topo
 done
 ```
 

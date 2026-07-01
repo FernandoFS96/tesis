@@ -580,8 +580,15 @@ def main():
     method = args.method or str(pp.get("method", cfg.get("method", "hermite"))) #type: ignore[assignment]
     data_root = args.data_root or str(pp.get("data_root", "./data/topology_task"))
     cfg_save = pp.get("save_dir", None)
-    save_base = args.save_dir or (str(cfg_save) if cfg_save else
-                                  os.path.join(data_root, "processed"))
+    explicit_save = args.save_dir or (str(cfg_save) if cfg_save else None)
+    # Topology raw lives under <data_root>/<method>/, so its processed output
+    # defaults under that same method subfolder -> spiral and hermite never
+    # overwrite each other. Position-set modes already encode <method>_<mode> in
+    # data_root, so <data_root>/processed is already method-separated for them.
+    if mode == "topology":
+        save_base = explicit_save or os.path.join(data_root, method, "processed")
+    else:
+        save_base = explicit_save or os.path.join(data_root, "processed")
 
     # thetas filter (CLI comma list > config list > all-found).
     if args.thetas:
