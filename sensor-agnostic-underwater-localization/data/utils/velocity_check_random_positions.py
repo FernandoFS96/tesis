@@ -112,34 +112,36 @@ DEFAULT_T_TOT = 6.0
 TOPOLOGIES = ("ellipsoidal", "random", "aligned")
 
 
-def detect_mode(data_root):
+def detect_mode(data_root, method):
     if sorted(glob.glob(os.path.join(data_root, "position_set_*"))):
         return "position_sets"
-    if any(os.path.isdir(os.path.join(data_root, t)) for t in TOPOLOGIES):
+    if any(os.path.isdir(os.path.join(data_root, method, t)) for t in TOPOLOGIES):
         return "topologies"
     return "position_sets"
 
 
-def find_groups(data_root, mode):
-    """Ordered list of (label, group_dir) for the detected mode."""
+def find_groups(data_root, mode, method):
+    """Ordered list of (label, group_dir) for the detected mode. Topology layout
+    groups by method first: <data_root>/<method>/<topology>/."""
     if mode == "topologies":
-        return [(t, os.path.join(data_root, t)) for t in TOPOLOGIES
-                if os.path.isdir(os.path.join(data_root, t))]
+        mroot = os.path.join(data_root, method)
+        return [(t, os.path.join(mroot, t)) for t in TOPOLOGIES
+                if os.path.isdir(os.path.join(mroot, t))]
     sets = sorted(glob.glob(os.path.join(data_root, "position_set_*")))
     return [(os.path.basename(s).replace("position_set_", "set "), s)
             for s in sets if os.path.isdir(s)]
 
 
 def option_base(group_dir, theta, mode, method):
+    # In topology mode group_dir already includes the method level.
     if mode == "topologies":
-        return os.path.join(group_dir, method, f"channel_option_{theta}")
+        return os.path.join(group_dir, f"channel_option_{theta}")
     return os.path.join(group_dir, f"channel_option_{theta}", "random")
 
 
 def find_thetas(group_dir, mode, method):
     opts = []
-    search_root = os.path.join(group_dir, method) if mode == "topologies" else group_dir
-    for d in glob.glob(os.path.join(search_root, "channel_option_*")):
+    for d in glob.glob(os.path.join(group_dir, "channel_option_*")):
         m = re.search(r"channel_option_([0-9.]+)$", d)
         if m and os.path.isdir(os.path.join(option_base(group_dir, m.group(1),
                                                          mode, method), "trajectory")):
@@ -335,11 +337,11 @@ def main():
     fig_dir = os.path.join(out_dir, "figures")
     os.makedirs(fig_dir, exist_ok=True)
 
-    mode = detect_mode(args.data_root)
     method = args.method
+    mode = detect_mode(args.data_root, method)
     unit = "topology" if mode == "topologies" else "position-set"
 
-    groups = find_groups(args.data_root, mode)
+    groups = find_groups(args.data_root, mode, method)
     if not groups:
         where = "<topology>/ folders" if mode == "topologies" else "position_set_*"
         print(f"ERROR: no {where} under {args.data_root}", file=sys.stderr)

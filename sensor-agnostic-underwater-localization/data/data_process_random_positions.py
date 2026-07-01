@@ -8,7 +8,7 @@ Preprocessing for BOTH studies. Defaults come from the ``preprocess`` block of
 MODES (preprocess.mode, or --mode)
 ----------------------------------
 * ``topology`` -- THREE-TOPOLOGY study (acoustic_data_generator.py). Reads the
-  ``<data_root>/<topology>/<method>/channel_option_<theta>/`` tree and produces
+  ``<data_root>/<method>/<topology>/channel_option_<theta>/`` tree and produces
   ONE training-ready dataset PER topology (ellipsoidal / random / aligned). All
   channel options (thetas) of a topology are POOLED, and the train/val/test
   split is by TRAJECTORY INDEX (default 70/20/10 out of 100) -- the same
@@ -399,23 +399,26 @@ def run_geometry(data_root, set_dirs, thetas, save_base,
 # =========================================================================== #
 # TOPOLOGY MODE  (three-topology study: per-topology, split by trajectory index)
 # =========================================================================== #
-def find_topologies(data_root):
-    """Ordered list of (name, topology_dir) for the three-topology layout."""
-    return [(t, os.path.join(data_root, t)) for t in TOPOLOGIES
-            if os.path.isdir(os.path.join(data_root, t))]
+def find_topologies(data_root, method):
+    """Ordered list of (name, topology_dir) for the three-topology layout.
+    Layout groups by METHOD first: <data_root>/<method>/<topology>/."""
+    mroot = os.path.join(data_root, method)
+    return [(t, os.path.join(mroot, t)) for t in TOPOLOGIES
+            if os.path.isdir(os.path.join(mroot, t))]
 
 
-def topo_paths_for(topo_dir, method, theta):
-    base = os.path.join(topo_dir, method, f"channel_option_{theta}")
+def topo_paths_for(topo_dir, theta):
+    # topo_dir already includes the method level (<data_root>/<method>/<topology>).
+    base = os.path.join(topo_dir, f"channel_option_{theta}")
     return {
         "filtered": os.path.join(base, "filtered_data", "filtered_data.npy"),
         "traj":     os.path.join(base, "trajectory", "trajectories.npy"),
     }
 
 
-def find_topo_thetas(topo_dir, method):
+def find_topo_thetas(topo_dir):
     opts = []
-    for d in glob.glob(os.path.join(topo_dir, method, "channel_option_*")):
+    for d in glob.glob(os.path.join(topo_dir, "channel_option_*")):
         m = re.search(r"channel_option_([0-9.]+)$", d)
         if m and os.path.isdir(os.path.join(d, "trajectory")):
             opts.append(m.group(1))
@@ -454,23 +457,23 @@ def run_topology(data_root, method, save_base, thetas_filter,
             metadata.pkl   -> thetas, per-split thetas/topologies, the frozen
                               trajectory-index split, tau / n_sensors / feat_dim
     """
-    topos = find_topologies(data_root)
+    topos = find_topologies(data_root, method)
     if not topos:
         raise SystemExit(
-            f"No topology folders {TOPOLOGIES} under {data_root} "
+            f"No topology folders {TOPOLOGIES} under {data_root}/{method} "
             f"(is this the three-topology layout? expected "
-            f"<data_root>/<topology>/{method}/channel_option_*/).")
+            f"<data_root>/{method}/<topology>/channel_option_*/).")
 
     for name, tdir in topos:
-        thetas = find_topo_thetas(tdir, method)
+        thetas = find_topo_thetas(tdir)
         if thetas_filter:
             thetas = [t for t in thetas if t in thetas_filter]
         if not thetas:
-            print(f"  [skip] topology '{name}': no thetas under {method}/")
+            print(f"  [skip] topology '{name}': no thetas found")
             continue
 
         # n_traj / shapes from the first theta (shared across thetas).
-        first = topo_paths_for(tdir, method, thetas[0])
+        first = topo_paths_for(tdir, thetas[0])
         probe = np.load(first["filtered"])              # (tau, ppt, n_traj, n_sensors)
         tau, ppt, n_traj, n_sensors = probe.shape
         tr_idx, va_idx, te_idx = trajectory_index_split(
@@ -481,7 +484,7 @@ def run_topology(data_root, method, save_base, thetas_filter,
         pool_thetas = {p: [] for p in ("train", "val", "test")}
 
         for th in thetas:
-            p = topo_paths_for(tdir, method, th)
+            p = topo_paths_for(tdir, th)
             if not (os.path.exists(p["filtered"]) and os.path.exists(p["traj"])):
                 print(f"  [warn] topology '{name}' theta {th}: missing files, skipped")
                 continue
@@ -549,7 +552,7 @@ def main():
     ap.add_argument("--data-root", default=None, help="Override preprocess.data_root.")
     ap.add_argument("--method", default=None,
                     help="Trajectory-method subfolder for topology mode "
-                         "(<topology>/<method>/...). Override preprocess.method.")
+                         "(<method>/<topology>/...). Override preprocess.method.")
     ap.add_argument("--save-dir", default=None,
                     help="Output base (default: <data-root>/processed).")
     ap.add_argument("--thetas", default=None,
