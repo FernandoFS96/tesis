@@ -11,8 +11,9 @@ MODES (preprocess.mode, or --mode)
   ``<data_root>/<method>/<topology>/channel_option_<theta>/`` tree and produces
   ONE training-ready dataset PER topology (ellipsoidal / random / aligned). All
   channel options (thetas) of a topology are POOLED, and the train/val/test
-  split is by TRAJECTORY INDEX (default 70/20/10 out of 100) -- the same
-  trajectory indices for every theta, so no trajectory leaks across splits.
+  split is by TRAJECTORY INDEX (default ratio 70/20/10, rescaled to whatever
+  n_traj the data actually contains) -- the same trajectory indices for every
+  theta, so no trajectory leaks across splits.
   Output (dict schema, matching geometry mode so the trainer reads it as-is):
       <save-dir>/topology_<name>/{train,val,test}_data.pkl
         -> list of {"X":(ppt,feat_dim), "y":(ppt,3), "theta":float, "topology":str}
@@ -428,18 +429,31 @@ def find_topo_thetas(topo_dir):
 def trajectory_index_split(n_traj, n_train, n_val, n_test, seed=0):
     """A FIXED, reproducible partition of the trajectory indices [0, n_traj).
 
+    (n_train, n_val, n_test) are treated as RATIOS and rescaled to the actual
+    n_traj found in the data, so the same config auto-scales to any trajectory
+    count: 70/20/10 -> 70/20/10 at n_traj=100, 140/40/20 at n_traj=200, or
+    105/30/15 at n_traj=150. ALL trajectories are used (val/test are rounded and
+    any remainder goes to train, so the three splits always sum to n_traj).
+
     The same indices are applied to every channel option (theta), so all thetas
     of a given physical trajectory land in the SAME split -- this is what keeps
     val/test from leaking trajectories the model trained on. Returns three
     sorted index lists (train, val, test)."""
-    if n_train + n_val + n_test > n_traj:
+    total = n_train + n_val + n_test
+    if total <= 0:
         raise ValueError(
-            f"requested split {n_train}/{n_val}/{n_test} exceeds n_traj={n_traj}")
+            f"split weights must be positive, got {n_train}/{n_val}/{n_test}")
+    n_va = int(round(n_traj * n_val / total))
+    n_te = int(round(n_traj * n_test / total))
+    n_tr = n_traj - n_va - n_te
+    if n_tr < 0:
+        raise ValueError(
+            f"rescaled split {n_tr}/{n_va}/{n_te} invalid for n_traj={n_traj}")
     rng = np.random.default_rng(seed)
     perm = rng.permutation(n_traj)
-    tr = sorted(int(i) for i in perm[:n_train])
-    va = sorted(int(i) for i in perm[n_train:n_train + n_val])
-    te = sorted(int(i) for i in perm[n_train + n_val:n_train + n_val + n_test])
+    tr = sorted(int(i) for i in perm[:n_tr])
+    va = sorted(int(i) for i in perm[n_tr:n_tr + n_va])
+    te = sorted(int(i) for i in perm[n_tr + n_va:n_tr + n_va + n_te])
     return tr, va, te
 
 
@@ -615,8 +629,9 @@ def main():
 
     if mode == "topology":
         print("\n--- TOPOLOGY (per-topology, split by trajectory index) ---")
-        print(f"  method={method}  split(traj)={n_train}/{n_val}/{n_test} "
-              f"seed={split_seed}  thetas={thetas_filter or 'all'}")
+        print(f"  method={method}  split(traj ratio)={n_train}/{n_val}/{n_test} "
+              f"(rescaled to n_traj)  seed={split_seed}  "
+              f"thetas={thetas_filter or 'all'}")
         run_topology(data_root, method, save_base, thetas_filter,
                      n_train, n_val, n_test, split_seed=split_seed)
         print("\nDone.")
