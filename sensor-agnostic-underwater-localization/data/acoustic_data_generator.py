@@ -16,11 +16,11 @@ Use:
 
 '''
 
-# Path to the trajectory-generation config. This is loaded directly (no Hydra)
-# because trajectory generation runs as a standalone data-generation step.
+# Path to the data-pipeline config. This is loaded directly (no Hydra) because
+# data generation runs as a standalone step.
 DEFAULT_TRAJ_CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    'config', 'traj_generation.yaml')
+    'config', 'data_pipeline.yaml')
 
 
 def load_traj_config(path=None):
@@ -45,7 +45,7 @@ class channel():
         # topology: sensor arrangement ('ellipsoidal', 'random', 'aligned')
         # precomputed_trajectories: trajectories to reuse across topologies
         # traj_config: trajectory-generation config (loaded from
-        #   config/traj_generation.yaml if None)
+        #   config/data_pipeline.yaml if None)
 
         self.h = None  # To store the impulse response
         self.traj = None  # To store trajectories
@@ -234,7 +234,7 @@ class channel():
         Dispatches to a method-specific submethod selected by
         ``self.traj_config.method`` so new trajectory shapes can be added
         without touching the channel-processing code. To add a method, add a
-        parameter block to config/traj_generation.yaml and a matching
+        parameter block to config/data_pipeline.yaml and a matching
         ``_generate_<method>_trajectories`` submethod here.
         """
         if self.precomputed_trajectories is not None:
@@ -253,7 +253,7 @@ class channel():
         """Original outward-spiral trajectories.
 
         Parameters are read from the ``spiral`` block of the trajectory
-        config (config/traj_generation.yaml).
+        config (config/data_pipeline.yaml).
         """
         assert self.params is not None, "params must be initialized"
         n_traj = self.params['n_traj']
@@ -283,7 +283,7 @@ class channel():
         Each trajectory is built from ``n_segments`` cubic Hermite segments
         joined with C1 continuity (matched position *and* tangent at every
         knot, so the path is smooth in xy). Parameters are read from the
-        ``hermite`` block of config/traj_generation.yaml.
+        ``hermite`` block of config/data_pipeline.yaml.
 
         Design notes
         ------------
@@ -956,16 +956,38 @@ def save_velocity_histogram(traj, T_tot, bins=40, option_idx=None):
 
     return {"mean": v_mean, "std": v_std, "min": v_min, "max": v_max}
 
-def process(channel_options, snr, rep, nop=-1, n_traj_override=None, traj_config=None):
-    """Process data for all topologies using the same trajectories"""
-    topologies = ['ellipsoidal', 'random', 'aligned']
+def process(channel_options, snr, rep, nop=-1, n_traj_override=None,
+            ppt_override=None, df_override=None, topologies=None,
+            out_dir='data', method=None, variant_subdir=True,
+            master_seed=11, traj_config=None):
+    """Process data for all topologies using the same trajectories.
 
-    # Trajectory-generation config (loaded from config/traj_generation.yaml).
+    All requested topologies share ONE trajectory ensemble per theta; the
+    trajectory shape (spiral / hermite) is selected by ``method`` (falling back
+    to ``traj_config['method']``). The output layout, per (topology, theta), is::
+
+        <out_dir>/<topology>/<method>/channel_option_<theta>/
+            trajectory/trajectories.npy          (3, n_traj, ppt)   target coords
+            filtered_data/filtered_data.npy       (tau, ppt, n_traj, n_sensors)
+            channel_info/sensor_positions_<theta>.npy   (3, n_sensors)
+            channel_info/trajs_<theta>.npy        (3, n_traj, ppt+1) full traj
+
+    With ``variant_subdir=False`` the ``<method>`` level is omitted (legacy
+    flat layout). The ``channel_info`` copies let the QC / velocity scripts
+    verify the sensor layouts and recover per-jump velocity (needs the ppt+1
+    endpoint) without re-running the physics.
+    """
+    if topologies is None:
+        topologies = ['ellipsoidal', 'random', 'aligned']
+
+    # Trajectory-generation config (loaded from config/data_pipeline.yaml).
     if traj_config is None:
         traj_config = load_traj_config()
+    if method is None:
+        method = traj_config.get('method', 'spiral') #type: ignore
 
     for option_idx, option in enumerate(tqdm(channel_options)):
-        np.random.seed(11)
+        np.random.seed(master_seed)
         print(f"\n\n --- Processing Channel Option: {option} ---")
 
         # Generate parameters for this option
@@ -973,6 +995,10 @@ def process(channel_options, snr, rep, nop=-1, n_traj_override=None, traj_config
 
         if n_traj_override is not None:
             params['n_traj'] = int(n_traj_override)
+        if ppt_override is not None:
+            params['ppt'] = int(ppt_override)
+        if df_override is not None:
+            params['ci']['df'] = float(df_override)
         # First, generate trajectories that will be shared across all topologies
         # We create a temporary channel just to generate trajectories
         temp_channel = channel(load=False, params=params, number_of_processes=nop,
@@ -999,23 +1025,43 @@ def process(channel_options, snr, rep, nop=-1, n_traj_override=None, traj_config
             # Store for validation plotting
             channels_for_validation[topology] = c
             
-            # Generate batch of trajectories
-            data, trjs = generate_batch_of_trajs(c, 'sinusoid', n=1024, snr=snr, rep=rep)
+            # Generate the filtered features + target coordinates. We pass an
+            # explicit canonical ordering via `specific=` so the trajectory rows
+            # (and their matched features) are stored in the SAME order for every
+            # topology. Without it, channel.filter() draws a RANDOM trajectory
+            # ordering (np.random.choice over n_traj) per call, which would store
+            # each topology's trajectories in a different row order -- breaking
+            # row-alignment across geometries (trajectory i in 'ellipsoidal' would
+            # not correspond to trajectory i in 'random') even though they share
+            # the same underlying ensemble.
+            n_traj_c = c.params['n_traj']
+            canonical = list(range(n_traj_c))
+            data, trjs = c.filter(1024, snr=snr, nt=n_traj_c, signal_type='sinusoid',
+                                  rep=rep, specific=canonical)
             
-            # Save the generated data
-            root_dir = 'data'
-            topology_dir = f'{root_dir}/channel_option_{option}/{topology}'
-            
+            # Save the generated data. New layout puts the topology FIRST, then
+            # the method, then the channel option:
+            #   <out_dir>/<topology>/<method>/channel_option_<theta>/...
+            if variant_subdir:
+                topology_dir = f'{out_dir}/{topology}/{method}/channel_option_{option}'
+            else:
+                topology_dir = f'{out_dir}/{topology}/channel_option_{option}'
+            info_dir = f'{topology_dir}/channel_info'
+
             # Create directories for this topology
             os.makedirs(f'{topology_dir}/trajectory', exist_ok=True)
             os.makedirs(f'{topology_dir}/filtered_data', exist_ok=True)
-            
+            os.makedirs(info_dir, exist_ok=True)
+
             # Save data
             assert data is not None, "Filtered data is None"
             assert trjs is not None, "Trajectories are None"
             np.save(f'{topology_dir}/trajectory/trajectories.npy', trjs)
             np.save(f'{topology_dir}/filtered_data/filtered_data.npy', data)
-            
+            # Sensor layout + full (ppt+1) trajectory for the QC / velocity tools.
+            np.save(f'{info_dir}/sensor_positions_{option}.npy', c.r_posicion)
+            np.save(f'{info_dir}/trajs_{option}.npy', c.traj)
+
             print(f" Data saved for topology: {topology}")
         
         # Create validation plot for this option (only for the first option)
@@ -1031,26 +1077,49 @@ def parse_float_list(s):
     parts = [p for p in s.replace(',', ' ').split() if p != '']
     return [float(p) for p in parts]
 
+def run_topology_task(cfg):
+    """Generate the TOPOLOGY-task datasets from a unified config object
+    (config/data_pipeline.yaml). Reads the shared ``channel`` block, the
+    ``topology_task`` block and ``method``; writes one dataset per topology
+    (all sharing the same trajectories + channels) under
+    ``topology_task.out_dir``. Invoked by data/generate.py (task=topology)."""
+    ch = cfg['channel']
+    tt = cfg['topology_task']
+    method = cfg.get('method', 'spiral')
+
+    channel_options = [float(x) for x in ch['channel_options']]
+    topologies = [str(t) for t in tt['topologies']]
+    out_dir = str(tt['out_dir'])
+    n_traj = int(ch['n_traj']); ppt = int(ch['ppt']); df = float(ch['df'])
+    snr = float(ch['snr']); rep = int(ch['rep'])
+    master_seed = int(ch.get('master_seed', 11)); nop = int(ch.get('nop', -1))
+
+    # Suppress channel.__init__'s hardcoded ./data side-effect write; the real
+    # channel_info is saved by process() into the proper out_dir.
+    channel.save_channel_info = lambda self, name: None  # type: ignore
+
+    Lf = len(range_m(10000.0, 20000.0, df)); n_sensors = 10
+    print("=" * 64)
+    print("TOPOLOGY task -- dataset generation")
+    print("=" * 64)
+    print(f"  thetas        : {channel_options}")
+    print(f"  topologies    : {topologies}")
+    print(f"  n_traj / ppt  : {n_traj} / {ppt}")
+    print(f"  df            : {df} Hz  ->  Lf={Lf} time-points")
+    print(f"  feature/point : Lf*n_sensors = {Lf}*{n_sensors} = {Lf*n_sensors}")
+    print(f"  snr / rep     : {snr} / {rep}")
+    print(f"  traj method   : {method}")
+    print(f"  master seed   : {master_seed}")
+    print(f"  layout        : {out_dir}/<topology>/{method}/channel_option_<theta>/")
+    print("=" * 64)
+
+    np.random.seed(master_seed)
+    process(channel_options, snr=snr, rep=rep, nop=nop,
+            n_traj_override=n_traj, ppt_override=ppt, df_override=df,
+            topologies=topologies, out_dir=out_dir, method=method,
+            variant_subdir=True, master_seed=master_seed, traj_config=cfg)
+
+
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Generar datos de canal (topologías).")
-    parser.add_argument('--channel_options', type=str, default="0.0,0.1,0.2,0.3,0.4,0.5,0.6", help="Lista de opciones separadas por coma (ej: '0.0,0.1,0.2').")
-
-    parser.add_argument('--n_traj', type=int, default=150, help="Número de trayectorias (sobrescribe params['n_traj']).")
-    parser.add_argument('--snr', type=float, default=10, help="SNR para filtrado.")
-    parser.add_argument('--rep', type=int, default=1, help="Repeticiones.")
-    parser.add_argument('--nop', type=int, default=-1, help="Número de procesos para paralelismo (-1 == cpu_count()).")
-    parser.add_argument('--traj_config', type=str, default=None, help="Ruta al YAML de generación de trayectorias (por defecto: config/traj_generation.yaml).")
-    args = parser.parse_args()
-
-    # Parse channel options
-    channel_options = parse_float_list(args.channel_options)
-    if channel_options is None:
-        channel_options = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
-
-    # Load trajectory-generation config (no Hydra; plain YAML via OmegaConf).
-    traj_config = load_traj_config(args.traj_config)
-
-    # Set random seed for reproducibility
-    np.random.seed(11)
-
-    process(channel_options, snr=args.snr, rep=args.rep, nop=args.nop, n_traj_override=args.n_traj, traj_config=traj_config)
+    print("acoustic_data_generator.py is now a library used by the unified "
+          "generator. Run:\n  python data/generate.py task=topology")

@@ -72,10 +72,7 @@ class Decoder(nn.Module):
         super(Decoder, self).__init__()
         self.target_projection = Linear(input_dim, num_hidden)
         self.linears = nn.ModuleList([Linear(num_hidden * 3, num_hidden * 3, w_init='relu') for _ in range(3)])
-        # Per-layer LayerNorm + dropout in the decoder MLP (regularisation /
-        # normalisation on the decode path).
-        self.norms = nn.ModuleList([nn.LayerNorm(num_hidden * 3) for _ in range(3)])
-        self.dropout = nn.Dropout(p=dropout)
+        # Legacy decoder body: plain relu(Linear(...)) stack (no LayerNorm/dropout).
         self.mean_projection = Linear(num_hidden*3, output_dim)
         self.log_var_projection = Linear(num_hidden*3, output_dim)
 
@@ -84,10 +81,8 @@ class Decoder(nn.Module):
         batch_size, num_targets, _ = target_x.size()
         target_x = self.target_projection(target_x)
         hidden = t.cat([t.cat([r, z], dim=-1), target_x], dim=-1)
-        for linear, norm in zip(self.linears, self.norms):
+        for linear in self.linears:
             hidden = t.relu(linear(hidden))
-            hidden = norm(hidden)
-            hidden = self.dropout(hidden)
         mean = self.mean_projection(hidden)
         var = 1e-3 + F.softplus(self.log_var_projection(hidden))
         return mean, var

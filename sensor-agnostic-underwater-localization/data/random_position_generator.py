@@ -465,135 +465,69 @@ def parse_float_list(s):
     return [float(p) for p in parts]
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Generate N random-position datasets. By default all sets "
-                    "share one trajectory ensemble (sensor-displacement study); "
-                    "set per_set.distinct_trajectories in traj_generation.yaml "
-                    "(or pass --distinct-trajectories) to give each set its own "
-                    "trajectories as well as its own sensor layout."
-    )
-    parser.add_argument('--channel_options', type=str,
-                        default="0.0,0.1,0.2,0.3,0.4,0.5",
-                        help="Comma/space separated theta values "
-                             "(default: 0.0..0.5).")
-    parser.add_argument('--n_position_sets', type=int, default=20,
-                        help="Number of distinct random sensor layouts (default 20).")
-    parser.add_argument('--n_traj', type=int, default=100,
-                        help="Trajectories per dataset (default 100).")
-    parser.add_argument('--ppt', type=int, default=50,
-                        help="Points per trajectory (default 50).")
-    parser.add_argument('--df', type=float, default=100.0,
-                        help="Frequency resolution [Hz] (default 100 -> "
-                             "feature dim 1010 for 10 sensors).")
-    parser.add_argument('--snr', type=float, default=10.0,
-                        help="SNR [dB] for the filtered features (default 10).")
-    parser.add_argument('--rep', type=int, default=1,
-                        help="Filtering repetitions (default 1).")
-    parser.add_argument('--nop', type=int, default=-1,
-                        help="joblib processes (-1 == all cores).")
-    parser.add_argument('--out-dir', type=str, default='./data_random_positions',
-                        help="Output root directory.")
-    parser.add_argument('--master-seed', type=int, default=11,
-                        help="Master seed; controls trajectories and all layouts.")
-    parser.add_argument('--start-set', type=int, default=0,
-                        help="First position-set index to generate (inclusive). "
-                             "Use with --end-set to shard a run across jobs.")
-    parser.add_argument('--end-set', type=int, default=None,
-                        help="Last position-set index (exclusive). "
-                             "Defaults to --n_position_sets.")
-    parser.add_argument('--traj_config', type=str, default=None,
-                        help="Path to the trajectory-generation YAML "
-                             "(default: config/traj_generation.yaml). Its "
-                             "`per_set.distinct_trajectories` flag selects shared "
-                             "vs per-set trajectories.")
-    parser.add_argument('--distinct-trajectories', dest='distinct_trajectories',
-                        action='store_true', default=None,
-                        help="Override the config: give every position-set its "
-                             "OWN trajectories as well as its own layout.")
-    parser.add_argument('--shared-trajectories', dest='distinct_trajectories',
-                        action='store_false', default=None,
-                        help="Override the config: reuse ONE trajectory ensemble "
-                             "across all position-sets (sensor-displacement study).")
-    parser.add_argument('--no-variant-subdir', dest='variant_subdir',
-                        action='store_false', default=True,
-                        help="Write directly into --out-dir instead of a "
-                             "<method>_<mode> subfolder (legacy flat layout).")
-    args = parser.parse_args()
+def run_random_task(cfg):
+    """Generate the RANDOM-task datasets from a unified config object
+    (config/data_pipeline.yaml). Reads the shared ``channel`` block, the
+    ``random_task`` block and ``method``; writes ``n_position_sets`` datasets of
+    the 'random' topology under ``<random_task.out_dir>/<method>_<mode>/``.
+    Invoked by data/generate.py (task=random)."""
+    ch = cfg['channel']
+    rt = cfg['random_task']
+    method = cfg.get('method', 'spiral')
 
-    channel_options = parse_float_list(args.channel_options) or [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
-    end_set = args.end_set if args.end_set is not None else args.n_position_sets
-    start_set = max(0, args.start_set)
-    end_set = min(end_set, args.n_position_sets)
-    assert start_set < end_set, "Empty position-set range."
+    channel_options = [float(x) for x in ch['channel_options']]
+    n_traj = int(ch['n_traj']); ppt = int(ch['ppt']); df = float(ch['df'])
+    snr = float(ch['snr']); rep = int(ch['rep'])
+    master_seed = int(ch.get('master_seed', 11)); nop = int(ch.get('nop', -1))
 
-    # Inject collaboration spec (df / n_traj / ppt) into the imported physics.
-    override_base_params(df=args.df, n_traj=args.n_traj, ppt=args.ppt)
-    # Suppress the hardcoded ./data/ side-effect write in channel.__init__.
-    base.channel.save_channel_info = lambda self, name: None
+    n_position_sets = int(rt['n_position_sets'])
+    distinct_trajectories = bool(rt.get('distinct_trajectories', False))
+    traj_seed_offset = int(rt.get('traj_seed_offset', 2000))
 
-    # Trajectory-generation config (method + the per_set toggle). Loaded here so
-    # there is a single source of truth that we also hand to every channel.
-    traj_config = base.load_traj_config(args.traj_config)
-    per_set = traj_config.get('per_set', {}) or {} #type: ignore
-    # CLI flag (if given) overrides the config; otherwise use the config value.
-    if args.distinct_trajectories is None:
-        distinct_trajectories = bool(per_set.get('distinct_trajectories', False))
-    else:
-        distinct_trajectories = bool(args.distinct_trajectories)
-    traj_seed_offset = int(per_set.get('traj_seed_offset', 2000))
-    method = traj_config.get('method', 'spiral') #type: ignore
+    # Inject df / n_traj / ppt into the imported physics, and suppress the
+    # hardcoded ./data side-effect write in channel.__init__.
+    override_base_params(df=df, n_traj=n_traj, ppt=ppt)
+    base.channel.save_channel_info = lambda self, name: None  # type: ignore
 
-    # Variant tag keeps each (trajectory method, cross-set mode) dataset in its
-    # own folder so combinations never overwrite one another. By default the
-    # output is nested as <out-dir>/<method>_<mode>/; --no-variant-subdir writes
-    # straight into --out-dir (legacy flat layout).
+    # Variant tag keeps each (method, mode) dataset in its own folder.
     variant_tag = f"{method}_{'distinct' if distinct_trajectories else 'shared'}"
-    if args.variant_subdir:
-        out_dir = os.path.join(args.out_dir, variant_tag)
-    else:
-        out_dir = args.out_dir
+    out_dir = os.path.join(str(rt['out_dir']), variant_tag)
 
-    # Report the resulting feature dimension so the user can set model input_dim.
-    Lf = len(base.range_m(10000.0, 20000.0, args.df))
+    Lf = len(base.range_m(10000.0, 20000.0, df))
     print("=" * 64)
-    print("Random-position dataset generation")
+    print("RANDOM task -- dataset generation")
     print("=" * 64)
     print(f"  thetas             : {channel_options}")
-    print(f"  position sets      : [{start_set}, {end_set}) of {args.n_position_sets}")
-    print(f"  n_traj / ppt       : {args.n_traj} / {args.ppt}")
-    print(f"  df                 : {args.df} Hz  ->  Lf={Lf} time-points")
+    print(f"  position sets      : {n_position_sets}")
+    print(f"  n_traj / ppt       : {n_traj} / {ppt}")
+    print(f"  df                 : {df} Hz  ->  Lf={Lf} time-points")
     print(f"  feature dim / point: Lf*n_sensors = {Lf}*10 = {Lf*10}")
-    print(f"  snr / rep          : {args.snr} / {args.rep}")
-    print(f"  master seed        : {args.master_seed}")
+    print(f"  snr / rep          : {snr} / {rep}")
+    print(f"  master seed        : {master_seed}")
     print(f"  traj method        : {method}")
-    if distinct_trajectories:
-        print(f"  trajectory mode    : DISTINCT (own trajectories per set; "
-              f"seed offset {traj_seed_offset})")
-    else:
-        print(f"  trajectory mode    : SHARED (one ensemble reused across sets)")
-    print(f"  variant tag        : {variant_tag}"
-          f"{'' if args.variant_subdir else ' (flat layout; tag not used)'}")
+    print(f"  trajectory mode    : "
+          f"{'DISTINCT (own trajectories per set; seed offset ' + str(traj_seed_offset) + ')' if distinct_trajectories else 'SHARED (one ensemble reused across sets)'}")
     print(f"  out dir            : {out_dir}")
     print("=" * 64)
 
     run(
         channel_options=channel_options,
-        n_position_sets=args.n_position_sets,
+        n_position_sets=n_position_sets,
         out_dir=out_dir,
-        snr=args.snr,
-        rep=args.rep,
-        nop=args.nop,
-        master_seed=args.master_seed,
-        start_set=start_set,
-        end_set=end_set,
+        snr=snr,
+        rep=rep,
+        nop=nop,
+        master_seed=master_seed,
+        start_set=0,
+        end_set=n_position_sets,
         distinct_trajectories=distinct_trajectories,
         traj_seed_offset=traj_seed_offset,
-        traj_config=traj_config,
+        traj_config=cfg,
         traj_method=method,
         variant_tag=variant_tag,
     )
 
 
 if __name__ == '__main__':
-    main()
+    print("random_position_generator.py is now a library used by the unified "
+          "generator. Run:\n  python data/generate.py task=random")

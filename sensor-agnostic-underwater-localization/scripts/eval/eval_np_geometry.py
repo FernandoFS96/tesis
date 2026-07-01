@@ -264,7 +264,9 @@ def pool_means(model, conv, pools, labels, device, eval_ctx, n_draws,
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data-dir", required=True)
+    ap.add_argument("--data-dir", default=None,
+                    help="Processed dataset dir. If omitted, uses the data_dir "
+                         "stored in the checkpoint (resolved against the repo root).")
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--eval-ctx", type=int, default=20)
@@ -294,11 +296,30 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
     device = t.device(args.device)
 
-    with open(os.path.join(args.data_dir, "splits.json")) as f:
-        split = json.load(f)
-    labels = {int(k): v for k, v in split.get("labels", {}).items()}
-
     ck = t.load(args.ckpt, map_location=device)
+
+    # Resolve data_dir: CLI flag wins, else fall back to the checkpoint's stored
+    # data_dir (so eval always matches what the model trained on). A relative
+    # path is resolved against the repo root.
+    _repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    data_dir = args.data_dir or ck.get("config", {}).get("data_dir")
+    if data_dir is None:
+        raise SystemExit("--data-dir not given and the checkpoint has no stored data_dir")
+    if not os.path.isabs(data_dir):
+        data_dir = os.path.normpath(os.path.join(_repo, data_dir))
+    print(f"[eval] data_dir={data_dir}")
+
+    # splits.json only exists for the held-out geometry split; for topology /
+    # within-geometry data it is absent and region labels default to 'train'.
+    splits_path = os.path.join(data_dir, "splits.json")
+    if os.path.exists(splits_path):
+        with open(splits_path) as f:
+            split = json.load(f)
+        labels = {int(k): v for k, v in split.get("labels", {}).items()}
+    else:
+        labels = {}
+        print(f"[eval] no splits.json under {data_dir}; region labels default to 'train'.")
+
     name = ck.get("model_name", "cnp")
     conv = ck.get("convention", "split")
     feat_dim = ck.get("feat_dim"); out_dim = ck.get("out_dim", 3)
@@ -335,7 +356,7 @@ def main():
 
     pools = {}
     for nm in ["train", "val", "test"]:
-        pth = os.path.join(args.data_dir, f"{nm}_data.pkl")
+        pth = os.path.join(data_dir, f"{nm}_data.pkl")
         if os.path.exists(pth):
             pools[nm] = TrajectoryDataset(pth)
 
