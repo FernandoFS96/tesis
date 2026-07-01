@@ -73,6 +73,11 @@ import wandb
 # works regardless of the (Hydra-changed) current working directory.
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, _PROJECT_ROOT)
+
+# Anchor Hydra's output dir (and any config path) to the repo root regardless of
+# the launch directory: `${repo_root:}` in config/train.yaml resolves to here.
+# Registered at import time so it is available when Hydra composes the config.
+OmegaConf.register_new_resolver("repo_root", lambda: _PROJECT_ROOT, replace=True)
 import src.models.anp as anp_mod  # type: ignore  # noqa: E402
 import src.models.r_anp as ranp_mod  # type: ignore  # noqa: E402
 import src.models.online_r_anp as online_mod  # type: ignore  # noqa: E402
@@ -338,6 +343,7 @@ def flat_ckpt_config(cfg, device):
         "lr": cfg.training.lr,
         "weight_decay": cfg.training.weight_decay,
         "beta": cfg.training.beta,
+        "kl_warmup_epochs": cfg.training.get("kl_warmup_epochs", 0),
         "seed": cfg.seed,
         "device": device,
         "exp_name": cfg.exp_name,
@@ -376,8 +382,11 @@ def main(cfg: DictConfig):
         )
 
     # ---- data --------------------------------------------------------------
+    # Resolve a relative data_dir against the repo root (not the launch cwd) so
+    # training works regardless of where it is launched from.
     data_dir = cfg.data.data_dir
-    # print current working directory and data_dir for debugging
+    if not os.path.isabs(data_dir):
+        data_dir = os.path.normpath(os.path.join(_PROJECT_ROOT, data_dir))
     print(f"[{model_name}] cwd={os.getcwd()}  data_dir={data_dir}")
     train_ds = TrajectoryDataset(os.path.join(data_dir, "train_data.pkl"))
     val_ds = TrajectoryDataset(os.path.join(data_dir, "val_data.pkl"))
@@ -445,8 +454,17 @@ def main(cfg: DictConfig):
     with open(log_path, "w") as f:
         f.write("epoch,train_loss,train_nll,train_mae,val_loss,val_nll,val_mae,lr,sec\n")
 
-    # latent models use beta; deterministic ignore it (no KL)
-    beta = cfg.training.beta if is_latent(model_name) else 0.0
+    # latent models use beta; deterministic ignore it (no KL). The effective KL
+    # weight is linearly warmed up from 0 to base_beta over kl_warmup_epochs (a
+    # constant beta from epoch 1 invites posterior collapse); kl_warmup_epochs=0
+    # disables the warmup (constant base_beta).
+    base_beta = cfg.training.beta if is_latent(model_name) else 0.0
+    kl_warmup = int(cfg.training.get("kl_warmup_epochs", 0))
+
+    def beta_at(ep):
+        if base_beta == 0.0 or kl_warmup <= 0:
+            return base_beta
+        return base_beta * min(1.0, ep / float(kl_warmup))
 
     ckpt_cfg = flat_ckpt_config(cfg, str(device))
 
@@ -479,9 +497,10 @@ def main(cfg: DictConfig):
               f"every {viz_cfg.get('every_n_epochs', 50)} epochs")
 
     best_val_mae = float("inf")  # best.pt is selected by validation MAE (physical units)
-    epoch_bar = tqdm(range(1, cfg.training.epochs + 1), desc=f"{model_name} epochs",dynamic_ncols=True)
+    epoch_bar = tqdm(range(1, cfg.training.epochs + 1), desc=f"{model_name} epochs", dynamic_ncols=True)
     for ep in epoch_bar:
         t0 = time.time()
+        beta = beta_at(ep)   # KL warmup (0 -> base_beta over kl_warmup epochs)
         tr = run_epoch(model, conv, train_loader, device, beta, opt,
                        desc=f"ep{ep} train", y_mean=y_mean, y_std=y_std)
         va = run_epoch(model, conv, val_loader, device, beta, None,
@@ -500,7 +519,7 @@ def main(cfg: DictConfig):
                 "epoch": ep,
                 "train/loss": tr[0], "train/nll": tr[1], "train/mae": tr[2],
                 "val/loss": va[0], "val/nll": va[1], "val/mae": va[2],
-                "lr": lr_now, "epoch_time_sec": dt,
+                "lr": lr_now, "beta": beta, "epoch_time_sec": dt,
             }, step=ep)
 
         # periodic figures (also on the final epoch so the last state is logged)

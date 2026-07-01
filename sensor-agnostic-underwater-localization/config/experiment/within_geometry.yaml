@@ -1,0 +1,19 @@
+# @package _global_
+# ============================================================================
+# Experiment: RANDOM task, within-geometry split (spiral). Reproduces the old
+# converging setup (every layout seen in train; all-points targets).
+#   python scripts/train/train_np_geometry.py experiment=within_geometry
+# Generate + preprocess first:
+#   python data/generate.py dataset=random_spiral_shared
+#   python data/data_process_random_positions.py \
+#       --data-root data/random_task/spiral_shared --mode legacy
+# ============================================================================
+defaults:
+  - override /dataset: random_spiral_shared
+  - override /data: within_geometry
+  - override /model: anp
+
+exp_name: within_geometry_spiral
+training:
+  epochs: 2000
+  kl_warmup_epochs: 500

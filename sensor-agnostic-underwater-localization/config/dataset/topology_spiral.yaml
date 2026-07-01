@@ -1,0 +1,7 @@
+# Dataset identity (single source of truth), used by BOTH:
+#   generation:  python data/generate.py dataset=topology_spiral
+#   training:    train.yaml composes `dataset=topology_spiral` (or via experiment)
+# so the two never disagree on which dataset is being built/consumed.
+task: topology        # topology | random
+method: spiral        # spiral | hermite  (trajectory shape)
+mode: na              # shared | distinct  (random task only; ignored for topology)
