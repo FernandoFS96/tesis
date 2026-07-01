@@ -1,0 +1,57 @@
+# Ignore everything in the root folder
+/*
+
+# Except the underwater-localization folder
+!/underwater-localization/
+underwater-localization/results/
+underwater-localization/data/high_variance/data_processed/
+underwater-localization/data/low_variance/data_processed/
+
+# Except the magnetic-localization folder
+!/magnetic-localization/
+magnetic-localization/data/simulated_data/
+magnetic-localization/data/trajectories/
+
+# Except the underwater-localization folder
+!/underwater-localization-topologies/
+underwater-localization-topologies/data/data_save_2/
+underwater-localization-topologies/data/data_save_ranp_paper/
+underwater-localization-topologies/data/data/channel*
+underwater-localization-topologies/data/data/data_*
+underwater-localization-topologies/src/training/results/
+underwater-localization-topologies/src/training/nohup*
+underwater-localization-topologies/src/training/optuna*.log
+underwater-localization-topologies/src/evaluation/results/finetune_ood/topology_ellipsoidal/model_ranp/checkpoints/
+underwater-localization-topologies/src/evaluation/results/finetune_ood/topology_ellipsoidal/model_anp/checkpoints/
+underwater-localization-topologies/src/evaluation/results/finetune_ood/topology_aligned/model_ranp/checkpoints/
+underwater-localization-topologies/src/evaluation/results/finetune_ood/topology_aligned/model_anp/checkpoints/
+underwater-localization-topologies/src/evaluation/results/finetune_ood/topology_random/model_ranp/checkpoints/
+underwater-localization-topologies/src/evaluation/results/finetune_ood/topology_random/model_anp/checkpoints/
+underwater-localization-topologies/src/evaluation/results/explore_lora/topology_ellipsoidal/model_ranp/checkpoints/
+underwater-localization-topologies/src/evaluation/results/explore_lora/topology_ellipsoidal/model_anp/checkpoints/
+underwater-localization-topologies/src/evaluation/results/explore_lora/topology_aligned/model_ranp/checkpoints/
+underwater-localization-topologies/src/evaluation/results/explore_lora/topology_aligned/model_anp/checkpoints/
+underwater-localization-topologies/src/evaluation/results/explore_lora/topology_random/model_ranp/checkpoints/
+underwater-localization-topologies/src/evaluation/results/explore_lora/topology_random/model_anp/checkpoints/
+
+# except CSIC study
+!/csic/
+csic/csic_real_synth_load/data/
+csic/csic_real_synth_load/prepared_data/
+csic/csic_real_synth_load/prepared_data_soc/
+csic/train/
+csic/models/
+
+# except the KIT-ALR collaboration
+!/sensor-agnostic-underwater-localization/
+sensor-agnostic-underwater-localization/data/topology_task/
+sensor-agnostic-underwater-localization/data/validation/
+sensor-agnostic-underwater-localization/data/data_random_positions/
+sensor-agnostic-underwater-localization/output/
+
+# wandb raw run logs are large binaries — never commit them (GitHub 100MB limit)
+*.wandb
+
+# Python bytecode / caches — generated, never commit (any subproject, any depth)
+__pycache__/
+*.py[cod]
