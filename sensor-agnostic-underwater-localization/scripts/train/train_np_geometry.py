@@ -294,7 +294,7 @@ def run_epoch(model, conv, loader, device, beta, optimizer=None, desc="",
             if train:
                 optimizer.zero_grad()
                 loss.backward()
-                t.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+                t.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
         b = ty_raw.size(0)
         tot_loss += loss.item() * b

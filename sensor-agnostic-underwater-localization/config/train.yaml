@@ -20,7 +20,7 @@ defaults:
 # Experiment identity -- used as the wandb group name and to organise outputs.
 exp_name: legacy_spiral_random_topology
 
-seed: 0
+seed: 1
 device: auto  # 'auto' -> cuda if available else cpu; or set 'cuda' / 'cpu'
 
 # -----------------------------------------------------------------------------
@@ -29,13 +29,13 @@ device: auto  # 'auto' -> cuda if available else cpu; or set 'cuda' / 'cpu'
 training:
   epochs: 2000
   batch_size: 16
-  lr: 1.0e-4
+  lr: 5.0e-4
   weight_decay: 1.0e-4
   beta: 1.0          # base KL weight (used only by latent models: anp / ranp)
   # Linearly warm the KL weight 0 -> beta over this many epochs (latent models
   # only). A constant full beta from epoch 1 invites posterior collapse; the old
   # converging setup warmed up over 500 epochs. Set 0 to disable (constant beta).
-  kl_warmup_epochs: 500
+  kl_warmup_epochs: 1000
   num_workers: 1
 
 
