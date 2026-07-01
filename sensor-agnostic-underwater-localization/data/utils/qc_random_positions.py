@@ -93,21 +93,22 @@ from matplotlib.colors import Normalize
 TOPOLOGIES = ("ellipsoidal", "random", "aligned")
 
 
-def detect_mode(data_root):
-    """Return 'position_sets' or 'topologies' by inspecting the directory tree."""
+def detect_mode(data_root, method):
+    """Return 'position_sets' or 'topologies' by inspecting the directory tree.
+    Topology layout groups by method first: <data_root>/<method>/<topology>/."""
     if sorted(glob.glob(os.path.join(data_root, "position_set_*"))):
         return "position_sets"
-    if any(os.path.isdir(os.path.join(data_root, t)) for t in TOPOLOGIES):
+    if any(os.path.isdir(os.path.join(data_root, method, t)) for t in TOPOLOGIES):
         return "topologies"
     return "position_sets"  # default; main() errors out if nothing is found
 
 
-def find_groups(data_root, mode):
+def find_groups(data_root, mode, method):
     """Ordered list of (label, group_dir) for the detected mode."""
     if mode == "topologies":
         groups = []
         for t in TOPOLOGIES:
-            d = os.path.join(data_root, t)
+            d = os.path.join(data_root, method, t)
             if os.path.isdir(d):
                 groups.append((t, d))
         return groups
@@ -121,16 +122,16 @@ def find_groups(data_root, mode):
 
 def option_base(group_dir, theta, mode, method):
     """Directory holding trajectory/ filtered_data/ channel_info/ for one
-    (group, theta), for the detected layout."""
+    (group, theta), for the detected layout. In topology mode group_dir already
+    includes the method level (<data_root>/<method>/<topology>)."""
     if mode == "topologies":
-        return os.path.join(group_dir, method, f"channel_option_{theta}")
+        return os.path.join(group_dir, f"channel_option_{theta}")
     return os.path.join(group_dir, f"channel_option_{theta}", "random")
 
 
 def find_thetas(group_dir, mode, method):
     opts = []
-    search_root = os.path.join(group_dir, method) if mode == "topologies" else group_dir
-    for d in glob.glob(os.path.join(search_root, "channel_option_*")):
+    for d in glob.glob(os.path.join(group_dir, "channel_option_*")):
         m = re.search(r"channel_option_([0-9.]+)$", d)
         if m and os.path.isdir(os.path.join(option_base(group_dir, m.group(1),
                                                          mode, method), "trajectory")):
@@ -772,12 +773,12 @@ def main():
     os.makedirs(fig_dir, exist_ok=True)
 
     # Auto-detect the dataset layout and the comparison axis ("group").
-    mode = detect_mode(args.data_root)
     method = args.method
+    mode = detect_mode(args.data_root, method)
     unit = "topology" if mode == "topologies" else "position-set"
     df = args.df if args.df is not None else (50.0 if mode == "topologies" else 100.0)
 
-    groups = find_groups(args.data_root, mode)
+    groups = find_groups(args.data_root, mode, method)
     if not groups:
         where = ("<topology>/ folders" if mode == "topologies"
                  else "position_set_*")

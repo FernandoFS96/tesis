@@ -22,7 +22,7 @@ data/
   random_position_generator.py              # library: random (position-set) task runner
   data_process_random_positions.py          # preprocessing -> training-ready pickles (all modes)
   utils/                                    # QC + velocity + trajectory-preview tools
-  topology_task/<topology>/<method>/...     # Problem 1 raw + processed data (see §7)
+  topology_task/<method>/<topology>/...     # Problem 1 raw + processed data (see §7)
   random_task/<method>_<mode>/...           # Problem 2 raw + processed data (see §7)
 src/models/
   anp.py            # CNP (DeterministicModel) + ANP (LatentModel), attentive, offline
@@ -109,7 +109,7 @@ Both suppress the channel's legacy `./data/channel_option_*` side-effect write.
 
 **Problem 1 — topology task** → `topology_task.out_dir` (default `./data/topology_task`):
 ```
-<out_dir>/<topology>/<method>/channel_option_<theta>/
+<out_dir>/<method>/<topology>/channel_option_<theta>/
     trajectory/trajectories.npy                 # (3, n_traj, ppt)  target coords
     filtered_data/filtered_data.npy             # (tau, ppt, n_traj, n_sensors)
     channel_info/sensor_positions_<theta>.npy   # (3, n_sensors)
@@ -257,7 +257,7 @@ Two parallel, self-describing roots under `data/` (created by `generate.py` when
 run from the repo root):
 ```
 data/
-  topology_task/<topology>/<method>/channel_option_<θ>/…      # Problem 1
+  topology_task/<method>/<topology>/channel_option_<θ>/…      # Problem 1
     processed/topology_<name>/{train,val,test}_data.pkl
   random_task/<method>_<mode>/position_set_XX/…/random/…      # Problem 2
     processed/{within_geometry_split,geometry_split}/…

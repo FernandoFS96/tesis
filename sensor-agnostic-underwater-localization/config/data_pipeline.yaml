@@ -28,7 +28,7 @@ task: topology
 # method: add a parameter block below AND the matching submethod in
 # data/acoustic_data_generator.py.
 # -----------------------------------------------------------------------------
-method: spiral
+method: hermite
 
 # -----------------------------------------------------------------------------
 # Shared acoustic-channel knobs (BOTH tasks read these).
@@ -77,7 +77,7 @@ hermite:
 # PROBLEM 1 -- TOPOLOGY task  (data/acoustic_data_generator.py)
 # Emits one dataset per topology; all topologies share the same trajectories and
 # channels (per theta). Output:
-#   <out_dir>/<topology>/<method>/channel_option_<theta>/{trajectory,filtered_data,channel_info}/
+#   <out_dir>/<method>/<topology>/channel_option_<theta>/{trajectory,filtered_data,channel_info}/
 # =============================================================================
 topology_task:
   topologies: [ellipsoidal, random, aligned]  # which sensor arrangements to emit
@@ -106,7 +106,7 @@ random_task:
 # `mode` selects the split:
 #   topology -> TOPOLOGY task: one training dataset per topology, split by
 #               TRAJECTORY INDEX (70/20/10), pooling all thetas. Reads
-#               topology_task.out_dir (<data_root>/<topology>/<method>/...).
+#               topology_task.out_dir (<data_root>/<method>/<topology>/...).
 #   legacy   -> RANDOM task: within-geometry 70/20/10 (all layouts seen in train).
 #   geometry -> RANDOM task: held-out sensor-layout split (interp/extrap).
 #   all      -> geometry + legacy.

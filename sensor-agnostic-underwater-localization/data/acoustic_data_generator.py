@@ -800,7 +800,8 @@ def generate_params(options=None):
     params['w0'] = np.pi / params['T']
     return params
 
-def plot_validation(channels_dict, option_idx=0, n_samples=10, seed=None):
+def plot_validation(channels_dict, option_idx=0, n_samples=10, seed=None,
+                    validation_dir='data/validation'):
     """
     Genera n_samples imágenes de comparación de topologías
     para trayectorias elegidas aleatoriamente.
@@ -822,9 +823,8 @@ def plot_validation(channels_dict, option_idx=0, n_samples=10, seed=None):
     # elegimos hasta n_samples trayectorias distintas
     chosen_trajs = rng.choice(n_traj, size=min(n_samples, n_traj), replace=False)
 
-    # carpeta base donde ya guardabas
-    base_dir = 'data'
-    plot_dir = f'{base_dir}/validation'
+    # carpeta base (pasada desde process(): <out_dir>/<method>/validation)
+    plot_dir = validation_dir
     # NUEVA subcarpeta
     samples_dir = os.path.join(plot_dir, f'random_trajectories_option_{option_idx}')
     os.makedirs(samples_dir, exist_ok=True)
@@ -895,7 +895,8 @@ def plot_validation(channels_dict, option_idx=0, n_samples=10, seed=None):
 
     print(f"Se han guardado {len(chosen_trajs)} imágenes en: {samples_dir}")
 
-def save_velocity_histogram(traj, T_tot, bins=40, option_idx=None):
+def save_velocity_histogram(traj, T_tot, bins=40, option_idx=None,
+                            validation_dir='data/validation'):
     """
     Calcula el histograma de velocidades a partir de las trayectorias generadas
     y guarda la figura en el directorio actual.
@@ -943,9 +944,8 @@ def save_velocity_histogram(traj, T_tot, bins=40, option_idx=None):
                    bbox=dict(boxstyle="round", facecolor="white", alpha=0.8, lw=0.5))
     plt.tight_layout()
 
-    # Guardado en el directorio de ejecución
-    base_dir = 'data'
-    plot_dir = f'{base_dir}/validation'
+    # Guardado dentro de la carpeta de la tarea/método (pasada desde process()).
+    plot_dir = validation_dir
     filename=f"velocity_hist_theta_{option_idx}.png"
     os.makedirs(plot_dir, exist_ok=True)
     plt.savefig(f'{plot_dir}/{filename}', dpi=300, bbox_inches='tight')
@@ -966,7 +966,7 @@ def process(channel_options, snr, rep, nop=-1, n_traj_override=None,
     trajectory shape (spiral / hermite) is selected by ``method`` (falling back
     to ``traj_config['method']``). The output layout, per (topology, theta), is::
 
-        <out_dir>/<topology>/<method>/channel_option_<theta>/
+        <out_dir>/<method>/<topology>/channel_option_<theta>/
             trajectory/trajectories.npy          (3, n_traj, ppt)   target coords
             filtered_data/filtered_data.npy       (tau, ppt, n_traj, n_sensors)
             channel_info/sensor_positions_<theta>.npy   (3, n_sensors)
@@ -1039,11 +1039,12 @@ def process(channel_options, snr, rep, nop=-1, n_traj_override=None,
             data, trjs = c.filter(1024, snr=snr, nt=n_traj_c, signal_type='sinusoid',
                                   rep=rep, specific=canonical)
             
-            # Save the generated data. New layout puts the topology FIRST, then
-            # the method, then the channel option:
-            #   <out_dir>/<topology>/<method>/channel_option_<theta>/...
+            # Save the generated data. Layout groups by METHOD first, then
+            # topology, then channel option (so spiral / hermite datasets never
+            # overwrite each other):
+            #   <out_dir>/<method>/<topology>/channel_option_<theta>/...
             if variant_subdir:
-                topology_dir = f'{out_dir}/{topology}/{method}/channel_option_{option}'
+                topology_dir = f'{out_dir}/{method}/{topology}/channel_option_{option}'
             else:
                 topology_dir = f'{out_dir}/{topology}/channel_option_{option}'
             info_dir = f'{topology_dir}/channel_info'
@@ -1064,12 +1065,19 @@ def process(channel_options, snr, rep, nop=-1, n_traj_override=None,
 
             print(f" Data saved for topology: {topology}")
         
+        # Validation artifacts live INSIDE the task/method folder so they are not
+        # overwritten when generating a different trajectory method:
+        #   <out_dir>/<method>/validation/   (or <out_dir>/validation/ when flat)
+        validation_dir = (f'{out_dir}/{method}/validation' if variant_subdir
+                          else f'{out_dir}/validation')
+
         # Create validation plot for this option (only for the first option)
         if option_idx == 0:
-            plot_validation(channels_for_validation, option)
-        
+            plot_validation(channels_for_validation, option, validation_dir=validation_dir)
+
         assert trjs is not None, "Trajectories must be set after topology loop"
-        stats = save_velocity_histogram(trjs, T_tot=params['ci']['T_tot'], bins=40, option_idx=option)
+        stats = save_velocity_histogram(trjs, T_tot=params['ci']['T_tot'], bins=40,
+                                        option_idx=option, validation_dir=validation_dir)
 
 def parse_float_list(s):
     if s is None:
@@ -1110,7 +1118,7 @@ def run_topology_task(cfg):
     print(f"  snr / rep     : {snr} / {rep}")
     print(f"  traj method   : {method}")
     print(f"  master seed   : {master_seed}")
-    print(f"  layout        : {out_dir}/<topology>/{method}/channel_option_<theta>/")
+    print(f"  layout        : {out_dir}/{method}/<topology>/channel_option_<theta>/")
     print("=" * 64)
 
     np.random.seed(master_seed)
