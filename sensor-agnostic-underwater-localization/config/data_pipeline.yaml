@@ -28,7 +28,7 @@ task: topology
 # method: add a parameter block below AND the matching submethod in
 # data/acoustic_data_generator.py.
 # -----------------------------------------------------------------------------
-method: spiral
+method: hermite
 
 # -----------------------------------------------------------------------------
 # Shared acoustic-channel knobs (BOTH tasks read these).
