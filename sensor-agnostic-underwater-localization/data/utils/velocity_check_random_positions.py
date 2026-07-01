@@ -99,32 +99,64 @@ DEFAULT_T_TOT = 6.0
 
 # --------------------------------------------------------------------------- #
 # Discovery
+#
+# Two layouts are auto-detected (see qc_random_positions.py for the full note):
+#   * POSITION-SET study: groups are position_set_XX dirs;
+#       <root>/position_set_XX/channel_option_<theta>/random/...
+#   * THREE-TOPOLOGY study: groups are the ellipsoidal/random/aligned topologies;
+#       <root>/<topology>/<method>/channel_option_<theta>/...
+# The expected cross-group velocity behaviour is the same in both shared cases:
+# one identical velocity profile per theta (trajectories are shared across the
+# groups). The position-set study additionally has a DISTINCT mode.
 # --------------------------------------------------------------------------- #
-def find_position_sets(data_root):
+TOPOLOGIES = ("ellipsoidal", "random", "aligned")
+
+
+def detect_mode(data_root):
+    if sorted(glob.glob(os.path.join(data_root, "position_set_*"))):
+        return "position_sets"
+    if any(os.path.isdir(os.path.join(data_root, t)) for t in TOPOLOGIES):
+        return "topologies"
+    return "position_sets"
+
+
+def find_groups(data_root, mode):
+    """Ordered list of (label, group_dir) for the detected mode."""
+    if mode == "topologies":
+        return [(t, os.path.join(data_root, t)) for t in TOPOLOGIES
+                if os.path.isdir(os.path.join(data_root, t))]
     sets = sorted(glob.glob(os.path.join(data_root, "position_set_*")))
-    return [s for s in sets if os.path.isdir(s)]
+    return [(os.path.basename(s).replace("position_set_", "set "), s)
+            for s in sets if os.path.isdir(s)]
 
 
-def find_thetas(set_dir):
+def option_base(group_dir, theta, mode, method):
+    if mode == "topologies":
+        return os.path.join(group_dir, method, f"channel_option_{theta}")
+    return os.path.join(group_dir, f"channel_option_{theta}", "random")
+
+
+def find_thetas(group_dir, mode, method):
     opts = []
-    for d in glob.glob(os.path.join(set_dir, "channel_option_*")):
+    search_root = os.path.join(group_dir, method) if mode == "topologies" else group_dir
+    for d in glob.glob(os.path.join(search_root, "channel_option_*")):
         m = re.search(r"channel_option_([0-9.]+)$", d)
-        if m and os.path.isdir(os.path.join(d, "random")):
+        if m and os.path.isdir(os.path.join(option_base(group_dir, m.group(1),
+                                                         mode, method), "trajectory")):
             opts.append(m.group(1))
     return sorted(opts, key=float)
 
 
-def traj_path(set_dir, theta):
+def traj_path(group_dir, theta, mode, method):
     """The full (3, n_traj, ppt+1) trajectory saved by the generator.
     Prefer the channel_info copy (has the +1 endpoint needed for diff);
     fall back to the target trajectory if missing."""
-    info = os.path.join(set_dir, f"channel_option_{theta}", "random",
-                        "channel_info", f"trajs_{theta}.npy")
+    base = option_base(group_dir, theta, mode, method)
+    info = os.path.join(base, "channel_info", f"trajs_{theta}.npy")
     if os.path.exists(info):
         return info, "channel_info"
     # Fallback: target trajectory (3, n_traj, ppt) -- one fewer point.
-    tgt = os.path.join(set_dir, f"channel_option_{theta}", "random",
-                       "trajectory", "trajectories.npy")
+    tgt = os.path.join(base, "trajectory", "trajectories.npy")
     return tgt, "trajectory"
 
 
@@ -270,13 +302,20 @@ def write_csv(rows, path):
 def main():
     ap = argparse.ArgumentParser(
         description="Post-hoc velocity / trajectory characterization for the "
-                    "random-position datasets.")
-    ap.add_argument("--data-root", required=True)
+                    "random-position datasets (position_set_* layout) OR the "
+                    "three-topology datasets (<topology>/<method>/... layout). "
+                    "The layout is auto-detected.")
+    ap.add_argument("--data-root", required=True,
+                    help="Dir containing position_set_* (position-set study) or "
+                         "the <topology> folders, e.g. ./data (topology study).")
     ap.add_argument("--out-dir", default=None)
+    ap.add_argument("--method", default="hermite",
+                    help="Trajectory method subfolder for the three-topology "
+                         "layout. Ignored for the position-set layout.")
     ap.add_argument("--thetas", default=None,
                     help="Comma list to restrict thetas (default: all found)")
     ap.add_argument("--max-sets", type=int, default=None,
-                    help="Only inspect the first K position-sets")
+                    help="Only inspect the first K groups (position-sets/topologies)")
     ap.add_argument("--t-tot", type=float, default=DEFAULT_T_TOT,
                     help=f"Per-jump time used as the velocity denominator "
                          f"(default {DEFAULT_T_TOT}, matching the original "
@@ -296,14 +335,21 @@ def main():
     fig_dir = os.path.join(out_dir, "figures")
     os.makedirs(fig_dir, exist_ok=True)
 
-    set_dirs = find_position_sets(args.data_root)
-    if not set_dirs:
-        print(f"ERROR: no position_set_* under {args.data_root}", file=sys.stderr)
+    mode = detect_mode(args.data_root)
+    method = args.method
+    unit = "topology" if mode == "topologies" else "position-set"
+
+    groups = find_groups(args.data_root, mode)
+    if not groups:
+        where = "<topology>/ folders" if mode == "topologies" else "position_set_*"
+        print(f"ERROR: no {where} under {args.data_root}", file=sys.stderr)
         sys.exit(1)
     if args.max_sets:
-        set_dirs = set_dirs[:args.max_sets]
+        groups = groups[:args.max_sets]
+    labels = [g[0] for g in groups]
+    set_dirs = [g[1] for g in groups]
 
-    thetas = find_thetas(set_dirs[0])
+    thetas = find_thetas(set_dirs[0], mode, method)
     if args.thetas:
         want = [t.strip() for t in args.thetas.split(",")]
         thetas = [t for t in thetas if t in want]
@@ -314,25 +360,35 @@ def main():
     log = []
     def line(s): log.append(s); print(s)
 
-    # Resolve trajectory mode: CLI override > _manifest.pkl > default (shared).
-    man_distinct = None
-    man_path = os.path.join(args.data_root, "_manifest.pkl")
-    if os.path.exists(man_path):
-        with open(man_path, "rb") as f:
-            man_distinct = pickle.load(f).get('distinct_trajectories')
-    if args.distinct_trajectories is not None:
-        distinct_trajectories = bool(args.distinct_trajectories)
-    elif man_distinct is not None:
-        distinct_trajectories = bool(man_distinct)
-    else:
+    # Resolve trajectory mode. The three-topology study is ALWAYS shared across
+    # topologies; the position-set study reads the mode from the manifest (CLI
+    # override wins).
+    if mode == "topologies":
         distinct_trajectories = False
+        mode_note = " (topology study: shared by design)"
+    else:
+        man_distinct = None
+        man_path = os.path.join(args.data_root, "_manifest.pkl")
+        if os.path.exists(man_path):
+            with open(man_path, "rb") as f:
+                man_distinct = pickle.load(f).get('distinct_trajectories')
+        if args.distinct_trajectories is not None:
+            distinct_trajectories = bool(args.distinct_trajectories)
+        elif man_distinct is not None:
+            distinct_trajectories = bool(man_distinct)
+        else:
+            distinct_trajectories = False
+        mode_note = ("" if man_distinct is not None
+                     or args.distinct_trajectories is not None
+                     else " (assumed; no manifest)")
 
     line(f"data-root : {args.data_root}")
-    line(f"position-sets : {len(set_dirs)} | thetas : {thetas}")
+    line(f"layout : {mode}"
+         f"{f' (method={method})' if mode == 'topologies' else ''}")
+    line(f"{unit}s : {len(set_dirs)} -> {labels} | thetas : {thetas}")
     line(f"T_tot (per-jump denominator) : {args.t_tot} s")
     line(f"trajectory mode : "
-         f"{'DISTINCT (per-set)' if distinct_trajectories else 'SHARED'}"
-         f"{'' if man_distinct is not None or args.distinct_trajectories is not None else ' (assumed; no manifest)'}")
+         f"{'DISTINCT (per-set)' if distinct_trajectories else 'SHARED'}{mode_note}")
     line("=" * 64)
 
     per_theta_stats = {}
@@ -354,9 +410,9 @@ def main():
         all_trajs = []  # every set's trajectory array (used for pooled profile)
 
         for si, sd in enumerate(set_dirs):
-            tp, src = traj_path(sd, th)
+            tp, src = traj_path(sd, th, mode, method)
             if not os.path.exists(tp):
-                line(f"[ WARN ] theta {th} set {si}: missing trajectory file")
+                line(f"[ WARN ] theta {th} {unit} {labels[si]}: missing trajectory file")
                 continue
             traj = np.load(tp)
             n_checked += 1
@@ -367,7 +423,7 @@ def main():
             else:
                 if traj.shape != ref_traj.shape:
                     agree = False
-                    line(f"[ FAIL ] theta {th} set {si}: trajectory shape "
+                    line(f"[ FAIL ] theta {th} {unit} {labels[si]}: trajectory shape "
                          f"{traj.shape} != reference {ref_traj.shape}")
                 else:
                     d = float(np.abs(traj - ref_traj).max())
@@ -376,7 +432,7 @@ def main():
                         agree = False
 
         if ref_traj is None:
-            line(f"[ FAIL ] theta {th}: no trajectories found in any set")
+            line(f"[ FAIL ] theta {th}: no trajectories found in any {unit}")
             hard_failures += 1
             continue
 
@@ -401,13 +457,13 @@ def main():
                      f"{n_checked} sets (max|diff|={max_disagreement:.4g}) -> "
                      f"per-set design OK; pooling velocity over all sets")
         else:
-            # Shared mode: sets MUST be byte-identical.
+            # Shared mode: groups MUST be byte-identical.
             if identical:
                 line(f"[ PASS ] theta {th}: trajectories identical across "
-                     f"{n_checked} sets (max|diff|=0) -> single shared velocity "
+                     f"{n_checked} {unit}s (max|diff|=0) -> single shared velocity "
                      f"profile is valid")
             else:
-                line(f"[ FAIL ] theta {th}: trajectories DIFFER across sets "
+                line(f"[ FAIL ] theta {th}: trajectories DIFFER across {unit}s "
                      f"(max|diff|={max_disagreement:.4g}) -> velocity is NOT "
                      f"shared; shared-trajectory invariant violated")
                 hard_failures += 1

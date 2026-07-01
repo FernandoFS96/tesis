@@ -1,0 +1,4 @@
+# Dataset identity -- see topology_spiral.yaml for the full note.
+task: topology
+method: hermite
+mode: na
