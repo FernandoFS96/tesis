@@ -73,24 +73,73 @@ from matplotlib.colors import Normalize
 
 # --------------------------------------------------------------------------- #
 # Discovery helpers
+#
+# This QC tool understands TWO dataset layouts and auto-detects which one a
+# given --data-root holds. In both the comparison axis is a set of "groups":
+#
+#   * POSITION-SET study (random_position_generator.py): groups are the
+#     position_set_XX directories (varying sensor layouts of the 'random'
+#     topology); per group ->
+#         <root>/position_set_XX/channel_option_<theta>/random/...
+#
+#   * THREE-TOPOLOGY study (acoustic_data_generator.py): groups are the three
+#     sensor topologies (ellipsoidal / random / aligned); per group ->
+#         <root>/<topology>/<method>/channel_option_<theta>/...
+#
+# The same validity checks apply to both: trajectories must be SHARED across
+# the groups (geometry is the only varying factor) and the sensor layouts must
+# DIFFER across groups. Only the directory walk and the labels change.
 # --------------------------------------------------------------------------- #
-def find_position_sets(data_root):
+TOPOLOGIES = ("ellipsoidal", "random", "aligned")
+
+
+def detect_mode(data_root):
+    """Return 'position_sets' or 'topologies' by inspecting the directory tree."""
+    if sorted(glob.glob(os.path.join(data_root, "position_set_*"))):
+        return "position_sets"
+    if any(os.path.isdir(os.path.join(data_root, t)) for t in TOPOLOGIES):
+        return "topologies"
+    return "position_sets"  # default; main() errors out if nothing is found
+
+
+def find_groups(data_root, mode):
+    """Ordered list of (label, group_dir) for the detected mode."""
+    if mode == "topologies":
+        groups = []
+        for t in TOPOLOGIES:
+            d = os.path.join(data_root, t)
+            if os.path.isdir(d):
+                groups.append((t, d))
+        return groups
     sets = sorted(glob.glob(os.path.join(data_root, "position_set_*")))
-    sets = [s for s in sets if os.path.isdir(s)]
-    return sets
+    out = []
+    for s in sets:
+        if os.path.isdir(s):
+            out.append((os.path.basename(s).replace("position_set_", "set "), s))
+    return out
 
 
-def find_thetas(set_dir):
+def option_base(group_dir, theta, mode, method):
+    """Directory holding trajectory/ filtered_data/ channel_info/ for one
+    (group, theta), for the detected layout."""
+    if mode == "topologies":
+        return os.path.join(group_dir, method, f"channel_option_{theta}")
+    return os.path.join(group_dir, f"channel_option_{theta}", "random")
+
+
+def find_thetas(group_dir, mode, method):
     opts = []
-    for d in glob.glob(os.path.join(set_dir, "channel_option_*")):
+    search_root = os.path.join(group_dir, method) if mode == "topologies" else group_dir
+    for d in glob.glob(os.path.join(search_root, "channel_option_*")):
         m = re.search(r"channel_option_([0-9.]+)$", d)
-        if m and os.path.isdir(os.path.join(d, "random")):
+        if m and os.path.isdir(os.path.join(option_base(group_dir, m.group(1),
+                                                         mode, method), "trajectory")):
             opts.append(m.group(1))
     return sorted(opts, key=float)
 
 
-def paths_for(set_dir, theta):
-    base = os.path.join(set_dir, f"channel_option_{theta}", "random")
+def paths_for(group_dir, theta, mode, method):
+    base = option_base(group_dir, theta, mode, method)
     return {
         "filtered": os.path.join(base, "filtered_data", "filtered_data.npy"),
         "traj":     os.path.join(base, "trajectory", "trajectories.npy"),
@@ -131,8 +180,8 @@ class Report:
 # --------------------------------------------------------------------------- #
 # Loading
 # --------------------------------------------------------------------------- #
-def load_arrays(set_dir, theta):
-    p = paths_for(set_dir, theta)
+def load_arrays(group_dir, theta, mode, method):
+    p = paths_for(group_dir, theta, mode, method)
     for k, v in p.items():
         if not os.path.exists(v):
             raise FileNotFoundError(f"missing {k}: {v}")
@@ -189,8 +238,9 @@ def traj_shape_metrics(traj):
 # --------------------------------------------------------------------------- #
 # A. VALIDITY CHECKS
 # --------------------------------------------------------------------------- #
-def check_validity(data_root, set_dirs, thetas, rep, n_sensors_expected,
-                   df, fmin, fmax, report, distinct_trajectories=False):
+def check_validity(data_root, set_dirs, labels, thetas, rep, n_sensors_expected,
+                   df, fmin, fmax, report, mode, method,
+                   distinct_trajectories=False, unit="position-set"):
     report.info("=" * 64)
     report.info("A. EXPERIMENT-VALIDITY CHECKS")
     report.info("=" * 64)
@@ -201,40 +251,41 @@ def check_validity(data_root, set_dirs, thetas, rep, n_sensors_expected,
     if (np.arange(fmin, fmax, df)[-1] + df) <= fmax:
         Lf_expected += 1
 
-    # ---- per-(set,theta) basic integrity, collect for cross-checks ----
-    traj_hash = {}   # theta -> {set_idx: hash}
-    layouts = {}     # theta -> {set_idx: pos (3,n_sensors)}
+    # ---- per-(group,theta) basic integrity, collect for cross-checks ----
+    traj_hash = {}   # theta -> {group_idx: hash}
+    layouts = {}     # theta -> {group_idx: pos (3,n_sensors)}
     feat_shapes = set()
 
     for si, sd in enumerate(set_dirs):
+        gl = labels[si]
         for th in thetas:
             try:
-                filtered, traj, pos = load_arrays(sd, th)
+                filtered, traj, pos = load_arrays(sd, th, mode, method)
             except FileNotFoundError as e:
-                report.fail(f"set {si} theta {th}: {e}")
+                report.fail(f"{unit} {gl} theta {th}: {e}")
                 continue
 
             # finite values
             if not np.all(np.isfinite(filtered)):
-                report.fail(f"set {si} theta {th}: filtered_data contains NaN/Inf")
+                report.fail(f"{unit} {gl} theta {th}: filtered_data contains NaN/Inf")
             if not np.all(np.isfinite(traj)):
-                report.fail(f"set {si} theta {th}: trajectories contain NaN/Inf")
+                report.fail(f"{unit} {gl} theta {th}: trajectories contain NaN/Inf")
             if not np.all(np.isfinite(pos)):
-                report.fail(f"set {si} theta {th}: sensor_positions contain NaN/Inf")
+                report.fail(f"{unit} {gl} theta {th}: sensor_positions contain NaN/Inf")
 
             tau, ppt, n_traj, n_sensors = filtered.shape
 
             # sensor count
             if n_sensors != n_sensors_expected:
-                report.fail(f"set {si} theta {th}: n_sensors={n_sensors} "
+                report.fail(f"{unit} {gl} theta {th}: n_sensors={n_sensors} "
                             f"!= expected {n_sensors_expected}")
             if pos.shape != (3, n_sensors):
-                report.fail(f"set {si} theta {th}: sensor_positions shape "
+                report.fail(f"{unit} {gl} theta {th}: sensor_positions shape "
                             f"{pos.shape} != (3,{n_sensors})")
 
             # feature length (tau) matches df
             if tau != Lf_expected:
-                report.fail(f"set {si} theta {th}: tau={tau} != Lf({df}Hz)="
+                report.fail(f"{unit} {gl} theta {th}: tau={tau} != Lf({df}Hz)="
                             f"{Lf_expected}")
 
             feat_shapes.add((ppt, tau * n_sensors))
@@ -243,45 +294,46 @@ def check_validity(data_root, set_dirs, thetas, rep, n_sensors_expected,
             per_sensor_energy = np.sum(np.abs(filtered) ** 2, axis=(0, 1, 2))
             dead = np.where(per_sensor_energy == 0)[0]
             if dead.size:
-                report.fail(f"set {si} theta {th}: dead sensor(s) {dead.tolist()}")
+                report.fail(f"{unit} {gl} theta {th}: dead sensor(s) {dead.tolist()}")
 
             # receiver depth constant within a layout
             if np.unique(np.round(pos[2], 6)).size != 1:
-                report.warn(f"set {si} theta {th}: z-row of sensors not constant")
+                report.warn(f"{unit} {gl} theta {th}: z-row of sensors not constant")
 
             traj_hash.setdefault(th, {})[si] = hash(traj.tobytes())
             layouts.setdefault(th, {})[si] = pos
 
-    # ---- (1) cross-set trajectory invariant, per theta ----
+    # ---- (1) cross-group trajectory invariant, per theta ----
     # The expected invariant depends on the generation mode:
-    #   shared   -> trajectories must be byte-IDENTICAL across all sets
-    #               (geometry is the only varying factor).
-    #   distinct -> trajectories must DIFFER across all sets (each set has its
-    #               own per-set-seeded ensemble); any collision means the per-set
-    #               seeding silently did not take effect.
+    #   shared   -> trajectories must be byte-IDENTICAL across all groups
+    #               (sensor geometry is the only varying factor). This is the
+    #               ALWAYS-expected invariant for the three-topology study.
+    #   distinct -> trajectories must DIFFER across all groups (position-set
+    #               study with per-set trajectories); any collision means the
+    #               per-set seeding silently did not take effect.
     for th in thetas:
         hashes = traj_hash.get(th, {})
         uniq = set(hashes.values())
         if len(hashes) <= 1:
-            report.warn(f"theta {th}: <=1 set available, cannot cross-check "
+            report.warn(f"theta {th}: <=1 {unit} available, cannot cross-check "
                         f"trajectory {'distinctness' if distinct_trajectories else 'sharing'}")
         elif distinct_trajectories:
             if len(uniq) == len(hashes):
                 report.ok(f"theta {th}: trajectories distinct across "
-                          f"{len(hashes)} position-sets (per-set design OK)")
+                          f"{len(hashes)} {unit}s (per-set design OK)")
             else:
                 report.fail(f"theta {th}: only {len(uniq)} distinct trajectory "
-                            f"ensembles across {len(hashes)} sets -- per-set "
-                            f"seeding did not take; sets share trajectories!")
+                            f"ensembles across {len(hashes)} {unit}s -- per-set "
+                            f"seeding did not take; {unit}s share trajectories!")
         elif len(uniq) == 1:
             report.ok(f"theta {th}: trajectories byte-identical across "
-                      f"{len(hashes)} position-sets (shared-trajectory design OK)")
+                      f"{len(hashes)} {unit}s (shared-trajectory design OK)")
         else:
-            report.fail(f"theta {th}: trajectories DIFFER across sets "
+            report.fail(f"theta {th}: trajectories DIFFER across {unit}s "
                         f"({len(uniq)} distinct) -- geometry is not the only "
                         f"varying factor!")
 
-    # ---- (2) layouts genuinely different across sets ----
+    # ---- (2) layouts genuinely different across groups ----
     for th in thetas:
         lay = layouts.get(th, {})
         if len(lay) <= 1:
@@ -289,10 +341,10 @@ def check_validity(data_root, set_dirs, thetas, rep, n_sensors_expected,
         identical_pairs = []
         for (a, pa), (b, pb) in combinations(sorted(lay.items()), 2):
             if np.allclose(pa, pb):
-                identical_pairs.append((a, b))
+                identical_pairs.append((labels[a], labels[b]))
         if identical_pairs:
-            report.fail(f"theta {th}: identical sensor layouts for set-pairs "
-                        f"{identical_pairs} -- displacement not applied!")
+            report.fail(f"theta {th}: identical sensor layouts for {unit}-pairs "
+                        f"{identical_pairs} -- displacement/topology not applied!")
         else:
             report.ok(f"theta {th}: all {len(lay)} sensor layouts are distinct")
 
@@ -304,8 +356,8 @@ def check_validity(data_root, set_dirs, thetas, rep, n_sensors_expected,
     else:
         report.fail(f"inconsistent feature shapes across corpus: {feat_shapes}")
 
-    # ---- (4) layouts identical across thetas within a set (positions should
-    #          not depend on theta, only on the layout seed) ----
+    # ---- (4) layouts identical across thetas within a group (positions should
+    #          not depend on theta, only on the layout / topology) ----
     if len(thetas) > 1:
         for si, sd in enumerate(set_dirs):
             per_theta = []
@@ -315,9 +367,9 @@ def check_validity(data_root, set_dirs, thetas, rep, n_sensors_expected,
             if len(per_theta) > 1:
                 allsame = all(np.allclose(per_theta[0], p) for p in per_theta[1:])
                 if not allsame:
-                    report.warn(f"set {si}: sensor layout varies across theta "
-                                f"(expected identical within a set)")
-        report.ok("checked layout consistency across thetas within each set")
+                    report.warn(f"{unit} {labels[si]}: sensor layout varies across "
+                                f"theta (expected identical within a {unit})")
+        report.ok(f"checked layout consistency across thetas within each {unit}")
 
     return layouts, Lf_expected
 
@@ -325,13 +377,13 @@ def check_validity(data_root, set_dirs, thetas, rep, n_sensors_expected,
 # --------------------------------------------------------------------------- #
 # B. CHARACTERIZATION + FIGURES
 # --------------------------------------------------------------------------- #
-def fig_layouts_scatter(layouts, theta_ref, source_clouds, fig_dir,
-                        distinct=False):
+def fig_layouts_scatter(layouts, theta_ref, source_clouds, fig_dir, labels,
+                        distinct=False, unit="position-set"):
     """All sensor layouts overlaid, plus the source-position cloud(s).
 
     ``source_clouds`` is a list of (3, n_traj, ppt+1) trajectory arrays: a single
-    shared ensemble in shared mode, or one ensemble per set in distinct mode (so
-    the grey cloud honestly reflects that the source paths differ per set)."""
+    shared ensemble (shared / topology mode), or one ensemble per group in
+    distinct mode (so the grey cloud honestly reflects differing source paths)."""
     lay = layouts[theta_ref]
     fig, ax = plt.subplots(figsize=(7, 6))
 
@@ -339,7 +391,7 @@ def fig_layouts_scatter(layouts, theta_ref, source_clouds, fig_dir,
     # the cloud reflects the true source coverage (1 ensemble shared, or N).
     xs = np.concatenate([c[0].ravel() for c in source_clouds])
     ys = np.concatenate([c[1].ravel() for c in source_clouds])
-    cloud_lbl = ("source positions (varies per set)" if distinct
+    cloud_lbl = (f"source positions (varies per {unit})" if distinct
                  else "source positions (shared)")
     ax.scatter(xs, ys, s=2, c="0.8", alpha=0.4, label=cloud_lbl)
 
@@ -348,17 +400,17 @@ def fig_layouts_scatter(layouts, theta_ref, source_clouds, fig_dir,
     for i, (si, pos) in enumerate(sorted(lay.items())):
         ax.scatter(pos[0], pos[1], s=55, color=cmap(i / max(n - 1, 1)),
                    edgecolor="k", linewidth=0.3,
-                   label=f"set {si}" if n <= 8 else None)
+                   label=str(labels[si]) if n <= 8 else None)
     ax.set_xlabel("x [m]")
     ax.set_ylabel("y [m]")
-    ax.set_title(f"Sensor layouts across {n} position-sets (theta={theta_ref})")
+    ax.set_title(f"Sensor layouts across {n} {unit}s (theta={theta_ref})")
     ax.set_aspect("equal", adjustable="datalim")
     if n <= 8:
         ax.legend(loc="best", fontsize=8)
     else:
         sm = plt.cm.ScalarMappable(cmap=cmap, norm=Normalize(vmin=0, vmax=n - 1))
         cb = fig.colorbar(sm, ax=ax)
-        cb.set_label("position-set index")
+        cb.set_label(f"{unit} index")
     fig.tight_layout()
     p = os.path.join(fig_dir, "layouts_scatter.png")
     fig.savefig(p, dpi=300)
@@ -366,14 +418,15 @@ def fig_layouts_scatter(layouts, theta_ref, source_clouds, fig_dir,
     return p
 
 
-def fig_layout_distance_matrix(layouts, theta_ref, fig_dir):
+def fig_layout_distance_matrix(layouts, theta_ref, fig_dir, labels,
+                               unit="position-set"):
     """Pairwise layout distance: mean over sensors of per-sensor Euclidean
     displacement after optimal index matching is NOT done -- sensors are not
-    identity-matched across sets, so we use a permutation-invariant geometry
+    identity-matched across groups, so we use a permutation-invariant geometry
     descriptor: sorted pairwise inter-sensor distance signature."""
     lay = layouts[theta_ref]
     items = sorted(lay.items())
-    idxs = [si for si, _ in items]
+    idxs = [labels[si] for si, _ in items]
 
     def signature(pos):
         xy = pos[:2].T  # (n_sensors, 2)
@@ -393,7 +446,7 @@ def fig_layout_distance_matrix(layouts, theta_ref, fig_dir):
     im = ax.imshow(D, cmap="magma")
     ax.set_xticks(range(n)); ax.set_xticklabels(idxs, fontsize=7, rotation=90)
     ax.set_yticks(range(n)); ax.set_yticklabels(idxs, fontsize=7)
-    ax.set_xlabel("position-set"); ax.set_ylabel("position-set")
+    ax.set_xlabel(unit); ax.set_ylabel(unit)
     ax.set_title("Layout dissimilarity\n(||sorted inter-sensor distance||)")
     fig.colorbar(im, ax=ax, label="geometry distance")
     fig.tight_layout()
@@ -403,10 +456,12 @@ def fig_layout_distance_matrix(layouts, theta_ref, fig_dir):
     return p, D
 
 
-def fig_feature_stats(summary_rows, fig_dir):
-    """Per-set feature level + dynamic range, grouped by theta."""
+def fig_feature_stats(summary_rows, fig_dir, labels, unit="position-set"):
+    """Per-group feature level + dynamic range, grouped by theta."""
     thetas = sorted(set(r["theta"] for r in summary_rows), key=float)
     sets = sorted(set(r["set"] for r in summary_rows))
+    xpos = list(range(len(sets)))
+    xticklabels = [str(labels[s]) for s in sets]
     fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
 
     cmap = matplotlib.colormaps['coolwarm'] #plt.cm.coolwarm
@@ -416,14 +471,15 @@ def fig_feature_stats(summary_rows, fig_dir):
         rng = [next(r["feat_dyn_range_db"] for r in summary_rows
                     if r["set"] == s and r["theta"] == th) for s in sets]
         c = cmap(ti / max(len(thetas) - 1, 1))
-        axes[0].plot(sets, means, marker="o", color=c, label=f"theta={th}")
-        axes[1].plot(sets, rng, marker="s", color=c, label=f"theta={th}")
+        axes[0].plot(xpos, means, marker="o", color=c, label=f"theta={th}")
+        axes[1].plot(xpos, rng, marker="s", color=c, label=f"theta={th}")
 
-    axes[0].set_xlabel("position-set"); axes[0].set_ylabel("mean |feature|")
-    axes[0].set_title("Feature level across sets")
-    axes[1].set_xlabel("position-set"); axes[1].set_ylabel("dynamic range [dB]")
-    axes[1].set_title("Feature dynamic range across sets")
+    axes[0].set_xlabel(unit); axes[0].set_ylabel("mean |feature|")
+    axes[0].set_title(f"Feature level across {unit}s")
+    axes[1].set_xlabel(unit); axes[1].set_ylabel("dynamic range [dB]")
+    axes[1].set_title(f"Feature dynamic range across {unit}s")
     for a in axes:
+        a.set_xticks(xpos); a.set_xticklabels(xticklabels, fontsize=7, rotation=90)
         a.legend(fontsize=7, ncol=2)
         a.grid(alpha=0.3)
     fig.tight_layout()
@@ -433,23 +489,24 @@ def fig_feature_stats(summary_rows, fig_dir):
     return p
 
 
-def fig_feature_distributions(data_root, set_dirs, theta_ref, fig_dir, max_sets=6):
-    """Overlaid histograms of (log) feature magnitude for several sets at a fixed
-    theta -- visual evidence that sensor displacement shifts the acoustic
-    features (i.e. the task really changes)."""
+def fig_feature_distributions(data_root, set_dirs, theta_ref, fig_dir, labels,
+                              mode, method, max_sets=6, unit="position-set"):
+    """Overlaid histograms of (log) feature magnitude for several groups at a
+    fixed theta -- visual evidence that the sensor geometry shifts the acoustic
+    features (i.e. the task really changes across groups)."""
     fig, ax = plt.subplots(figsize=(7.5, 5))
     cmap = matplotlib.colormaps['viridis'] #plt.cm.viridis
     sel = set_dirs[:max_sets]
     for i, sd in enumerate(sel):
-        filtered, _, _ = load_arrays(sd, theta_ref)
+        filtered, _, _ = load_arrays(sd, theta_ref, mode, method)
         mag = np.abs(filtered).ravel()
         mag = mag[mag > 0]
         ax.hist(np.log10(mag), bins=120, histtype="step", density=True,
                 color=cmap(i / max(len(sel) - 1, 1)),
-                label=os.path.basename(sd).replace("position_set_", "set "))
+                label=str(labels[i]))
     ax.set_xlabel("log10 |feature|")
     ax.set_ylabel("density")
-    ax.set_title(f"Feature-magnitude distribution by position-set "
+    ax.set_title(f"Feature-magnitude distribution by {unit} "
                  f"(theta={theta_ref})")
     ax.legend(fontsize=8)
     fig.tight_layout()
@@ -575,24 +632,24 @@ def fig_traj_metrics_by_set(summary_rows, theta_ref, fig_dir):
     return p
 
 
-def fig_between_vs_within(data_root, set_dirs, theta_ref, fig_dir, max_sets=10,
-                          distinct=False):
-    """Compare the spread of per-set MEAN feature vectors (between-set) against
-    the within-set spread.
+def fig_between_vs_within(data_root, set_dirs, theta_ref, fig_dir, mode, method,
+                          max_sets=10, distinct=False):
+    """Compare the spread of per-group MEAN feature vectors (between-group)
+    against the within-group spread.
 
     Interpretation depends on the mode:
-      * SHARED   -- trajectories are identical across sets, so between-set
-        variation isolates the effect of SENSOR GEOMETRY. ratio > 1 => the
-        displacement task is well-posed.
-      * DISTINCT -- both geometry AND trajectories differ across sets, so the
-        between-set term is CONFOUNDED (geometry + trajectory) and cannot be
+      * SHARED / TOPOLOGY -- trajectories are identical across groups, so the
+        between-group variation isolates the effect of SENSOR GEOMETRY.
+        ratio > 1 => the geometry-robustness task is well-posed.
+      * DISTINCT -- both geometry AND trajectories differ across groups, so the
+        between-group term is CONFOUNDED (geometry + trajectory) and cannot be
         attributed to geometry alone. The ratio is still reported but labelled
         accordingly."""
     means = []
     within = []
     sel = set_dirs[:max_sets]
     for sd in sel:
-        feats = reshape_features(load_arrays(sd, theta_ref)[0])  # (n_traj,ppt,F)
+        feats = reshape_features(load_arrays(sd, theta_ref, mode, method)[0])  # (n_traj,ppt,F)
         flat = np.abs(feats).reshape(-1, feats.shape[-1])        # (samples, F)
         means.append(flat.mean(axis=0))
         within.append(flat.std(axis=0).mean())
@@ -626,11 +683,11 @@ def fig_between_vs_within(data_root, set_dirs, theta_ref, fig_dir, max_sets=10,
 # --------------------------------------------------------------------------- #
 # Summary table
 # --------------------------------------------------------------------------- #
-def build_summary(set_dirs, thetas):
+def build_summary(set_dirs, labels, thetas, mode, method):
     rows = []
     for si, sd in enumerate(set_dirs):
         for th in thetas:
-            filtered, traj, pos = load_arrays(sd, th)
+            filtered, traj, pos = load_arrays(sd, th, mode, method)
             mag = np.abs(filtered)
             nz = mag[mag > 0]
             dyn_db = 20 * np.log10(nz.max() / nz.min()) if nz.size else float("nan")
@@ -640,6 +697,7 @@ def build_summary(set_dirs, thetas):
                            for a, b in combinations(range(xy.shape[0]), 2))
             row = {
                 "set": si,
+                "group": labels[si],
                 "theta": th,
                 "tau": filtered.shape[0],
                 "ppt": filtered.shape[1],
@@ -673,19 +731,30 @@ def write_csv(rows, path):
 # Main
 # --------------------------------------------------------------------------- #
 def main():
-    ap = argparse.ArgumentParser(description="QC / characterization for the "
-                                             "random-position datasets.")
+    ap = argparse.ArgumentParser(
+        description="QC / characterization for the random-position datasets "
+                    "(position_set_* layout) OR the three-topology datasets "
+                    "(<topology>/<method>/... layout). The layout is auto-detected.")
     ap.add_argument("--data-root", required=True,
-                    help="Root dir written by data_generator_random_positions.py")
+                    help="For the position-set study: the dir containing "
+                         "position_set_*. For the three-topology study: the dir "
+                         "containing the <topology> folders (e.g. ./data).")
     ap.add_argument("--out-dir", default=None,
                     help="Where to write the report (default: <data-root>/qc_report)")
+    ap.add_argument("--method", default="hermite",
+                    help="Trajectory method subfolder for the three-topology "
+                         "layout (<topology>/<method>/...). Ignored for the "
+                         "position-set layout. Default: hermite.")
     ap.add_argument("--thetas", default=None,
                     help="Comma list to restrict thetas (default: all found)")
     ap.add_argument("--max-sets", type=int, default=None,
-                    help="Only inspect the first K position-sets")
+                    help="Only inspect the first K groups (position-sets or topologies)")
     ap.add_argument("--rep", type=int, default=1, help="rep used at generation")
     ap.add_argument("--n-sensors", type=int, default=10)
-    ap.add_argument("--df", type=float, default=100.0)
+    ap.add_argument("--df", type=float, default=None,
+                    help="Frequency resolution used at generation. Default is "
+                         "auto: 50 for the three-topology layout, 100 for the "
+                         "random-position layout.")
     ap.add_argument("--fmin", type=float, default=10000.0)
     ap.add_argument("--fmax", type=float, default=20000.0)
     ap.add_argument("--distinct-trajectories", dest="distinct_trajectories",
@@ -702,14 +771,24 @@ def main():
     fig_dir = os.path.join(out_dir, "figures")
     os.makedirs(fig_dir, exist_ok=True)
 
-    set_dirs = find_position_sets(args.data_root)
-    if not set_dirs:
-        print(f"ERROR: no position_set_* under {args.data_root}", file=sys.stderr)
+    # Auto-detect the dataset layout and the comparison axis ("group").
+    mode = detect_mode(args.data_root)
+    method = args.method
+    unit = "topology" if mode == "topologies" else "position-set"
+    df = args.df if args.df is not None else (50.0 if mode == "topologies" else 100.0)
+
+    groups = find_groups(args.data_root, mode)
+    if not groups:
+        where = ("<topology>/ folders" if mode == "topologies"
+                 else "position_set_*")
+        print(f"ERROR: no {where} under {args.data_root}", file=sys.stderr)
         sys.exit(1)
     if args.max_sets:
-        set_dirs = set_dirs[:args.max_sets]
+        groups = groups[:args.max_sets]
+    labels = [g[0] for g in groups]
+    set_dirs = [g[1] for g in groups]
 
-    thetas = find_thetas(set_dirs[0])
+    thetas = find_thetas(set_dirs[0], mode, method)
     if args.thetas:
         want = [t.strip() for t in args.thetas.split(",")]
         thetas = [t for t in thetas if t in want]
@@ -719,40 +798,49 @@ def main():
 
     report = Report()
     report.info(f"data-root : {args.data_root}")
-    report.info(f"position-sets inspected : {len(set_dirs)}")
-    report.info(f"thetas : {thetas}")
+    report.info(f"layout    : {mode}"
+                f"{f' (method={method})' if mode == 'topologies' else ''}")
+    report.info(f"{unit}s inspected : {len(set_dirs)}  ->  {labels}")
+    report.info(f"thetas : {thetas}  | df : {df}")
 
-    # Optional manifest cross-check. Also the source of truth for the trajectory
-    # mode (shared vs distinct), unless the user overrides it on the CLI.
-    man_distinct = None
-    man_path = os.path.join(args.data_root, "_manifest.pkl")
-    if os.path.exists(man_path):
-        with open(man_path, "rb") as f:
-            man = pickle.load(f)
-        man_distinct = man.get('distinct_trajectories')
-        report.ok(f"manifest found (master_seed={man.get('master_seed')}, "
-                  f"declared sets={man.get('n_position_sets')}, "
-                  f"distinct_trajectories={man_distinct})")
-    else:
-        report.warn("no _manifest.pkl found -- skipping seed cross-check")
-
-    # Resolve trajectory mode: CLI override > manifest > default (shared).
-    if args.distinct_trajectories is not None:
-        distinct_trajectories = bool(args.distinct_trajectories)
-    elif man_distinct is not None:
-        distinct_trajectories = bool(man_distinct)
-    else:
+    # In the three-topology study, trajectories are ALWAYS shared across the
+    # three topologies (geometry is the only varying factor), so the shared
+    # invariant is forced. The position-set study reads the mode from the
+    # manifest (overridable on the CLI).
+    if mode == "topologies":
         distinct_trajectories = False
-        report.warn("trajectory mode unknown (no manifest flag, no CLI override) "
-                    "-- assuming SHARED. Pass --distinct-trajectories if wrong.")
-    report.info(f"trajectory mode : "
-                f"{'DISTINCT (per-set)' if distinct_trajectories else 'SHARED'}")
+        report.info("trajectory mode : SHARED across topologies (by design)")
+    else:
+        # Optional manifest cross-check + source of truth for the trajectory mode.
+        man_distinct = None
+        man_path = os.path.join(args.data_root, "_manifest.pkl")
+        if os.path.exists(man_path):
+            with open(man_path, "rb") as f:
+                man = pickle.load(f)
+            man_distinct = man.get('distinct_trajectories')
+            report.ok(f"manifest found (master_seed={man.get('master_seed')}, "
+                      f"declared sets={man.get('n_position_sets')}, "
+                      f"distinct_trajectories={man_distinct})")
+        else:
+            report.warn("no _manifest.pkl found -- skipping seed cross-check")
+
+        if args.distinct_trajectories is not None:
+            distinct_trajectories = bool(args.distinct_trajectories)
+        elif man_distinct is not None:
+            distinct_trajectories = bool(man_distinct)
+        else:
+            distinct_trajectories = False
+            report.warn("trajectory mode unknown (no manifest flag, no CLI "
+                        "override) -- assuming SHARED. Pass "
+                        "--distinct-trajectories if wrong.")
+        report.info(f"trajectory mode : "
+                    f"{'DISTINCT (per-set)' if distinct_trajectories else 'SHARED'}")
 
     # ---- A. validity ----
     layouts, Lf = check_validity(
-        args.data_root, set_dirs, thetas, args.rep, args.n_sensors,
-        args.df, args.fmin, args.fmax, report,
-        distinct_trajectories=distinct_trajectories)
+        args.data_root, set_dirs, labels, thetas, args.rep, args.n_sensors,
+        df, args.fmin, args.fmax, report, mode, method,
+        distinct_trajectories=distinct_trajectories, unit=unit)
 
     # ---- B. characterization ----
     report.info("=" * 64)
@@ -760,33 +848,35 @@ def main():
     report.info("=" * 64)
 
     theta_ref = thetas[0]
-    _, traj_ref, _ = load_arrays(set_dirs[0], theta_ref)
+    _, traj_ref, _ = load_arrays(set_dirs[0], theta_ref, mode, method)
 
     # Source-position cloud(s) for the layout scatter: one shared ensemble, or
-    # every set's own ensemble in distinct mode. In distinct mode we also keep a
-    # per-set list of (set_idx, traj) for the per-set trajectory figure.
+    # every group's own ensemble in distinct mode. In distinct mode we also keep
+    # a per-group list of (idx, traj) for the per-group trajectory figure.
     per_set_trajs = []
     if distinct_trajectories:
         for si, sd in enumerate(set_dirs):
             try:
-                per_set_trajs.append((si, load_arrays(sd, theta_ref)[1]))
+                per_set_trajs.append((si, load_arrays(sd, theta_ref, mode, method)[1]))
             except FileNotFoundError:
                 continue
         source_clouds = [t for _, t in per_set_trajs] or [traj_ref]
     else:
         source_clouds = [traj_ref]
 
-    rows = build_summary(set_dirs, thetas)
+    rows = build_summary(set_dirs, labels, thetas, mode, method)
     write_csv(rows, os.path.join(out_dir, "qc_summary.csv"))
     report.ok(f"wrote qc_summary.csv ({len(rows)} rows)")
 
     figs = []
     figs.append(fig_layouts_scatter(layouts, theta_ref, source_clouds, fig_dir,
-                                    distinct=distinct_trajectories))
-    dm_path, _ = fig_layout_distance_matrix(layouts, theta_ref, fig_dir)
+                                    labels, distinct=distinct_trajectories, unit=unit))
+    dm_path, _ = fig_layout_distance_matrix(layouts, theta_ref, fig_dir, labels,
+                                            unit=unit)
     figs.append(dm_path)
-    figs.append(fig_feature_stats(rows, fig_dir))
-    figs.append(fig_feature_distributions(args.data_root, set_dirs, theta_ref, fig_dir))
+    figs.append(fig_feature_stats(rows, fig_dir, labels, unit=unit))
+    figs.append(fig_feature_distributions(args.data_root, set_dirs, theta_ref,
+                                          fig_dir, labels, mode, method, unit=unit))
     if distinct_trajectories:
         figs.append(fig_trajectories_by_set(per_set_trajs, theta_ref, fig_dir))
         grid = fig_trajectories_grid(per_set_trajs, theta_ref, fig_dir)
@@ -796,7 +886,8 @@ def main():
     else:
         figs.append(fig_trajectories(traj_ref, theta_ref, fig_dir))
     bw_path, ratio = fig_between_vs_within(args.data_root, set_dirs, theta_ref,
-                                           fig_dir, distinct=distinct_trajectories)
+                                           fig_dir, mode, method,
+                                           distinct=distinct_trajectories)
     figs.append(bw_path)
     for fpath in figs:
         report.ok(f"figure: {os.path.relpath(fpath, out_dir)}")
@@ -825,12 +916,12 @@ def main():
         report.info(f"between/within feature-variation ratio (theta={theta_ref}): "
                     f"{ratio:.2f}")
         if ratio < 1.0:
-            report.warn("between/within ratio < 1: sensor displacement changes the "
-                        "features LESS than trajectory variation -- the robustness "
-                        "task may be weak. Inspect feature_distributions.png.")
+            report.warn(f"between/within ratio < 1: the sensor geometry changes the "
+                        f"features LESS than trajectory variation -- the {unit} "
+                        f"robustness task may be weak. Inspect feature_distributions.png.")
         else:
-            report.ok("sensor displacement induces a clear between-set feature shift "
-                      "(ratio >= 1): the robustness task is well-posed.")
+            report.ok(f"the sensor geometry induces a clear between-{unit} feature "
+                      f"shift (ratio >= 1): the robustness task is well-posed.")
 
     report.dump(os.path.join(out_dir, "qc_report.txt"))
     print(f"\nReport written to: {out_dir}")

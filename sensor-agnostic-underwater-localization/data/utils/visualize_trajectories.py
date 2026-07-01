@@ -2,7 +2,7 @@
 visualize_trajectories.py
 =========================
 
-Generate a handful of trajectories from config/traj_generation.yaml and plot
+Generate a handful of trajectories from config/data_pipeline.yaml and plot
 them, to eyeball the trajectory-generation method before running the (slow)
 full data generation.
 
@@ -76,9 +76,13 @@ def plot_trajectories(traj, method, n_context, out_path):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Visualise generated trajectories.")
     parser.add_argument('--traj_config', type=str, default=None,
-                        help="Path to the trajectory-generation YAML (default: config/traj_generation.yaml).")
-    parser.add_argument('--n_traj', type=int, default=10, help="Number of trajectories to generate.")
-    parser.add_argument('--ppt', type=int, default=30, help="Points per trajectory (-> ppt + 1 samples).")
+                        help="Path to the trajectory-generation YAML (default: config/data_pipeline.yaml).")
+    parser.add_argument('--n_traj', type=int, default=None,
+                        help="Number of trajectories to generate "
+                             "(default: generation.n_traj from the config, else 10).")
+    parser.add_argument('--ppt', type=int, default=None,
+                        help="Points per trajectory, -> ppt + 1 samples "
+                             "(default: generation.ppt from the config, else 50).")
     parser.add_argument('--n_context', type=int, default=5, help="Number of context points to highlight.")
     parser.add_argument('--seed', type=int, default=11, help="Random seed.")
     parser.add_argument('--out', type=str, default='data/validation/trajectories_preview.png',
@@ -87,6 +91,11 @@ if __name__ == '__main__':
 
     np.random.seed(args.seed)
     traj_config = load_traj_config(args.traj_config)
-    traj = generate_trajectories(traj_config, n_traj=args.n_traj, ppt=args.ppt)
+    # Default n_traj / ppt to the shared `channel:` block so the preview matches
+    # what generation will actually produce.
+    ch = traj_config.get('channel', {}) or {} #type: ignore
+    n_traj = args.n_traj if args.n_traj is not None else int(ch.get('n_traj', 10))
+    ppt = args.ppt if args.ppt is not None else int(ch.get('ppt', 50))
+    traj = generate_trajectories(traj_config, n_traj=n_traj, ppt=ppt)
     plot_trajectories(traj, method=traj_config['method'], n_context=args.n_context, out_path=args.out) #type: ignore
-    print(f"Saved {args.n_traj} '{traj_config['method']}' trajectories to: {args.out}") #type: ignore
+    print(f"Saved {n_traj} '{traj_config['method']}' trajectories to: {args.out}") #type: ignore

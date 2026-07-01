@@ -1,32 +1,10 @@
-# Geometry-split dataset and context-sampling configuration.
+# RANDOM task -- held-out sensor-layout split (OOD). data_dir is derived from
+# the composed `dataset` identity (method + mode), so it always matches what
+# `generate.py dataset=<same>` produced. Baselines with no spatial encoder are
+# expected to degrade here (this is the gap a spatial encoder would close).
+defaults:
+  - _base
+  - _self_
 
-# Dataset variant selection. The generator writes each (trajectory method,
-# cross-set mode) combination into its own <method>_<mode> folder; pick one here.
-#   traj_method: spiral | hermite
-#   traj_mode:   shared | distinct
-# Override on the CLI to switch variants, e.g.:
-#   python scripts/train/train_np_geometry.py data.traj_method=spiral data.traj_mode=distinct
-traj_method: hermite
-traj_mode: shared
-data_dir: ../../data/data_random_positions/${data.traj_method}_${data.traj_mode}/processed/geometry_split
-
-# Target normalisation (zero-mean / unit-std, stats computed on the train set).
-normalize_y: true
-
-# Context-set sampling.
-ctx_min: 2            # min number of context points (random mode, train)
-ctx_max: 40           # max number of context points (random mode, train)
-val_ctx: 10           # fixed number of context points used for validation
-ctx_sample_mode: first   # 'first': ordered prefix context | 'random': random subset
-
-# Target-set composition relative to the context set.
-#   true  -> targets are the COMPLEMENT of the context (non-overlapping; the
-#            model is only scored on points it did not see as context).
-#   false -> targets are ALL points (context is a subset of the target set,
-#            the standard NP convention).
+data_dir: data/random_task/${dataset.method}_${dataset.mode}/processed/geometry_split
 exclude_ctx_from_target: true
-
-# Streaming granularity for the online model (model=online_ranp). Number of
-# trajectory timesteps revealed per step; smaller = finer-grained streaming.
-# Ignored by the offline models.
-chunk_size: 8

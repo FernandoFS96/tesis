@@ -3,7 +3,7 @@ offline: false       # log in offline mode (saved locally, synced later). Useful
 project_name: sensor-agnostic-underwater-localization  # name of the project
 entity: fernandofs   # wandb entity. null -> default (private) account
 group_name: ${exp_name}
-run_name: ${model.name}_seed_${seed}
+run_name: ${exp_name}_${model.name}_seed_${seed}
 dev: false           # mark this run in wandb as a development run
 #  job_type: ${hydra:job.override_dirname}
 # only used for categorizing wandb projects

@@ -1,0 +1,15 @@
+# Shared context-sampling defaults for every data (split) config. Each variant
+# below includes this via `defaults: [_base, _self_]` and only sets what differs
+# (data_dir + exclude_ctx_from_target). Edit shared knobs here, once.
+
+# Target normalisation (zero-mean / unit-std, stats computed on the train set).
+normalize_y: true
+
+# Context-set sampling.
+ctx_min: 2               # min context points (random size per train batch)
+ctx_max: 40              # max context points
+val_ctx: 10              # fixed context size used for validation
+ctx_sample_mode: first   # 'first': ordered prefix | 'random': random subset
+
+# Streaming granularity for the online model (model=online_ranp); offline ignore.
+chunk_size: 8

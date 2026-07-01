@@ -2,19 +2,35 @@
 data_process_random_positions.py
 ================================
 
-Preprocessing for the sensor-displacement robustness study. It reads the
-``position_set_XX/channel_option_<theta>/random/`` tree written by
-``data_generator_random_positions.py`` and produces training-ready pickles.
+Preprocessing for BOTH studies. Defaults come from the ``preprocess`` block of
+``config/data_pipeline.yaml``; any CLI flag overrides the config.
 
-TWO MODES (pick with --mode)
-----------------------------
-* ``legacy``  -- the ORIGINAL within-geometry split, preserved verbatim from
+MODES (preprocess.mode, or --mode)
+----------------------------------
+* ``topology`` -- THREE-TOPOLOGY study (acoustic_data_generator.py). Reads the
+  ``<data_root>/<topology>/<method>/channel_option_<theta>/`` tree and produces
+  ONE training-ready dataset PER topology (ellipsoidal / random / aligned). All
+  channel options (thetas) of a topology are POOLED, and the train/val/test
+  split is by TRAJECTORY INDEX (default 70/20/10 out of 100) -- the same
+  trajectory indices for every theta, so no trajectory leaks across splits.
+  Output (dict schema, matching geometry mode so the trainer reads it as-is):
+      <save-dir>/topology_<name>/{train,val,test}_data.pkl
+        -> list of {"X":(ppt,feat_dim), "y":(ppt,3), "theta":float, "topology":str}
+      <save-dir>/topology_<name>/metadata.pkl
+
+  The modes below operate on the POSITION-SET study (random_position_generator.py),
+  reading the ``position_set_XX/channel_option_<theta>/random/`` tree:
+
+* ``legacy``  -- the ORIGINAL within-geometry split, preserved from
   ``data_process_topology.py``: for each (theta, geometry) it splits the 100
   trajectories 70/20/10 into train/val/test. Every geometry appears in all three
-  splits. Use this to train the "normal model like before" for the baseline
-  comparison. Output schema is byte-compatible with your existing loaders
-  (``train/val/test_data.pkl`` = list of ``[X (ppt, feat_dim), y (ppt, 3)]`` and
-  ``metadata.pkl`` with ``*_thetas`` / ``*_topologies``).
+  splits (val/test are unseen TRAJECTORIES of SEEN layouts), so a no-spatial-
+  encoder baseline can generalize -- this reproduces the "normal model like
+  before". Output uses the dict schema (matching geometry/topology modes) so the
+  trainer reads it unchanged:
+      <save-dir>/within_geometry_split/{train,val,test}_data.pkl
+        -> list of {"X":(ppt,feat_dim), "y":(ppt,3), "theta":float, "topology":str}
+      <save-dir>/within_geometry_split/metadata.pkl  (*_thetas / *_topologies)
 
 * ``geometry`` -- the NEW geometry-level split for measuring robustness to
   UNSEEN sensor layouts. The 20 position-sets are partitioned into disjoint
@@ -56,8 +72,8 @@ so this reshape is unambiguous.
 
 OUTPUTS
 -------
-legacy mode (per the original layout):
-    <save-dir>/topology_random/{train,val,test}_data.pkl, metadata.pkl
+legacy mode (within-geometry split):
+    <save-dir>/within_geometry_split/{train,val,test}_data.pkl, metadata.pkl
 
 geometry mode:
     <save-dir>/geometry_split/
@@ -71,22 +87,22 @@ geometry mode:
 
 USAGE
 -----
-Legacy baseline (old behaviour, new data root):
-    python data_process_random_positions.py \
-        --data-root ./data_random_positions/hermite_shared --mode legacy
+Topology task (default; data_root from the preprocess block = ./data/topology_task):
+    python data_process_random_positions.py --mode topology
 
-New geometry split (auto interp/extrap from geometry, 12/4/4):
+Within-geometry (RANDOM task; point --data-root at the <method>_<mode> folder):
     python data_process_random_positions.py \
-        --data-root ./data_random_positions/hermite_shared --mode geometry \
+        --data-root ./data/random_task/spiral_shared --mode legacy
+
+Held-out geometry split (RANDOM task, auto interp/extrap, 12/4/4):
+    python data_process_random_positions.py \
+        --data-root ./data/random_task/spiral_shared --mode geometry \
         --train-geoms 12 --val-geoms 4 --test-geoms 4
 
 Reproduce a previously frozen split:
     python data_process_random_positions.py \
-        --data-root ./data_random_positions/hermite_shared --mode geometry \
-        --splits-file ./data_random_positions/hermite_shared/processed/geometry_split/splits.json
-
-Both:
-    python data_process_random_positions.py --data-root ./data_random_positions/hermite_shared --mode all
+        --data-root ./data/random_task/spiral_shared --mode geometry \
+        --splits-file ./data/random_task/spiral_shared/processed/geometry_split/splits.json
 """
 
 import os
@@ -97,8 +113,21 @@ import pickle
 import argparse
 
 import numpy as np
+from omegaconf import OmegaConf
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
+
+
+# Default data-pipeline config (config/data_pipeline.yaml at repo root).
+DEFAULT_TRAJ_CONFIG_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "config", "data_pipeline.yaml")
+
+TOPOLOGIES = ("ellipsoidal", "random", "aligned")
+
+
+def load_traj_config(path=None):
+    """Load the trajectory/preprocess config from YAML via OmegaConf."""
+    return OmegaConf.load(path or DEFAULT_TRAJ_CONFIG_PATH)
 
 
 # --------------------------------------------------------------------------- #
@@ -156,24 +185,29 @@ def process_and_save_legacy(input_paths, output_paths, save_dir,
     train_thetas, val_thetas, test_thetas = [], [], []
     train_topo, val_topo, test_topo = [], [], []
 
-    print("Legacy split (70/20/10 within each geometry)...")
+    print("Within-geometry split (70/20/10 within each geometry)...")
     for i, (inp, out) in tqdm(enumerate(zip(input_paths, output_paths)),
                               total=len(input_paths), leave=False):
-        X = reshape_input_data(np.load(inp))
-        y = reshape_output_data(np.load(out))
+        X = reshape_input_data(np.load(inp)).astype(np.float32)
+        y = reshape_output_data(np.load(out)).astype(np.float32)
 
         X_tr, X_tmp, y_tr, y_tmp = train_test_split(
             X, y, train_size=0.7, random_state=18, shuffle=True)
         X_val, X_te, y_val, y_te = train_test_split(
             X_tmp, y_tmp, test_size=1/3, random_state=19, shuffle=True)
 
+        # Emit dict samples (same schema as geometry / topology modes) so the
+        # dict-based trainer (TrajectoryDataset) consumes them unchanged.
         theta, topology = topology_labels[i]
         for j in range(X_tr.shape[0]):
-            loaded_train.append([X_tr[j], y_tr[j]]); train_thetas.append(theta); train_topo.append(topology)
+            loaded_train.append({"X": X_tr[j], "y": y_tr[j], "theta": float(theta), "topology": topology})
+            train_thetas.append(theta); train_topo.append(topology)
         for j in range(X_val.shape[0]):
-            loaded_val.append([X_val[j], y_val[j]]); val_thetas.append(theta); val_topo.append(topology)
+            loaded_val.append({"X": X_val[j], "y": y_val[j], "theta": float(theta), "topology": topology})
+            val_thetas.append(theta); val_topo.append(topology)
         for j in range(X_te.shape[0]):
-            loaded_test.append([X_te[j], y_te[j]]); test_thetas.append(theta); test_topo.append(topology)
+            loaded_test.append({"X": X_te[j], "y": y_te[j], "theta": float(theta), "topology": topology})
+            test_thetas.append(theta); test_topo.append(topology)
 
     idx = np.random.permutation(len(loaded_train))
     loaded_train = [loaded_train[i] for i in idx]
@@ -190,13 +224,14 @@ def process_and_save_legacy(input_paths, output_paths, save_dir,
             "train_thetas": train_thetas, "val_thetas": val_thetas, "test_thetas": test_thetas,
             "train_topologies": train_topo, "val_topologies": val_topo, "test_topologies": test_topo,
         }, f)
-    print(f"  legacy saved -> {save_dir}  "
+    print(f"  within-geometry saved -> {save_dir}  "
           f"(train={len(loaded_train)} val={len(loaded_val)} test={len(loaded_test)})")
 
 
 def run_legacy(data_root, set_dirs, thetas, save_base):
-    """Legacy split pooled over ALL geometries (each geometry contributes to
-    train/val/test internally), matching the original 'topology_random' output."""
+    """Within-geometry split pooled over ALL geometries (each geometry
+    contributes to train/val/test internally), matching the original
+    data_process_topology.py behaviour."""
     input_paths, output_paths, topo_labels = [], [], []
     for sd in set_dirs:
         for th in thetas:
@@ -204,7 +239,7 @@ def run_legacy(data_root, set_dirs, thetas, save_base):
             if os.path.exists(p["filtered"]) and os.path.exists(p["traj"]):
                 input_paths.append(p["filtered"]); output_paths.append(p["traj"])
                 topo_labels.append((float(th), "random"))
-    save_dir = os.path.join(save_base, "topology_random")
+    save_dir = os.path.join(save_base, "within_geometry_split")
     process_and_save_legacy(input_paths, output_paths, save_dir, topo_labels)
 
 
@@ -361,50 +396,239 @@ def run_geometry(data_root, set_dirs, thetas, save_base,
     print(f"  frozen split contract -> {os.path.join(save_dir, 'splits.json')}")
 
 
+# =========================================================================== #
+# TOPOLOGY MODE  (three-topology study: per-topology, split by trajectory index)
+# =========================================================================== #
+def find_topologies(data_root):
+    """Ordered list of (name, topology_dir) for the three-topology layout."""
+    return [(t, os.path.join(data_root, t)) for t in TOPOLOGIES
+            if os.path.isdir(os.path.join(data_root, t))]
+
+
+def topo_paths_for(topo_dir, method, theta):
+    base = os.path.join(topo_dir, method, f"channel_option_{theta}")
+    return {
+        "filtered": os.path.join(base, "filtered_data", "filtered_data.npy"),
+        "traj":     os.path.join(base, "trajectory", "trajectories.npy"),
+    }
+
+
+def find_topo_thetas(topo_dir, method):
+    opts = []
+    for d in glob.glob(os.path.join(topo_dir, method, "channel_option_*")):
+        m = re.search(r"channel_option_([0-9.]+)$", d)
+        if m and os.path.isdir(os.path.join(d, "trajectory")):
+            opts.append(m.group(1))
+    return sorted(opts, key=float)
+
+
+def trajectory_index_split(n_traj, n_train, n_val, n_test, seed=0):
+    """A FIXED, reproducible partition of the trajectory indices [0, n_traj).
+
+    The same indices are applied to every channel option (theta), so all thetas
+    of a given physical trajectory land in the SAME split -- this is what keeps
+    val/test from leaking trajectories the model trained on. Returns three
+    sorted index lists (train, val, test)."""
+    if n_train + n_val + n_test > n_traj:
+        raise ValueError(
+            f"requested split {n_train}/{n_val}/{n_test} exceeds n_traj={n_traj}")
+    rng = np.random.default_rng(seed)
+    perm = rng.permutation(n_traj)
+    tr = sorted(int(i) for i in perm[:n_train])
+    va = sorted(int(i) for i in perm[n_train:n_train + n_val])
+    te = sorted(int(i) for i in perm[n_train + n_val:n_train + n_val + n_test])
+    return tr, va, te
+
+
+def run_topology(data_root, method, save_base, thetas_filter,
+                 n_train, n_val, n_test, split_seed=0, shuffle_seed=42):
+    """Build one training-ready dataset PER topology. Within each topology all
+    channel options are pooled and the 70/20/10 split is by trajectory index.
+
+    Output (per topology), dict schema matching geometry mode so the trainer's
+    TrajectoryDataset consumes it unchanged:
+        <save-base>/topology_<name>/
+            train_data.pkl / val_data.pkl / test_data.pkl
+                -> list of {"X":(ppt,feat_dim), "y":(ppt,3), "theta":float,
+                            "topology":str}
+            metadata.pkl   -> thetas, per-split thetas/topologies, the frozen
+                              trajectory-index split, tau / n_sensors / feat_dim
+    """
+    topos = find_topologies(data_root)
+    if not topos:
+        raise SystemExit(
+            f"No topology folders {TOPOLOGIES} under {data_root} "
+            f"(is this the three-topology layout? expected "
+            f"<data_root>/<topology>/{method}/channel_option_*/).")
+
+    for name, tdir in topos:
+        thetas = find_topo_thetas(tdir, method)
+        if thetas_filter:
+            thetas = [t for t in thetas if t in thetas_filter]
+        if not thetas:
+            print(f"  [skip] topology '{name}': no thetas under {method}/")
+            continue
+
+        # n_traj / shapes from the first theta (shared across thetas).
+        first = topo_paths_for(tdir, method, thetas[0])
+        probe = np.load(first["filtered"])              # (tau, ppt, n_traj, n_sensors)
+        tau, ppt, n_traj, n_sensors = probe.shape
+        tr_idx, va_idx, te_idx = trajectory_index_split(
+            n_traj, n_train, n_val, n_test, seed=split_seed)
+        split_idx = {"train": tr_idx, "val": va_idx, "test": te_idx}
+
+        pools = {p: [] for p in ("train", "val", "test")}        # sample dicts
+        pool_thetas = {p: [] for p in ("train", "val", "test")}
+
+        for th in thetas:
+            p = topo_paths_for(tdir, method, th)
+            if not (os.path.exists(p["filtered"]) and os.path.exists(p["traj"])):
+                print(f"  [warn] topology '{name}' theta {th}: missing files, skipped")
+                continue
+            X = reshape_input_data(np.load(p["filtered"])).astype(np.float32)   # (n_traj, ppt, feat)
+            y = reshape_output_data(np.load(p["traj"])).astype(np.float32)      # (n_traj, ppt, 3)
+            for pool, idxs in split_idx.items():
+                for j in idxs:
+                    pools[pool].append({
+                        "X": X[j], "y": y[j],
+                        "theta": float(th), "topology": name,
+                    })
+                    pool_thetas[pool].append(float(th))
+
+        # Shuffle the train pool (keep each sample paired with its theta record).
+        rng = np.random.default_rng(shuffle_seed)
+        perm = rng.permutation(len(pools["train"]))
+        pools["train"] = [pools["train"][i] for i in perm]
+        pool_thetas["train"] = [pool_thetas["train"][i] for i in perm]
+
+        save_dir = os.path.join(save_base, f"topology_{name}")
+        os.makedirs(save_dir, exist_ok=True)
+        for pool in ("train", "val", "test"):
+            with open(os.path.join(save_dir, f"{pool}_data.pkl"), "wb") as f:
+                pickle.dump(pools[pool], f)
+        meta = {
+            "study": "topology",
+            "topology": name,
+            "method": method,
+            "thetas": thetas,
+            "n_traj": int(n_traj),
+            "traj_split": {"train": tr_idx, "val": va_idx, "test": te_idx},
+            "split_seed": int(split_seed),
+            "tau": int(tau), "n_sensors": int(n_sensors),
+            "feat_dim": int(tau * n_sensors),
+            "train_thetas": pool_thetas["train"],
+            "val_thetas": pool_thetas["val"],
+            "test_thetas": pool_thetas["test"],
+            "train_topologies": [name] * len(pools["train"]),
+            "val_topologies": [name] * len(pools["val"]),
+            "test_topologies": [name] * len(pools["test"]),
+        }
+        with open(os.path.join(save_dir, "metadata.pkl"), "wb") as f:
+            pickle.dump(meta, f)
+        print(f"  topology '{name}': split {len(tr_idx)}/{len(va_idx)}/{len(te_idx)} "
+              f"trajectories x {len(thetas)} thetas -> "
+              f"train={len(pools['train'])} val={len(pools['val'])} "
+              f"test={len(pools['test'])} samples "
+              f"(X=(ppt={ppt},{tau*n_sensors})) -> {save_dir}")
+
+
 # --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
 def main():
-    ap = argparse.ArgumentParser(description="Preprocess random-position data "
-                                             "(legacy + geometry-split modes).")
-    ap.add_argument("--data-root", required=True,
-                    help="Root with position_set_XX/ (the generator output).")
-    ap.add_argument("--mode", choices=["legacy", "geometry", "all"], default="geometry")
+    ap = argparse.ArgumentParser(
+        description="Preprocess underwater-localization data. Defaults are read "
+                    "from the `preprocess` block of config/data_pipeline.yaml; "
+                    "any CLI flag overrides the config. Modes: topology (three-"
+                    "topology study, split by trajectory index) | geometry | "
+                    "legacy | all (position-set study).")
+    ap.add_argument("--config", default=None,
+                    help="Path to the YAML config (default: config/data_pipeline.yaml).")
+    ap.add_argument("--mode", choices=["topology", "legacy", "geometry", "all"],
+                    default=None, help="Override preprocess.mode.")
+    ap.add_argument("--data-root", default=None, help="Override preprocess.data_root.")
+    ap.add_argument("--method", default=None,
+                    help="Trajectory-method subfolder for topology mode "
+                         "(<topology>/<method>/...). Override preprocess.method.")
     ap.add_argument("--save-dir", default=None,
                     help="Output base (default: <data-root>/processed).")
     ap.add_argument("--thetas", default=None,
                     help="Comma list to restrict thetas (default: all found).")
-    ap.add_argument("--train-geoms", type=int, default=12)
-    ap.add_argument("--val-geoms", type=int, default=4)
-    ap.add_argument("--test-geoms", type=int, default=4)
+    # topology-mode trajectory-index split.
+    ap.add_argument("--traj-train", type=int, default=None)
+    ap.add_argument("--traj-val", type=int, default=None)
+    ap.add_argument("--traj-test", type=int, default=None)
+    ap.add_argument("--traj-seed", type=int, default=None)
+    # geometry-mode held-out-layout split.
+    ap.add_argument("--train-geoms", type=int, default=None)
+    ap.add_argument("--val-geoms", type=int, default=None)
+    ap.add_argument("--test-geoms", type=int, default=None)
     ap.add_argument("--splits-file", default=None,
                     help="Reuse a frozen splits.json instead of recomputing.")
     args = ap.parse_args()
 
-    save_base = args.save_dir or os.path.join(args.data_root, "processed")
-    set_dirs = find_position_sets(args.data_root)
-    if not set_dirs:
-        raise SystemExit(f"No position_set_* under {args.data_root}")
-    thetas = find_thetas(set_dirs[0])
+    # ---- Resolve every knob: CLI flag (if given) > config > hard default. ----
+    cfg = load_traj_config(args.config)
+    pp = cfg.get("preprocess", {}) or {} #type: ignore[assignment]
+    topo_sp = pp.get("topology_split", {}) or {}
+    geom_sp = pp.get("geometry_split", {}) or {}
+
+    mode = args.mode or str(pp.get("mode", "topology"))
+    method = args.method or str(pp.get("method", cfg.get("method", "hermite"))) #type: ignore[assignment]
+    data_root = args.data_root or str(pp.get("data_root", "./data/topology_task"))
+    cfg_save = pp.get("save_dir", None)
+    save_base = args.save_dir or (str(cfg_save) if cfg_save else
+                                  os.path.join(data_root, "processed"))
+
+    # thetas filter (CLI comma list > config list > all-found).
     if args.thetas:
-        want = [t.strip() for t in args.thetas.split(",")]
-        thetas = [t for t in thetas if t in want]
+        thetas_filter = [t.strip() for t in args.thetas.split(",")]
+    elif pp.get("thetas", None):
+        thetas_filter = [str(t) for t in pp.get("thetas")] #type: ignore[assignment]
+    else:
+        thetas_filter = None
+
+    n_train = args.traj_train if args.traj_train is not None else int(topo_sp.get("n_train", 70))
+    n_val = args.traj_val if args.traj_val is not None else int(topo_sp.get("n_val", 20))
+    n_test = args.traj_test if args.traj_test is not None else int(topo_sp.get("n_test", 10))
+    split_seed = args.traj_seed if args.traj_seed is not None else int(topo_sp.get("seed", 0))
+
+    n_tr_g = args.train_geoms if args.train_geoms is not None else int(geom_sp.get("n_train", 12))
+    n_va_g = args.val_geoms if args.val_geoms is not None else int(geom_sp.get("n_val", 4))
+    n_te_g = args.test_geoms if args.test_geoms is not None else int(geom_sp.get("n_test", 4))
 
     print("=" * 64)
-    print(f"Preprocessing  mode={args.mode}")
-    print(f"  data-root : {args.data_root}")
+    print(f"Preprocessing  mode={mode}")
+    print(f"  data-root : {data_root}")
+    print(f"  save-base : {save_base}")
+    print("=" * 64)
+
+    if mode == "topology":
+        print("\n--- TOPOLOGY (per-topology, split by trajectory index) ---")
+        print(f"  method={method}  split(traj)={n_train}/{n_val}/{n_test} "
+              f"seed={split_seed}  thetas={thetas_filter or 'all'}")
+        run_topology(data_root, method, save_base, thetas_filter,
+                     n_train, n_val, n_test, split_seed=split_seed)
+        print("\nDone.")
+        return
+
+    # ---- position-set study (legacy / geometry) ----
+    set_dirs = find_position_sets(data_root)
+    if not set_dirs:
+        raise SystemExit(f"No position_set_* under {data_root}")
+    thetas = find_thetas(set_dirs[0])
+    if thetas_filter:
+        thetas = [t for t in thetas if t in thetas_filter]
     print(f"  geometries: {len(set_dirs)} | thetas: {thetas}")
-    print("=" * 64)
 
-    if args.mode in ("legacy", "all"):
+    if mode in ("legacy", "all"):
         print("\n--- LEGACY (within-geometry 70/20/10) ---")
-        run_legacy(args.data_root, set_dirs, thetas, save_base)
+        run_legacy(data_root, set_dirs, thetas, save_base)
 
-    if args.mode in ("geometry", "all"):
+    if mode in ("geometry", "all"):
         print("\n--- GEOMETRY (held-out layouts, interp/extrap) ---")
-        run_geometry(args.data_root, set_dirs, thetas, save_base,
-                     args.train_geoms, args.val_geoms, args.test_geoms,
-                     splits_file=args.splits_file)
+        run_geometry(data_root, set_dirs, thetas, save_base,
+                     n_tr_g, n_va_g, n_te_g, splits_file=args.splits_file)
 
     print("\nDone.")
 
