@@ -147,7 +147,7 @@ Config: the `preprocess:` block of `data_pipeline.yaml` (CLI flags override).
 
 | Mode | Study | Split axis | Output dir | Notes |
 |---|---|---|---|---|
-| `topology` | three-topology | **trajectory index** 70/20/10 within each topology, pooling all θ | `<root>/processed/topology_<name>/` | same trajectory indices across θ ⇒ no leakage; one dataset per topology |
+| `topology` | three-topology | **trajectory index** 70/20/10 within each topology, pooling all θ | `<root>/<method>/processed/topology_<name>/` | method-separated; same trajectory indices across θ ⇒ no leakage; one dataset per topology |
 | `legacy` | position-set | **within-geometry** 70/20/10 (all layouts seen in train) | `<root>/processed/within_geometry_split/` | reproduces the old repo; val/test = new *trajectories* of *seen* layouts |
 | `geometry` | position-set | **held-out layouts** (disjoint train/val/test geometry pools; interp/extrap labels) | `<root>/processed/geometry_split/` | OOD to unseen sensor layouts; adds `sensor_pos`, `geometry_id`, `splits.json` |
 | `all` | position-set | `legacy` + `geometry` | both dirs | |
@@ -257,10 +257,11 @@ Two parallel, self-describing roots under `data/` (created by `generate.py` when
 run from the repo root):
 ```
 data/
-  topology_task/<method>/<topology>/channel_option_<θ>/…      # Problem 1
-    processed/topology_<name>/{train,val,test}_data.pkl
-  random_task/<method>_<mode>/position_set_XX/…/random/…      # Problem 2
-    processed/{within_geometry_split,geometry_split}/…
+  topology_task/<method>/<topology>/channel_option_<θ>/…            # Problem 1 (raw)
+  topology_task/<method>/processed/topology_<name>/{train,val,test}_data.pkl
+  topology_task/<method>/validation/…                               # QC/velocity figures
+  random_task/<method>_<mode>/position_set_XX/…/random/…            # Problem 2 (raw)
+  random_task/<method>_<mode>/processed/{within_geometry_split,geometry_split}/…
 ```
 - **Run generation from the repo ROOT** so the config's `./data/topology_task`
   and `./data/random_task` land at `<repo>/data/…`. (Running from inside `data/`
@@ -314,9 +315,9 @@ python scripts/eval/eval_np_geometry.py --ckpt <run>/best.pt --out-dir <run>/eva
 - **Use the same `dataset=<id>` for generation and training** — that's the single
   source of truth. Training derives `data_dir` from `${dataset.method}_${dataset.mode}`,
   so a matching `generate.py dataset=<id>` guarantees the paths line up.
-- **Topology processed path is method-independent** (`topology_task/processed/topology_<name>`),
-  so regenerating the topology task with a different `method` overwrites it. (The
-  random task keeps methods separate via the `<method>_<mode>` root.)
+- **Both trajectory methods coexist**: topology raw/processed/validation are all
+  under `topology_task/<method>/…`, and the random task under
+  `random_task/<method>_<mode>/…`, so spiral and hermite never overwrite each other.
 - **Preprocess `data_root` differs by mode**: `topology` mode defaults to `./data/topology_task`; the `legacy`/`geometry` modes need `--data-root data/random_task/<method>_<mode>`.
 - **Preprocessing is still a manual step** (`data_process_random_positions.py`) — it
   is not driven by the `dataset` group yet, so pass the matching `--data-root`.

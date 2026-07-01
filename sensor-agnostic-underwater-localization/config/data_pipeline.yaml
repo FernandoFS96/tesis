@@ -28,7 +28,7 @@ task: topology
 # method: add a parameter block below AND the matching submethod in
 # data/acoustic_data_generator.py.
 # -----------------------------------------------------------------------------
-method: hermite
+method: spiral
 
 # -----------------------------------------------------------------------------
 # Shared acoustic-channel knobs (BOTH tasks read these).
@@ -119,7 +119,9 @@ preprocess:
   mode: topology
   method: ${method}
   data_root: ./data/topology_task
-  save_dir: null            # null -> <data_root>/processed
+  # null -> topology mode: <data_root>/<method>/processed (method-separated);
+  #         position-set modes: <data_root>/processed.
+  save_dir: null
   thetas: null              # null -> all found; or e.g. [0.1, 0.2, 0.3]
 
   # topology mode -- trajectory-index split (counts out of n_traj).
