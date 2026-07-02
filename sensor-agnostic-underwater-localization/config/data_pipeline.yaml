@@ -35,7 +35,7 @@ method: spiral
 # -----------------------------------------------------------------------------
 channel:
   channel_options: [0.1, 0.2, 0.3]  # theta values (channel variability; low band 0.1-0.3)
-  n_traj: 200        # trajectories per (theta[, topology / position-set])
+  n_traj: 300        # trajectories per (theta[, topology / position-set])
   ppt: 50            # points per trajectory
   df: 50.0           # frequency resolution [Hz]; feature dim = (B/df + 1) * n_sensors
   snr: 10.0          # SNR [dB] for the filtered features

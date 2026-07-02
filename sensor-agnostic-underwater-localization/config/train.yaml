@@ -11,14 +11,14 @@
 # =============================================================================
 defaults:
   - _self_
-  - dataset: topology_spiral   # which generated dataset (identity: task/method/mode)
+  - dataset: topology_hermite   # which generated dataset (identity: task/method/mode)
   - data: topology             # split view: topology | geometry | within_geometry
-  - model: anp                 # cnp | anp | rcnp | ranp | online_ranp
+  - model: rcnp                 # cnp | anp | rcnp | ranp | online_ranp
   - wandb: default
   - experiment: null           # opt-in bundles: `experiment=<name>` (see config/experiment/)
 
 # Experiment identity -- used as the wandb group name and to organise outputs.
-exp_name: legacy_spiral_random_topology
+exp_name: hermite_random_topology
 
 seed: 1
 device: auto  # 'auto' -> cuda if available else cpu; or set 'cuda' / 'cpu'
