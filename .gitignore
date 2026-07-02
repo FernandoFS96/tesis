@@ -45,6 +45,7 @@ csic/models/
 # except the KIT-ALR collaboration
 !/sensor-agnostic-underwater-localization/
 sensor-agnostic-underwater-localization/data/topology_task/
+sensor-agnostic-underwater-localization/data/random_task/
 sensor-agnostic-underwater-localization/data/validation/
 sensor-agnostic-underwater-localization/data/data_random_positions/
 sensor-agnostic-underwater-localization/output/
