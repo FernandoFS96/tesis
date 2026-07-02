@@ -1,0 +1,5 @@
+# Dataset identity -- see topology_spiral.yaml for the full note.
+# `mode: distinct` -> each position-set gets its OWN trajectory ensemble.
+task: random
+method: hermite
+mode: distinct # -> raw at data/random_task/hermite_distinct/
