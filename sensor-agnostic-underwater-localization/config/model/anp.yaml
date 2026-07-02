@@ -1,4 +1,4 @@
 # Attentive latent NP (posterior + KL) -> anp.LatentModel
 name: anp
-num_hidden: 256
+num_hidden: 128
 dropout: 0.1      # dropout prob for attention + decoder-MLP LayerNorm/dropout
