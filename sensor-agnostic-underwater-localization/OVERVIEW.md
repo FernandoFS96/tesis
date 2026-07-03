@@ -20,7 +20,7 @@ data/
   generate.py                               # UNIFIED generation entry: generate.py dataset=<name>
   acoustic_data_generator.py                # library: channel physics + topology task runner
   random_position_generator.py              # library: random (position-set) task runner
-  data_process_random_positions.py          # preprocessing -> training-ready pickles (all modes)
+  process_data.py          # preprocessing -> training-ready pickles (all modes)
   utils/                                    # QC + velocity + trajectory-preview tools
   topology_task/<method>/<topology>/...     # Problem 1 raw + processed data (see §7)
   random_task/<method>_<mode>/...           # Problem 2 raw + processed data (see §7)
@@ -139,7 +139,7 @@ across sets) or `distinct` (per-set trajectories).
 
 ---
 
-## 3. Data processing (`data/data_process_random_positions.py`)
+## 3. Data processing (`data/process_data.py`)
 
 Config: the `preprocess:` block of `data_pipeline.yaml` (CLI flags override).
 `mode` selects the study/split. **All modes emit the same dict-sample schema** so the trainer reads them uniformly:
@@ -278,14 +278,14 @@ All three steps key off the same `dataset` identity, so nothing can drift.
 **Problem 1 — topology:**
 ```bash
 python data/generate.py dataset=topology_spiral
-python data/data_process_random_positions.py --mode topology    # data_root=./data/topology_task
+python data/process_data.py --mode topology    # data_root=./data/topology_task
 python scripts/train/train_np_geometry.py experiment=topology data.topology=random
 ```
 
 **Problem 2 — random, within-geometry** (reproduces the old converging setup):
 ```bash
 python data/generate.py dataset=random_spiral_shared
-python data/data_process_random_positions.py \
+python data/process_data.py \
     --data-root data/random_task/spiral_shared --mode legacy
 python scripts/train/train_np_geometry.py experiment=within_geometry
 ```
@@ -293,7 +293,7 @@ python scripts/train/train_np_geometry.py experiment=within_geometry
 **Problem 2 — random, held-out geometries (OOD):**
 ```bash
 python data/generate.py dataset=random_spiral_shared
-python data/data_process_random_positions.py \
+python data/process_data.py \
     --data-root data/random_task/spiral_shared --mode geometry
 python scripts/train/train_np_geometry.py experiment=geometry_ood
 ```
@@ -319,5 +319,5 @@ python scripts/eval/eval_np_geometry.py --ckpt <run>/best.pt --out-dir <run>/eva
   under `topology_task/<method>/…`, and the random task under
   `random_task/<method>_<mode>/…`, so spiral and hermite never overwrite each other.
 - **Preprocess `data_root` differs by mode**: `topology` mode defaults to `./data/topology_task`; the `legacy`/`geometry` modes need `--data-root data/random_task/<method>_<mode>`.
-- **Preprocessing is still a manual step** (`data_process_random_positions.py`) — it
+- **Preprocessing is still a manual step** (`process_data.py`) — it
   is not driven by the `dataset` group yet, so pass the matching `--data-root`.

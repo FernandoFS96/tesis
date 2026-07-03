@@ -13,7 +13,7 @@ defaults:
   - _self_
   - dataset: topology_hermite   # which generated dataset (identity: task/method/mode)
   - data: topology             # split view: topology | geometry | within_geometry
-  - model: rcnp                 # cnp | anp | rcnp | ranp | online_ranp
+  - model: cnp                 # cnp | anp | rcnp | ranp | online_ranp
   - wandb: default
   - experiment: null           # opt-in bundles: `experiment=<name>` (see config/experiment/)
 
@@ -28,14 +28,14 @@ device: auto  # 'auto' -> cuda if available else cpu; or set 'cuda' / 'cpu'
 # -----------------------------------------------------------------------------
 training:
   epochs: 2000
-  batch_size: 16
+  batch_size: 8
   lr: 5.0e-4
   weight_decay: 1.0e-4
   beta: 1.0          # base KL weight (used only by latent models: anp / ranp)
   # Linearly warm the KL weight 0 -> beta over this many epochs (latent models
   # only). A constant full beta from epoch 1 invites posterior collapse; the old
   # converging setup warmed up over 500 epochs. Set 0 to disable (constant beta).
-  kl_warmup_epochs: 1000
+  kl_warmup_epochs: 500
   num_workers: 1
 
 

@@ -107,7 +107,7 @@ python data/utils/visualize_trajectories.py           # uses config method + cha
 
 ## Stage 2 — Process into train/val/test
 
-Entry point: `python data/data_process_random_positions.py` — reads the
+Entry point: `python data/process_data.py` — reads the
 `preprocess:` block of `config/data_pipeline.yaml`; CLI flags override. Every
 mode emits the **same sample schema**:
 `list of {"X": (ppt, feat_dim), "y": (ppt, 3), "theta", "topology"/…}`.
@@ -125,15 +125,15 @@ random modes need `--data-root data/random_task/<method>_<mode>`.
 ```bash
 # Topology -- one run PER method; outputs auto-separate to
 # data/topology_task/<method>/processed/topology_<name>/ (no --save-dir needed):
-python data/data_process_random_positions.py --mode topology --method spiral
-python data/data_process_random_positions.py --mode topology --method hermite
+python data/process_data.py --mode topology --method spiral
+python data/process_data.py --mode topology --method hermite
 
 # Random, within-geometry (reproduces the old converging task):
-python data/data_process_random_positions.py \
+python data/process_data.py \
     --data-root data/random_task/spiral_shared --mode legacy
 
 # Random, held-out geometries (OOD robustness study):
-python data/data_process_random_positions.py \
+python data/process_data.py \
     --data-root data/random_task/spiral_shared --mode geometry
 ```
 
@@ -216,7 +216,7 @@ otherwise.
 **A. Three-topology study, spiral, ANP per topology**
 ```bash
 python data/generate.py dataset=topology_spiral
-python data/data_process_random_positions.py --mode topology --method spiral
+python data/process_data.py --mode topology --method spiral
 for topo in ellipsoidal random aligned; do
   python scripts/train/train_np_geometry.py experiment=topology \
       dataset=topology_spiral data.topology=$topo
@@ -226,7 +226,7 @@ done
 **B. Sensor-displacement, within-geometry (reproduce old converging ANP)**
 ```bash
 python data/generate.py dataset=random_spiral_shared
-python data/data_process_random_positions.py \
+python data/process_data.py \
     --data-root data/random_task/spiral_shared --mode legacy
 python scripts/train/train_np_geometry.py experiment=within_geometry
 ```
@@ -234,7 +234,7 @@ python scripts/train/train_np_geometry.py experiment=within_geometry
 **C. Sensor-displacement, held-out geometries (OOD robustness)**
 ```bash
 python data/generate.py dataset=random_spiral_shared
-python data/data_process_random_positions.py \
+python data/process_data.py \
     --data-root data/random_task/spiral_shared --mode geometry
 python scripts/train/train_np_geometry.py experiment=geometry_ood model=anp
 python scripts/eval/eval_np_geometry.py \
