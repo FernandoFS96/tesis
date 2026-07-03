@@ -20,7 +20,7 @@
 # =============================================================================
 
 # Which problem to generate: topology | random. Override on the CLI.
-task: topology
+task: topology 
 
 # -----------------------------------------------------------------------------
 # Trajectory shape, shared by BOTH tasks ('spiral', 'hermite', ...). Dispatched
@@ -28,14 +28,14 @@ task: topology
 # method: add a parameter block below AND the matching submethod in
 # data/acoustic_data_generator.py.
 # -----------------------------------------------------------------------------
-method: spiral
+method: hermite # spiral | hermite
 
 # -----------------------------------------------------------------------------
 # Shared acoustic-channel knobs (BOTH tasks read these).
 # -----------------------------------------------------------------------------
 channel:
   channel_options: [0.1, 0.2, 0.3]  # theta values (channel variability; low band 0.1-0.3)
-  n_traj: 300        # trajectories per (theta[, topology / position-set])
+  n_traj: 200        # trajectories per (theta[, topology / position-set])
   ppt: 50            # points per trajectory
   df: 50.0           # frequency resolution [Hz]; feature dim = (B/df + 1) * n_sensors
   snr: 10.0          # SNR [dB] for the filtered features
@@ -66,12 +66,12 @@ spiral:
 # -----------------------------------------------------------------------------
 hermite:
   n_segments: 3       # number of Hermite segments (-> n_segments + 1 knots)
-  seg_len_min: 100.0  # min segment chord length [m]
-  seg_len_max: 225.0  # max segment chord length [m]
-  max_turn: 1.4       # max heading change between consecutive knots [rad] (~45 deg)
-  tension: 1.0        # scales knot tangent magnitude (curve tightness)
-  start_radius_min: 30.0
-  start_radius_max: 80.0
+  seg_len_min: 80.0  # min segment chord length [m]
+  seg_len_max: 250.0  # max segment chord length [m]
+  max_turn: 1.2       # max heading change between consecutive knots [rad] higher -> more erratic
+  tension: 0.8        # scales knot tangent magnitude (curve tightness) higher -> tighter
+  start_radius_min: 30.0 # min starting radius [m] higher -> more erratic
+  start_radius_max: 80.0 # max starting radius [m] lower -> more erratic
 
 # =============================================================================
 # PROBLEM 1 -- TOPOLOGY task  (data/acoustic_data_generator.py)
