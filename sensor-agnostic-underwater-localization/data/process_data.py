@@ -35,7 +35,7 @@ MODES (preprocess.mode, or --mode)
 
 * ``geometry`` -- the NEW geometry-level split for measuring robustness to
   UNSEEN sensor layouts. The 20 position-sets are partitioned into disjoint
-  train / val / test GEOMETRY pools (default 12/4/4). A geometry never crosses
+  train / val / test GEOMETRY pools (default 10/6/4). A geometry never crosses
   pools, so the val/test sets genuinely measure generalization to layouts the
   model never saw. Held-out geometries are further labelled INTERPOLATION
   (inside the training-centroid convex hull) or EXTRAPOLATION (outside), giving
@@ -95,10 +95,10 @@ Within-geometry (RANDOM task; point --data-root at the <method>_<mode> folder):
     python data_process_random_positions.py \
         --data-root ./data/random_task/spiral_shared --mode legacy
 
-Held-out geometry split (RANDOM task, auto interp/extrap, 12/4/4):
+Held-out geometry split (RANDOM task, auto interp/extrap, 10/6/4):
     python data_process_random_positions.py \
         --data-root ./data/random_task/spiral_shared --mode geometry \
-        --train-geoms 12 --val-geoms 4 --test-geoms 4
+        --train-geoms 10 --val-geoms 6 --test-geoms 4
 
 Reproduce a previously frozen split:
     python data_process_random_positions.py \

@@ -20,7 +20,7 @@
 # =============================================================================
 
 # Which problem to generate: topology | random. Override on the CLI.
-task: topology 
+task: random 
 
 # -----------------------------------------------------------------------------
 # Trajectory shape, shared by BOTH tasks ('spiral', 'hermite', ...). Dispatched
@@ -28,7 +28,7 @@ task: topology
 # method: add a parameter block below AND the matching submethod in
 # data/acoustic_data_generator.py.
 # -----------------------------------------------------------------------------
-method: hermite # spiral | hermite
+method: spiral # spiral | hermite
 
 # -----------------------------------------------------------------------------
 # Shared acoustic-channel knobs (BOTH tasks read these).
@@ -116,7 +116,7 @@ random_task:
 #   position-set modes: ./data/random_task/<method>_<mode>  (pass --data-root)
 # =============================================================================
 preprocess:
-  mode: topology
+  mode: geometry
   method: ${method}
   data_root: ./data/topology_task
   # null -> topology mode: <data_root>/<method>/processed (method-separated);
@@ -133,6 +133,6 @@ preprocess:
 
   # position-set (geometry) mode -- how many sensor-layout geometries per pool.
   geometry_split:
-    n_train: 12
-    n_val: 4
+    n_train: 10
+    n_val: 6
     n_test: 4

@@ -285,9 +285,14 @@ class LatentModel(nn.Module):
         context_indices: t.Tensor, # (Nc,)  índices del contexto
         context_y: t.Tensor, # (B, Nc, output_dim)
         target_indices: t.Tensor, # (Nt,)  índices de los targets (normalmente 0..T-1)
-        target_y: t.Tensor = None,  #type: ignore[no-untyped-call] # (B, Nt, output_dim) — None en inferencia 
+        target_y: t.Tensor = None,  #type: ignore[no-untyped-call] # (B, Nt, output_dim) — None en inferencia
         beta: float = 1.0,
+        predict_with_prior: bool = False,
         ):
+        # predict_with_prior: if True the DECODER is driven by the PRIOR latent
+        # (context only) even when target_y is supplied -- deployment-faithful
+        # inference. Posterior + KL/NLL are still computed for logging; only the z
+        # driving the prediction changes. False = training (teacher forcing).
         # RNN aplicado internamente sobre la secuencia completa
         h_seq = self.temporal_encoder(x_seq) # (B, T, num_hidden)
 
@@ -299,11 +304,12 @@ class LatentModel(nn.Module):
         # Camino latente
         prior_mu, prior_var, prior = self.latent_encoder(context_x, context_y)
 
+        posterior_mu = posterior_var = None
         if target_y is not None:
             posterior_mu, posterior_var, posterior = self.latent_encoder(target_x, target_y)
-            z = posterior
-        else:
-            z = prior
+
+        use_posterior = (target_y is not None) and (not predict_with_prior)
+        z = posterior if use_posterior else prior
 
         z = z.unsqueeze(1).repeat(1, num_targets, 1)
 
@@ -398,7 +404,10 @@ class DeterministicModel(nn.Module):
         target_indices: t.Tensor,
         target_y: t.Tensor = None, #type: ignore[assignment]
         beta: float = 1.0,
+        predict_with_prior: bool = False,
     ):
+        # predict_with_prior accepted for interface parity with the latent RANP;
+        # a deterministic RCNP never peeks at target labels, so it has no effect.
         h_seq = self.temporal_encoder(x_seq)
         context_x = h_seq[:, context_indices, :]
         target_x  = h_seq[:, target_indices,  :]
