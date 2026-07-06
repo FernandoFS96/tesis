@@ -54,8 +54,10 @@ Outputs (to the Hydra run dir, or ``out_dir`` if set):
 
 import os
 import sys
+import json
 import pickle
 import time
+from collections import defaultdict
 
 import numpy as np
 import torch as t
@@ -251,12 +253,12 @@ def model_forward(model, conv, batch, device, beta, with_target_y=True,
     if conv == "split":
         cx = batch["context_x"].to(device)
         tx = batch["target_x"].to(device)
-        return model(cx, cy, tx, ty, beta)
+        return model(cx, cy, tx, ty, beta, predict_with_prior=predict_with_prior)
     else:  # indexed (ranp)
         x_seq = batch["x_seq"].to(device)
         ci = batch["context_indices"].to(device)
         ti = batch["target_indices"].to(device)
-        return model(x_seq, ci, cy, ti, ty, beta)
+        return model(x_seq, ci, cy, ti, ty, beta, predict_with_prior=predict_with_prior)
 
 
 # --------------------------------------------------------------------------- #
@@ -269,6 +271,9 @@ def run_epoch(model, conv, loader, device, beta, optimizer=None, desc="",
     train = optimizer is not None
     model.train(train)
     tot_loss = tot_nll = tot_mae = 0.0; n = 0
+    # Per-geometry error accumulators, so the caller can break the metric down by
+    # region (train / interp / extrap) using the splits.json labels.
+    err_sum = defaultdict(float); err_cnt = defaultdict(int)
     ym = y_mean.to(device) if y_mean is not None else None
     ys = y_std.to(device)  if y_std  is not None else None
     bar = tqdm(loader, desc=desc, leave=False, dynamic_ncols=True)
@@ -277,6 +282,7 @@ def run_epoch(model, conv, loader, device, beta, optimizer=None, desc="",
         # 'online' carries the full trajectory in y_seq; others split into target_y.
         y_key = "y_seq" if online else "target_y"
         ty_raw = batch[y_key].to(device)        # physical units, for MAE
+        gids = batch["gids"].tolist()
         if ym is not None:
             if online:
                 batch = {**batch, "y_seq": (batch["y_seq"].to(device) - ym) / ys}
@@ -285,12 +291,14 @@ def run_epoch(model, conv, loader, device, beta, optimizer=None, desc="",
                          "context_y": (batch["context_y"].to(device) - ym) / ys,
                          "target_y":  (batch["target_y"].to(device)  - ym) / ys}
         with t.set_grad_enabled(train):
-            # Validation of the online model uses the PRIOR latent (no peeking at
-            # target labels) so val MAE reflects real deployment; training uses
-            # the posterior (teacher forcing).
+            # Deployment-faithful validation/inference: latent models predict from
+            # the PRIOR latent (context only, no peeking at target labels) whenever
+            # we are NOT training. Training uses the posterior (teacher forcing).
+            # The posterior + KL/NLL are still computed for logging; only the z
+            # that drives the prediction differs. Deterministic models ignore it.
             mean, var, loss, kl, nll = model_forward(
                 model, conv, batch, device, beta, with_target_y=True,
-                predict_with_prior=(online and not train))
+                predict_with_prior=(not train))
             if train:
                 optimizer.zero_grad()
                 loss.backward()
@@ -301,12 +309,16 @@ def run_epoch(model, conv, loader, device, beta, optimizer=None, desc="",
         tot_nll += nll.item() * b
         with t.no_grad():
             mean_phys = mean * ys + ym if ym is not None else mean
-            dist = t.sqrt(((mean_phys - ty_raw) ** 2).sum(-1) + 1e-12)
+            dist = t.sqrt(((mean_phys - ty_raw) ** 2).sum(-1) + 1e-12)  # (B, n_tgt)
             mae = dist.mean().item()
             tot_mae += mae * b
+            per_sample = dist.mean(dim=1).tolist()  # mean target error per trajectory
+            for g, e in zip(gids, per_sample):
+                err_sum[int(g)] += e; err_cnt[int(g)] += 1
         n += b
         bar.set_postfix(loss=f"{loss.item():.3f}", mae=f"{mae:.2f}")
-    return tot_loss / n, tot_nll / n, tot_mae / n
+    per_geo_mae = {g: err_sum[g] / err_cnt[g] for g in err_sum}
+    return tot_loss / n, tot_nll / n, tot_mae / n, per_geo_mae
 
 
 # --------------------------------------------------------------------------- #
@@ -394,6 +406,18 @@ def main(cfg: DictConfig):
     print(f"[{model_name}] feat_dim={feat_dim} out_dim={out_dim} ppt={ppt} "
           f"| train={len(train_ds)} val={len(val_ds)}")
 
+    # Region labels (interp / extrap) for held-out-geometry reporting. Present
+    # only for the geometry split (splits.json); absent for topology / within-
+    # geometry data, in which case the per-region breakdown is simply skipped.
+    region_by_gid = {}
+    _splits_path = os.path.join(data_dir, "splits.json")
+    if os.path.exists(_splits_path):
+        with open(_splits_path) as f:
+            _split = json.load(f)
+        region_by_gid = {int(k): v.get("region", "train")
+                         for k, v in _split.get("labels", {}).items()}
+        print(f"[{model_name}] region labels loaded for {len(region_by_gid)} held-out geometries")
+
     y_mean = y_std = None
     if cfg.data.normalize_y:
         y_mean, y_std = compute_y_stats(train_ds)
@@ -479,7 +503,6 @@ def main(cfg: DictConfig):
         if viz_cfg.get("plots", {}).get("degradation_scatter", False):
             # The degradation scatter needs the train/val/test pools + region
             # labels (from splits.json). Loaded once here, reused every log step.
-            import json
             splits_path = os.path.join(data_dir, "splits.json")
             if os.path.exists(splits_path):
                 with open(splits_path) as f:
@@ -511,6 +534,21 @@ def main(cfg: DictConfig):
         with open(log_path, "a") as f:
             f.write(f"{ep},{tr[0]:.6f},{tr[1]:.6f},{tr[2]:.6f},"
                     f"{va[0]:.6f},{va[1]:.6f},{va[2]:.6f},{lr_now:.2e},{dt:.1f}\n")
+        # Break the (blended) val MAE down by held-out region so interp vs extrap
+        # are tracked separately -- the blended number is dominated by the few
+        # extrapolation geometries. va[3] is {geometry_id: mae} from the val pass.
+        region_maes = {}
+        if region_by_gid:
+            buckets = defaultdict(list)
+            for gid, m in va[3].items():
+                buckets[region_by_gid.get(gid, "train")].append(m)
+            for reg in ("interp", "extrap"):
+                if buckets.get(reg):
+                    region_maes[f"val/mae_{reg}"] = float(np.mean(buckets[reg]))
+            if buckets.get("interp") and buckets.get("extrap"):
+                region_maes["val/mae_gap_extrap_interp"] = (
+                    region_maes["val/mae_extrap"] - region_maes["val/mae_interp"])
+
         epoch_bar.set_postfix(tr_mae=f"{tr[2]:.2f}", va_mae=f"{va[2]:.2f}",
                               va_loss=f"{va[0]:.3f}")
 
@@ -520,6 +558,7 @@ def main(cfg: DictConfig):
                 "train/loss": tr[0], "train/nll": tr[1], "train/mae": tr[2],
                 "val/loss": va[0], "val/nll": va[1], "val/mae": va[2],
                 "lr": lr_now, "beta": beta, "epoch_time_sec": dt,
+                **region_maes,
             }, step=ep)
 
         # periodic figures (also on the final epoch so the last state is logged)

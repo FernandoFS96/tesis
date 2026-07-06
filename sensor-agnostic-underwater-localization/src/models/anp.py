@@ -174,15 +174,23 @@ class LatentModel(nn.Module):
                                output_dim=output_dim,
                                dropout=dropout)
 
-    def forward(self, context_x, context_y, target_x, target_y=None, beta: float = 1.0):
+    def forward(self, context_x, context_y, target_x, target_y=None, beta: float = 1.0,
+                predict_with_prior: bool = False):
+        # predict_with_prior: if True the DECODER is driven by the PRIOR latent
+        # (context only) even when target_y is supplied -- the deployment-faithful
+        # path (at inference the latent cannot peek at target labels). The
+        # posterior + KL/NLL are still computed when target_y is given, so the
+        # validation loss stays comparable to training; only the z that drives the
+        # prediction changes. Use False for training (posterior teacher forcing).
         num_targets = target_x.size(1)
         prior_mu, prior_var, prior = self.latent_encoder(context_x, context_y)
 
+        posterior_mu = posterior_var = None
         if target_y is not None:
             posterior_mu, posterior_var, posterior = self.latent_encoder(target_x, target_y)
-            z = posterior
-        else:
-            z = prior
+
+        use_posterior = (target_y is not None) and (not predict_with_prior)
+        z = posterior if use_posterior else prior
 
         z = z.unsqueeze(1).repeat(1, num_targets, 1)
         r = self.deterministic_encoder(context_x, context_y, target_x)
@@ -246,7 +254,11 @@ class DeterministicModel(nn.Module):
                                             output_dim=output_dim,
                                             dropout=dropout)
 
-    def forward(self, context_x, context_y, target_x, target_y=None, beta: float = 1.0):
+    def forward(self, context_x, context_y, target_x, target_y=None, beta: float = 1.0,
+                predict_with_prior: bool = False):
+        # predict_with_prior is accepted for a uniform interface with the latent
+        # models but has no effect: a deterministic CNP never uses target labels
+        # to predict, so there is no posterior to peek at.
         r = self.deterministic_encoder(context_x, context_y, target_x)
         y_pred_mean, y_pred_var = self.decoder(r, target_x)
 
