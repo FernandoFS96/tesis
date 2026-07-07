@@ -34,8 +34,12 @@ method: spiral # spiral | hermite
 # Shared acoustic-channel knobs (BOTH tasks read these).
 # -----------------------------------------------------------------------------
 channel:
-  channel_options: [0.1, 0.2, 0.3]  # theta values (channel variability; low band 0.1-0.3)
-  n_traj: 200        # trajectories per (theta[, topology / position-set])
+  channel_options: [0.1, 0.2]  # theta values (channel variability; low band 0.1-0.3)
+  n_traj: 50         # trajectories per (theta[, topology / position-set]). Random task:
+                     # kept small on purpose -- geometry DIVERSITY (n_position_sets),
+                     # not trajectory count, is the axis that matters for the
+                     # sensor-displacement study. Topology task can be raised for a
+                     # denser single-geometry fit (regenerate that task separately).
   ppt: 50            # points per trajectory
   df: 50.0           # frequency resolution [Hz]; feature dim = (B/df + 1) * n_sensors
   snr: 10.0          # SNR [dB] for the filtered features
@@ -91,7 +95,9 @@ topology_task:
 #   (<mode> = shared | distinct, from distinct_trajectories below)
 # =============================================================================
 random_task:
-  n_position_sets: 20
+  n_position_sets: 100          # distinct sensor layouts (the meta-learning "tasks").
+                               # Diversity here -- not n_traj -- is what an OOD-to-
+                               # unseen-layout model needs.
   # false -> ONE shared trajectory ensemble reused by all sets (geometry is the
   #          only varying factor). true -> each set gets its OWN trajectories.
   distinct_trajectories: false
@@ -99,6 +105,20 @@ random_task:
   # separate numeric band from layout seeds master_seed + 1000 + p).
   traj_seed_offset: 2000
   out_dir: ./data/random_task
+  # -----------------------------------------------------------------------------
+  # Sensor-layout distribution (the 'random' topology, sensor-displacement study).
+  # Each position-set places a COMPACT sensor array whose CENTRE is translated by a
+  # per-set random offset -> layouts genuinely differ by DISPLACEMENT (not a re-
+  # jitter of one fixed box). All fractions are of the trajectory field's per-axis
+  # extent, so the same knobs work for any trajectory method. offset_frac is the
+  # controlled OOD axis; aperture_frac sets the (roughly fixed) array size so the
+  # localization difficulty floor stays comparable to the single-geometry task.
+  # -----------------------------------------------------------------------------
+  layout:
+    aperture_frac: 0.5   # array span as a fraction of field extent (compactness)
+    offset_frac: 0.3     # max array-centre translation, +/- fraction of field extent
+    scale_jitter: 0.0    # optional +/- per-set aperture jitter (0 = fixed aperture)
+    min_span: 20.0       # floor on array span [m] for tiny fields
 
 # =============================================================================
 # Preprocessing (data/data_process_random_positions.py). CLI flags override.
@@ -132,7 +152,9 @@ preprocess:
     seed: 0
 
   # position-set (geometry) mode -- how many sensor-layout geometries per pool.
+  # Must sum to n_position_sets (100). 60/20/20 keeps the 60:20:20 proportion:
+  # 60 meta-training layouts, 20+20 held out for a stable interp/extrap curve.
   geometry_split:
-    n_train: 10
-    n_val: 6
-    n_test: 4
+    n_train: 60
+    n_val: 20
+    n_test: 20

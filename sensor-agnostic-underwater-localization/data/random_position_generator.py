@@ -6,32 +6,34 @@ Revised acoustic-channel data generator for the *sensor-displacement* robustness
 
 WHAT THIS SCRIPT DOES
 ---------------------
-It produces ``N_POSITION_SETS`` (default 20) datasets that are **identical in
-every respect except the (x, y) positions of the 10 hydrophones**. Concretely,
-for every channel-variability value ``theta`` (the ``channel_option``) the script:
+It produces ``n_position_sets`` (default 80) datasets that differ **only in the
+(x, y) positions of the 10 hydrophones**. For every channel-variability value
+``theta`` (the ``channel_option``) the script:
 
-  1. Generates ONE fixed set of trajectories (100 trajectories, 50 points each).
-     These trajectories are shared across *all* position-sets and *all* theta
-     values handling is identical to the original pipeline.
-  2. For each of the 20 position-sets, draws a *different* random placement of
-     the 10 sensors (RANDOM topology only), then simulates the channel impulse
-     response and the filtered acoustic features for those positions.
+  1. Generates a trajectory ensemble (default 50 trajectories, 50 points each).
+     In ``shared`` mode this is generated ONCE per theta and reused by every
+     position-set, so sensor geometry is the only varying factor; in ``distinct``
+     mode each set gets its own ensemble.
+  2. For each position-set, draws a *different* random sensor layout
+     (RANDOM topology only) via ``random_sensor_positions`` -- a COMPACT array
+     whose CENTRE is translated by a per-set random offset (the sensor-
+     displacement OOD axis; see ``random_task.layout``), NOT a re-jitter of one
+     fixed box. It then simulates the channel and filtered acoustic features.
   3. Saves, per (theta, position-set), the filtered acoustic data, the
-     trajectories, and crucially the sensor positions themselves (needed later
-     for the spatial-encoder experiments).
+     trajectories, and the sensor positions themselves (for the spatial-encoder
+     experiments).
 
-Compared with the original ``acoustic_data_generator.py`` the important changes are:
+Design notes vs the original ``acoustic_data_generator.py``:
 
-  * Only the RANDOM topology is generated (per the collaboration plan).
-  * The random sensor layout is NO LONGER hardcoded to a single seed. Each
-    position-set ``p`` uses its own reproducible seed, so the 20 layouts are
-    genuinely different from one another while remaining fully reproducible.
-  * Trajectories are generated ONCE per theta and reused for every position-set,
-    so sensor geometry is the only varying factor between the 20 datasets.
-  * Defaults updated to the collaboration spec: ``n_traj=100``, ``ppt=50``,
-    ``df=100`` (this reduces the per-point acoustic feature dimension from
-    4010 at df=25 / 2010 at df=50 down to 1010 at df=100).
-  * Sensor positions are always saved next to the data.
+  * Only the RANDOM topology is generated.
+  * Each position-set ``p`` uses its own reproducible layout seed
+    (``master_seed + 1000 + p``), and the layout is a translated compact array
+    parameterised by ``random_task.layout`` (``aperture_frac``, ``offset_frac``,
+    ``scale_jitter``) -- so the 80 layouts genuinely span sensor displacement.
+  * All feature/physics knobs (``df``, ``n_traj``, ``ppt``, ...) come from the
+    shared ``channel`` block of ``config/data_pipeline.yaml``.
+  * Sensor positions and the layout params are always saved next to the data
+    (``sensor_positions_<theta>.npy`` and ``_manifest.pkl``).
 
 OUTPUT LAYOUT
 -------------
@@ -147,27 +149,41 @@ def traj_seed_for(master_seed: int, position_set_idx: int, offset: int) -> int:
 # Random sensor placement (one independent layout per position-set)
 # --------------------------------------------------------------------------- #
 def random_sensor_positions(traj, n_sensors, hr0, layout_seed,
-                            scale=0.6, min_span=20.0):
+                            aperture_frac=0.5, offset_frac=0.3,
+                            scale_jitter=0.0, min_span=20.0):
     """
-    Draw a single RANDOM hydrophone layout adapted to the spatial extent of the
-    (shared) trajectories. This mirrors the 'random' branch of the original
-    ``channel.generate_sensor_positions`` but takes an explicit ``layout_seed``
-    so that every position-set gets a genuinely different layout.
+    Draw a single RANDOM hydrophone layout for one position-set.
+
+    Sensor-displacement study design: instead of re-jittering 10 points inside
+    ONE fixed box centred on the trajectory field (the old behaviour, which made
+    all layouts nearly identical), this places a COMPACT array whose CENTRE is
+    translated by a per-set random offset. Translation is the controlled OOD axis
+    -- "where the sensors sit changes between runs" -- while the aperture stays
+    roughly fixed so the localization conditioning (the difficulty floor) is
+    preserved. All knobs are fractions of the trajectory field's per-axis extent,
+    so the same config works for any trajectory family (spiral, hermite, ...).
 
     Parameters
     ----------
     traj : np.ndarray
-        Shared trajectories, shape (3, n_traj, ppt+1).
+        Trajectory ensemble this layout is fitted to, shape (3, n_traj, ppt+1).
     n_sensors : int
         Number of hydrophones (10).
     hr0 : float
         Receiver height [m] (z-coordinate for every sensor).
     layout_seed : int
-        RNG seed for THIS position-set's layout (varies across the 20 sets).
-    scale, min_span : float
-        Same geometry knobs as the original generator. ``scale=0.6`` and
-        ``min_span=20.0`` reproduce the values used in the published 'random'
-        topology so the layouts live in the same operating area.
+        RNG seed for THIS position-set's layout (varies across sets).
+    aperture_frac : float
+        Array span as a fraction of the field extent (compactness). 0.5 keeps a
+        large-ish, well-conditioned array.
+    offset_frac : float
+        Max array-centre translation, +/- this fraction of the field extent (the
+        displacement axis). 0.3 gives genuinely different layouts while staying
+        climbable. Set 0.0 to recover a single fixed-centre distribution.
+    scale_jitter : float
+        Optional +/- fractional aperture jitter per set (0.0 = fixed aperture).
+    min_span : float
+        Floor on the array span [m] so tiny fields still get a usable aperture.
 
     Returns
     -------
@@ -182,19 +198,27 @@ def random_sensor_positions(traj, n_sensors, hr0, layout_seed,
     x_lo, x_hi = np.percentile(xs, [2.0, 98.0])
     y_lo, y_hi = np.percentile(ys, [2.0, 98.0])
 
-    cx = 0.5 * (x_lo + x_hi)
-    cy = 0.5 * (y_lo + y_hi)
-    span_x = max((x_hi - x_lo) * scale, min_span)
-    span_y = max((y_hi - y_lo) * scale, min_span)
+    field_cx = 0.5 * (x_lo + x_hi)
+    field_cy = 0.5 * (y_lo + y_hi)
+    extent_x = x_hi - x_lo
+    extent_y = y_hi - y_lo
 
+    rng = np.random.default_rng(layout_seed)
+
+    # 1) Per-set array CENTRE: field centre + a random translation (the OOD axis).
+    array_cx = field_cx + rng.uniform(-offset_frac, offset_frac) * extent_x
+    array_cy = field_cy + rng.uniform(-offset_frac, offset_frac) * extent_y
+
+    # 2) Array APERTURE: a compact, roughly-fixed span (optional per-set jitter).
+    jitter = rng.uniform(-scale_jitter, scale_jitter) if scale_jitter else 0.0
+    span_x = max(extent_x * aperture_frac * (1.0 + jitter), min_span)
+    span_y = max(extent_y * aperture_frac * (1.0 + jitter), min_span)
     max_x = 0.5 * span_x
     max_y = max(0.5 * span_y, min_span / 2.0)
 
-    # The ONLY substantive change vs. the original: a per-set seed instead of
-    # the hardcoded default_rng(10).
-    rng = np.random.default_rng(layout_seed)
-    x = rng.uniform(cx - max_x, cx + max_x, n_sensors)
-    y = rng.uniform(cy - max_y, cy + max_y, n_sensors)
+    # 3) Scatter the sensors inside the translated box.
+    x = rng.uniform(array_cx - max_x, array_cx + max_x, n_sensors)
+    y = rng.uniform(array_cy - max_y, array_cy + max_y, n_sensors)
 
     r_posicion = np.zeros((3, n_sensors))
     r_posicion[0, :] = x
@@ -207,7 +231,8 @@ def random_sensor_positions(traj, n_sensors, hr0, layout_seed,
 # Single (theta, position-set) generation
 # --------------------------------------------------------------------------- #
 def generate_one(option, position_set_idx, trajectories, layout_seed,
-                 out_dir, snr, rep, nop, signal_n=1024, traj_config=None):
+                 out_dir, snr, rep, nop, signal_n=1024, traj_config=None,
+                 layout_params=None):
     """
     Simulate the channel + filtered features for ONE channel option (theta) and
     ONE sensor layout (position-set), writing the result in the
@@ -244,6 +269,7 @@ def generate_one(option, position_set_idx, trajectories, layout_seed,
         n_sensors=params['n_sensors'],
         hr0=params['ci']['hr0'],
         layout_seed=layout_seed,
+        **(layout_params or {}),
     )
 
     # 2) Patch placement on the CLASS so the constructor's single obtain_h()
@@ -388,7 +414,7 @@ def make_trajectories(option, nop, physics_seed, traj_config=None):
 def run(channel_options, n_position_sets, out_dir, snr, rep, nop,
         master_seed, start_set, end_set, signal_n=1024,
         distinct_trajectories=False, traj_seed_offset=2000, traj_config=None,
-        traj_method=None, variant_tag=None):
+        traj_method=None, variant_tag=None, layout_params=None):
     os.makedirs(out_dir, exist_ok=True)
 
     manifest = {
@@ -401,6 +427,7 @@ def run(channel_options, n_position_sets, out_dir, snr, rep, nop,
         'traj_seed_offset': int(traj_seed_offset),
         'traj_method': traj_method,
         'variant_tag': variant_tag,
+        'layout_params': dict(layout_params or {}),  # sensor-layout distribution
         'positions': {},  # (position_set_idx, theta) -> (3, n_sensors)
         'layout_seeds': {},
         'traj_seeds': {},  # only populated in distinct mode
@@ -448,6 +475,7 @@ def run(channel_options, n_position_sets, out_dir, snr, rep, nop,
                 nop=nop,
                 signal_n=signal_n,
                 traj_config=traj_config,
+                layout_params=layout_params,
             )
             manifest['positions'][(p, option)] = r_pos
 
@@ -484,6 +512,16 @@ def run_random_task(cfg):
     distinct_trajectories = bool(rt.get('distinct_trajectories', False))
     traj_seed_offset = int(rt.get('traj_seed_offset', 2000))
 
+    # Sensor-layout distribution (translated compact array). Defaults match the
+    # gentle sensor-displacement spec; override in random_task.layout.
+    lt = rt.get('layout', {}) or {}
+    layout_params = {
+        'aperture_frac': float(lt.get('aperture_frac', 0.5)),
+        'offset_frac':   float(lt.get('offset_frac', 0.3)),
+        'scale_jitter':  float(lt.get('scale_jitter', 0.0)),
+        'min_span':      float(lt.get('min_span', 20.0)),
+    }
+
     # Inject df / n_traj / ppt into the imported physics, and suppress the
     # hardcoded ./data side-effect write in channel.__init__.
     override_base_params(df=df, n_traj=n_traj, ppt=ppt)
@@ -507,6 +545,9 @@ def run_random_task(cfg):
     print(f"  traj method        : {method}")
     print(f"  trajectory mode    : "
           f"{'DISTINCT (own trajectories per set; seed offset ' + str(traj_seed_offset) + ')' if distinct_trajectories else 'SHARED (one ensemble reused across sets)'}")
+    print(f"  sensor layout      : compact array, aperture_frac="
+          f"{layout_params['aperture_frac']}, offset_frac={layout_params['offset_frac']} "
+          f"(translation = the displacement OOD axis), scale_jitter={layout_params['scale_jitter']}")
     print(f"  out dir            : {out_dir}")
     print("=" * 64)
 
@@ -525,6 +566,7 @@ def run_random_task(cfg):
         traj_config=cfg,
         traj_method=method,
         variant_tag=variant_tag,
+        layout_params=layout_params,
     )
 
 

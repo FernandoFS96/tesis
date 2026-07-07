@@ -11,7 +11,7 @@
 defaults:
   - override /dataset: random_spiral_shared
   - override /data: within_geometry
-  - override /model: anp
+  - override /model: cnp
 
 exp_name: within_geometry_spiral
 training:

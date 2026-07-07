@@ -64,7 +64,7 @@ Both generators reuse the same channel physics. Key knobs:
 | `channel_option` (θ) | channel variability | θ scales the surface/bottom/intra-path variance terms. θ=0.0 ≈ deterministic channel; larger θ ⇒ more randomness. "Low-variance band" = 0.1–0.3. |
 | `df` | frequency resolution [Hz] | feature length `Lf = len(range(fmin, fmax, df))` over `fmin=10000, fmax=20000` (B=10000). `df=100→Lf=101`, `df=50→Lf=201`, `df=25→Lf=401`. |
 | `n_sensors` | hydrophones | default **10** |
-| `n_traj` | trajectories | default 100 |
+| `n_traj` | trajectories | default **50** (random task keeps this small on purpose — layout *diversity*, not trajectory count, is what the sensor-displacement study needs) |
 | `ppt` | points per trajectory | default 50 |
 | `snr`, `rep` | filtering SNR [dB] / repetitions | default 10 / 1 |
 
@@ -74,10 +74,17 @@ Both generators reuse the same channel physics. Key knobs:
 
 Layouts are fit to the spatial extent of the trajectory ensemble:
 - **ellipsoidal** — sensors on an ellipse (semi-axes `a`, `b=a/2`) around the trajectory centroid.
-- **random** — uniform scatter inside a centered box (seeded for reproducibility).
+- **random** — a compact sensor array (see below) scattered around a per-layout centre.
 - **aligned** — sensors on a horizontal line through the centroid.
 
-The three-topology generator emits all three sharing one trajectory ensemble, so tpology is the only varying factor. The position-set generator emits only `random`, but with a **different seeded layout per position-set**.
+The three-topology generator emits all three sharing one trajectory ensemble, so topology is the only varying factor, and its `random` layout is a single fixed scatter.
+
+**Position-set `random` layout (sensor-displacement study).** The position-set generator emits only `random`, but every position-set places a **compact array whose centre is translated by a per-set random offset** — so layouts differ by genuine *displacement*, not a re-jitter of one fixed box (the old behaviour, which made all layouts nearly identical and gave no real OOD axis). Controlled by `random_task.layout` in `data_pipeline.yaml`, all as fractions of the trajectory field's per-axis extent:
+- `offset_frac` (default 0.3) — max array-centre translation ± this fraction. **This is the OOD axis** — the held-out geometries live at larger displacement.
+- `aperture_frac` (default 0.5) — array span; kept roughly fixed so the localization difficulty floor stays comparable to the single-geometry task.
+- `scale_jitter` (default 0.0) — optional ± per-set aperture jitter.
+
+The per-set layout is seeded (`master_seed + 1000 + p`), so the whole set of layouts is reproducible; `sensor_positions_<θ>.npy` records each one for the spatial-encoder experiments.
 
 ### 2.3 Trajectory shapes (`config/data_pipeline.yaml: method`)
 
@@ -126,11 +133,14 @@ trajectory *i* **row-aligned across all three topologies** (identical paths).
         trajectory/trajectories.npy
         filtered_data/filtered_data.npy
         channel_info/{sensor_positions_<theta>,trajs_<theta>,channel_h_<theta>}.npy
-    _manifest.pkl                           # seeds, positions, method, mode
+    _manifest.pkl                           # seeds, positions, layout_params, method, mode
 ```
-`n_position_sets` datasets of the `random` topology, each a distinct seeded
-layout. `<mode>` = `shared` (`distinct_trajectories: false`, one ensemble reused
-across sets) or `distinct` (per-set trajectories).
+`n_position_sets` datasets (default **80**) of the `random` topology, each a
+distinct **translated compact array** (see §2.2). `<mode>` = `shared`
+(`distinct_trajectories: false`, one ensemble reused across sets) or `distinct`
+(per-set trajectories). Generate both modes, then process each with `--mode all`
+to get the full comparison matrix: {shared, distinct} × {within-geometry,
+held-out geometry}.
 
 ### 2.5 QC / preview tools (`data/utils/`)
 - `qc_random_positions.py` — validity + characterization; **auto-detects** the position-set vs three-topology layout. Checks shared-trajectory invariant, distinct layouts, feature-dim consistency, NaNs, dead channels.
@@ -154,10 +164,11 @@ Config: the `preprocess:` block of `data_pipeline.yaml` (CLI flags override).
 
 **Split semantics matter a lot for these baselines** (which have *no* spatial
 encoder — they never see `sensor_pos`):
-- `within_geometry` / `topology`: every layout appears in training ⇒ the model can generalize (this is the task that converges).
-- `geometry`: whole layouts held out ⇒ a no-spatial-encoder baseline **cannot** generalize by construction (this is the gap a future spatial encoder closes).
+- `topology`: one fixed layout, split by trajectory ⇒ a clean `features → position` function; converges well (single-geometry reference).
+- `within_geometry`: every layout is seen in training, but **many distinct layouts are pooled with no `sensor_pos` input** ⇒ near-identical acoustic features map to different positions depending on the (unobserved) layout. The target is not a function of the inputs, so the model **cannot even fit the training set** — its train MAE floors far above the single-geometry case (aliasing / non-identifiability), and more trajectories don't help. This is *not* a generalization gap; it is why the spatial encoder is needed even for seen layouts.
+- `geometry`: whole layouts held out ⇒ on top of the aliasing, the val/test layouts were never seen at all. This is the sensor-displacement OOD axis a spatial encoder is meant to close.
 
-Sample counts examples: within-geometry over 20 geoms × 6 θ × 100 traj ⇒ 8400/2400/1200; topology over 3 θ × 100 traj ⇒ 210/60/30 per topology.
+Sample counts (defaults: 80 geoms, 3 θ, 50 traj): geometry split 48/16/16 geoms ⇒ 7200/2400/2400; within-geometry pools all 80 geoms × 3 θ × 50 traj = 12000, split 70/20/10 ⇒ 8400/2400/1200; topology 3 θ × 50 traj ⇒ 105/30/15 per topology.
 
 ---
 
