@@ -34,8 +34,9 @@ MODES (preprocess.mode, or --mode)
       <save-dir>/within_geometry_split/metadata.pkl  (*_thetas / *_topologies)
 
 * ``geometry`` -- the NEW geometry-level split for measuring robustness to
-  UNSEEN sensor layouts. The 20 position-sets are partitioned into disjoint
-  train / val / test GEOMETRY pools (default 10/6/4). A geometry never crosses
+  UNSEEN sensor layouts. The position-sets (default 100) are partitioned into
+  disjoint train / val / test GEOMETRY pools (default 60/20/20, summing to the 100
+  position-sets). A geometry never crosses
   pools, so the val/test sets genuinely measure generalization to layouts the
   model never saw. Held-out geometries are further labelled INTERPOLATION
   (inside the training-centroid convex hull) or EXTRAPOLATION (outside), giving

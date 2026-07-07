@@ -34,7 +34,7 @@ layers a **dataset identity** from `config/dataset/<name>.yaml`.
 | Task | What it produces | Output root |
 |---|---|---|
 | **topology** | one dataset per sensor **topology** (ellipsoidal / random / aligned), all sharing the same trajectories + channels per θ | `data/topology_task/<method>/<topology>/channel_option_<θ>/` |
-| **random** | `n_position_sets` datasets of the **random** topology, each a distinct seeded layout | `data/random_task/<method>_<mode>/position_set_XX/channel_option_<θ>/random/` |
+| **random** | `n_position_sets` datasets (default 80) of the **random** topology, each a **translated compact sensor array** (per-set random centre offset → real sensor-displacement diversity; see `random_task.layout`) | `data/random_task/<method>_<mode>/position_set_XX/channel_option_<θ>/random/` |
 
 Each output dir contains `trajectory/`, `filtered_data/`, and `channel_info/`
 (sensor positions + full trajectory).
@@ -76,7 +76,7 @@ Defined in `channel:` of `config/data_pipeline.yaml`:
 | Knob | Default | Meaning |
 |---|---|---|
 | `channel_options` | `[0.1,0.2,0.3]` | θ values (channel variability; 0.0≈deterministic). |
-| `n_traj` | 100 | trajectories per (θ[, topology/position-set]). |
+| `n_traj` | 50 | trajectories per (θ[, topology/position-set]). Kept small for the random task — layout diversity, not trajectory count, is the axis that matters. |
 | `ppt` | 50 | points per trajectory. |
 | `df` | 50.0 | freq. resolution → **feature dim = (10000/df + 1) × 10** (df=50→2010, df=100→1010). |
 | `snr` | 10.0 | SNR [dB] of the filtered features. |
@@ -85,13 +85,14 @@ Defined in `channel:` of `config/data_pipeline.yaml`:
 | `nop` | -1 | joblib processes (-1 = all cores). |
 
 Task-specific: `topology_task.topologies`, `random_task.n_position_sets`,
-`random_task.distinct_trajectories`.
+`random_task.distinct_trajectories`, and the sensor-layout distribution
+`random_task.layout` (`offset_frac` = displacement OOD axis, `aperture_frac` =
+array size, `scale_jitter`; all fractions of the trajectory field extent).
 
 ```bash
-# Full theta sweep, higher-res features, more sensor sets:
+# More sensor layouts + a wider displacement axis (harder OOD):
 python data/generate.py dataset=random_spiral_shared \
-    channel.channel_options=[0.0,0.1,0.2,0.3,0.4,0.5] channel.df=100 \
-    random_task.n_position_sets=20
+    random_task.n_position_sets=120 random_task.layout.offset_frac=0.4
 ```
 
 > ⚠️ Generation runs the acoustic channel physics and is **compute-heavy**

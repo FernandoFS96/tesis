@@ -1071,8 +1071,11 @@ def process(channel_options, snr, rep, nop=-1, n_traj_override=None,
         validation_dir = (f'{out_dir}/{method}/validation' if variant_subdir
                           else f'{out_dir}/validation')
 
-        # Create validation plot for this option (only for the first option)
-        if option_idx == 0:
+        # Create validation plot for this option (only for the first option). The
+        # comparison figure inherently shows all three topologies side by side, so
+        # skip it for a subset generation (e.g. topologies=[random]).
+        if option_idx == 0 and all(
+                t in channels_for_validation for t in ('ellipsoidal', 'random', 'aligned')):
             plot_validation(channels_for_validation, option, validation_dir=validation_dir)
 
         assert trjs is not None, "Trajectories must be set after topology loop"
