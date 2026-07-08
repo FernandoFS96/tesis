@@ -290,7 +290,7 @@ class LatentModel(nn.Module):
         predict_with_prior: bool = False,
         ):
         # predict_with_prior: if True the DECODER is driven by the PRIOR latent
-        # (context only) even when target_y is supplied -- deployment-faithful
+        # (context only) even when target_y is supplied, deployment-faithful
         # inference. Posterior + KL/NLL are still computed for logging; only the z
         # driving the prediction changes. False = training (teacher forcing).
         # RNN aplicado internamente sobre la secuencia completa

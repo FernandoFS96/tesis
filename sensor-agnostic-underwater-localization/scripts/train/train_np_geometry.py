@@ -17,11 +17,11 @@ degradation exists per architecture - the gap the spatial encoder will close.
 WHY TWO CALLING CONVENTIONS (the one thing that matters here)
 -------------------------------------------------------------
 * cnp / anp  (anp.py): forward(context_x, context_y, target_x, target_y, beta)
-                        -- the caller pre-splits context and target into
+                       , the caller pre-splits context and target into
                         separate tensors.
 
 * ranp (r_anp.py): forward(x_seq, context_indices, context_y, target_indices,
-                        target_y, beta) -- the caller passes the FULL sequence
+                        target_y, beta), the caller passes the FULL sequence
                         (B, T, Dx) plus integer index tensors; the model runs
                         its internal LSTM over the whole sequence and splits by
                         index.
@@ -272,7 +272,7 @@ def model_forward(model, conv, batch, device, beta, with_target_y=True,
         tx = batch["target_x"].to(device)
         return model(cx, cy, tx, ty, beta, predict_with_prior=predict_with_prior,
                      sensor_pos=sp)
-    else:  # indexed (ranp) -- spatial encoder not wired for recurrent models
+    else:  # indexed (ranp), spatial encoder not wired for recurrent models
         x_seq = batch["x_seq"].to(device)
         ci = batch["context_indices"].to(device)
         ti = batch["target_indices"].to(device)
@@ -573,7 +573,7 @@ def main(cfg: DictConfig):
             f.write(f"{ep},{tr[0]:.6f},{tr[1]:.6f},{tr[2]:.6f},"
                     f"{va[0]:.6f},{va[1]:.6f},{va[2]:.6f},{lr_now:.2e},{dt:.1f}\n")
         # Break the (blended) val MAE down by held-out region so interp vs extrap
-        # are tracked separately -- the blended number is dominated by the few
+        # are tracked separately, the blended number is dominated by the few
         # extrapolation geometries. va[3] is {geometry_id: mae} from the val pass.
         region_maes = {}
         if region_by_gid:

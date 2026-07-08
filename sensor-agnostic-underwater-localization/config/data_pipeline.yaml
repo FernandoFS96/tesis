@@ -9,11 +9,11 @@
 # There are TWO problems, each with its own block below (they SHARE `method`,
 # the `channel:` knobs, and the spiral/hermite parameter blocks):
 #
-#   1. TOPOLOGY task (topology_task) -- three sensor topologies (ellipsoidal /
+#   1. TOPOLOGY task (topology_task), three sensor topologies (ellipsoidal /
 #      random / aligned) that all share the SAME trajectories and the SAME
 #      acoustic-channel levels; only the sensor arrangement changes.
 #
-#   2. RANDOM task (random_task) -- X randomly-placed sensor sets. The sets may
+#   2. RANDOM task (random_task), X randomly-placed sensor sets. The sets may
 #      SHARE one trajectory ensemble (distinct_trajectories: false; geometry is
 #      the only varying factor) or get their OWN trajectories per set
 #      (distinct_trajectories: true) depending on the subtask.
@@ -36,7 +36,7 @@ method: spiral # spiral | hermite
 channel:
   channel_options: [0.1, 0.2]  # theta values (channel variability; low band 0.1-0.3)
   n_traj: 50         # trajectories per (theta[, topology / position-set]). Random task:
-                     # kept small on purpose -- geometry DIVERSITY (n_position_sets),
+                     # kept small on purpose, geometry DIVERSITY (n_position_sets),
                      # not trajectory count, is the axis that matters for the
                      # sensor-displacement study. Topology task can be raised for a
                      # denser single-geometry fit (regenerate that task separately).
@@ -96,7 +96,7 @@ topology_task:
 # =============================================================================
 random_task:
   n_position_sets: 100          # distinct sensor layouts (the meta-learning "tasks").
-                               # Diversity here -- not n_traj -- is what an OOD-to-
+                               # Diversity here, not n_traj, is what an OOD-to-
                                # unseen-layout model needs.
   # false -> ONE shared trajectory ensemble reused by all sets (geometry is the
   #          only varying factor). true -> each set gets its OWN trajectories.
@@ -144,14 +144,14 @@ preprocess:
   save_dir: null
   thetas: null              # null -> all found; or e.g. [0.1, 0.2, 0.3]
 
-  # topology mode -- trajectory-index split (counts out of n_traj).
+  # topology mode, trajectory-index split (counts out of n_traj).
   topology_split:
     n_train: 70
     n_val: 20
     n_test: 10
     seed: 0
 
-  # position-set (geometry) mode -- how many sensor-layout geometries per pool.
+  # position-set (geometry) mode, how many sensor-layout geometries per pool.
   # Must sum to n_position_sets (100). 60/20/20 keeps the 60:20:20 proportion:
   # 60 meta-training layouts, 20+20 held out for a stable interp/extrap curve.
   geometry_split:

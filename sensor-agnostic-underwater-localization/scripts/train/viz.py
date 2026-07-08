@@ -8,24 +8,22 @@ watch the model improve as it trains.
 
 Everything in W&B is just ``wandb.log({key: media}, step=ep)``. Logging a
 ``wandb.Image`` under the SAME key across epochs gives you a step slider in the
-UI -- scrub it to animate how the prediction tightens onto the ground truth.
+UI, scrub it to animate how the prediction tightens onto the ground truth.
 
-Plots provided (each independently toggleable from config -- see
-``log_visualizations``):
+Plots provided (each independently toggleable from config, see ``log_visualizations``):
 
   pred_trajectory     predicted-vs-true trajectory overlay for a FIXED set of
                       validation trajectories, with context ("fix") points and
                       the model's predicted uncertainty drawn as ellipses.
   degradation_scatter per-geometry MAE vs sensor-centroid distance, coloured by
-                      region (train / interp / extrap) -- the out-of-position
+                      region (train / interp / extrap), the out-of-position
                       generalization metric, watched over training.
-  calibration         predicted std vs realized error (binned) -- is the latent
+  calibration         predicted std vs realized error (binned), is the latent
                       model's uncertainty trustworthy?
   error_histogram     distribution of per-point localization errors (heavy tails
                       hide behind a decent mean MAE).
-  streaming_drift     ONLINE model only: error as a function of
-                      timesteps-since-last-fix -- dead-reckoning drift between
-                      position fixes.
+  streaming_drift     ONLINE model only: error as a function of timesteps-since-last-fix,
+                      dead-reckoning drift between position fixes.
 
 The plot builders are deliberately self-contained (their own small forward
 helpers) so this module can also be imported by the eval script.
@@ -59,7 +57,7 @@ def select_fixed_trajectories(val_ds, n, seed=0):
     panel is representative. Returns a sorted list of dataset indices.
 
     These indices are chosen ONCE and reused every logging epoch, so the only
-    thing changing across the step slider is the model -- not which trajectory
+    thing changing across the step slider is the model, not which trajectory
     you happen to be looking at."""
     n = min(n, len(val_ds))
     by_geo = defaultdict(list)

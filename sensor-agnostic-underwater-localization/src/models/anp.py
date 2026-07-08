@@ -162,7 +162,7 @@ class FourierPositionEncoding(nn.Module):
     """Map a low-dim physical position to a higher-dim embedding via sinusoids at
     several spatial wavelengths (à la NeRF / PEACH). Wavelengths are in PHYSICAL
     metres (log-spaced over [min_wavelength, max_wavelength]) so positions can be
-    fed in their absolute frame -- do NOT centre/normalise per-geometry, or the
+    fed in their absolute frame, do NOT centre/normalise per-geometry, or the
     sensor-DISPLACEMENT signal we are trying to encode is erased.
 
     Output dim = in_dim * 2 * n_bands (sin & cos per band per coordinate)."""
@@ -187,7 +187,7 @@ class SpatialEncoder(nn.Module):
     """Sensor-position-aware front end. Turns each trajectory point's flat
     ``feat_dim = tau * n_sensors`` acoustic vector into a per-point ``num_hidden``
     embedding that is *permutation-equivariant over sensors* and tagged with each
-    sensor's physical position -- so a displaced layout is a new set of
+    sensor's physical position, so a displaced layout is a new set of
     (position, measurement) pairs rather than a scrambled vector.
 
     Pipeline (tokenize=True): per-sensor tokens -> concat Fourier position ->
@@ -196,7 +196,7 @@ class SpatialEncoder(nn.Module):
     Flags expose the ablation ladder:
       tokenize      False -> keep the flat vector, only (optionally) append a
                              flattened position embedding, then project (the
-                             "does it just need position?" control -- NOT
+                             "does it just need position?" control, NOT
                              permutation invariant).
       use_position  add Fourier position features (else pure acoustics).
       use_attention cross-sensor self-attention (else Deep-Sets pool only).
@@ -245,7 +245,7 @@ class SpatialEncoder(nn.Module):
                                     w_init='relu')
 
     def forward(self, x, sensor_pos):
-        # x: (B, N, feat_dim);  sensor_pos: (B, n_sensors, 3) -- constant over the
+        # x: (B, N, feat_dim);  sensor_pos: (B, n_sensors, 3), constant over the
         # N points of a trajectory (same geometry). Returns (B, N, num_hidden).
         B, N, F = x.shape
         pos = sensor_pos[..., :self.pos_dim] if self.use_position else None  # (B,S,pd)
@@ -328,7 +328,7 @@ class LatentModel(nn.Module):
     def forward(self, context_x, context_y, target_x, target_y=None, beta: float = 1.0,
                 predict_with_prior: bool = False, sensor_pos=None):
         # predict_with_prior: if True the DECODER is driven by the PRIOR latent
-        # (context only) even when target_y is supplied -- the deployment-faithful
+        # (context only) even when target_y is supplied, the deployment-faithful
         # path (at inference the latent cannot peek at target labels). The
         # posterior + KL/NLL are still computed when target_y is given, so the
         # validation loss stays comparable to training; only the z that drives the
