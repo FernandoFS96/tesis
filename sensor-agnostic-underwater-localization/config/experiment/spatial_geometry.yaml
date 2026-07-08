@@ -1,0 +1,42 @@
+# @package _global_
+# ============================================================================
+# Experiment: sensor-position-aware (spatial) NP on the held-out geometry split.
+# The spatial front end gives the model sensor_pos in a permutation-equivariant
+# form, so a displaced layout is a new set of (position, measurement) pairs
+# rather than a scrambled feature vector. This is the model meant to CLOSE the
+# out-of-position gap the flat baselines leave open.
+#
+#   python scripts/train/train_np_geometry.py experiment=spatial_geometry            # full ANP
+#   python scripts/train/train_np_geometry.py experiment=spatial_geometry model=cnp  # full CNP
+#
+# Data must be the geometry split (carries sensor_pos); generate + process first:
+#   python data/generate.py dataset=random_spiral_shared
+#   python data/process_data.py --data-root data/random_task/spiral_shared --mode geometry
+#
+# ---------------------------------------------------------------------------
+# ABLATION LADDER (attributes the gain: tokenization vs position vs attention).
+# Same data + protocol; override the spatial flags on the CLI:
+#
+#  1. flat baseline            model.spatial.enabled=false           (or experiment=geometry_ood)
+#  2. flat + position          model.spatial.tokenize=false          (not invariant; "just needs position?")
+#  3. tokens + attn, no pos    model.spatial.use_position=false      (invariance alone)
+#  4. tokens + pos, no attn    model.spatial.use_attention=false     (Deep-Sets; is attention needed?)
+#  5. full (this file)         model.spatial.{tokenize,use_position,use_attention}=true
+#
+# e.g.  python scripts/train/train_np_geometry.py experiment=spatial_geometry \
+#           model.spatial.use_attention=false exp_name=spatial_no_attn
+# ============================================================================
+defaults:
+  - override /dataset: random_spiral_shared
+  - override /data: geometry
+  - override /model: anp
+
+exp_name: spatial_geometry_spiral
+
+model:
+  spatial:
+    enabled: true
+
+training:
+  epochs: 1000
+  kl_warmup_epochs: 250

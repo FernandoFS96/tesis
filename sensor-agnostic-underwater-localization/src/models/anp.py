@@ -155,33 +155,188 @@ class Attention(nn.Module):
         return result, attns
 
 
+# =========================================================================== #
+# Spatial (sensor-position-aware) front-end encoder
+# =========================================================================== #
+class FourierPositionEncoding(nn.Module):
+    """Map a low-dim physical position to a higher-dim embedding via sinusoids at
+    several spatial wavelengths (à la NeRF / PEACH). Wavelengths are in PHYSICAL
+    metres (log-spaced over [min_wavelength, max_wavelength]) so positions can be
+    fed in their absolute frame -- do NOT centre/normalise per-geometry, or the
+    sensor-DISPLACEMENT signal we are trying to encode is erased.
+
+    Output dim = in_dim * 2 * n_bands (sin & cos per band per coordinate)."""
+
+    def __init__(self, n_bands=8, min_wavelength=10.0, max_wavelength=1000.0, in_dim=2):
+        super().__init__()
+        self.in_dim = in_dim
+        self.out_dim = in_dim * 2 * n_bands
+        wavelengths = t.logspace(math.log10(min_wavelength),
+                                 math.log10(max_wavelength), n_bands)
+        freqs = 2.0 * math.pi / wavelengths            # (n_bands,)
+        self.register_buffer("freqs", freqs)
+
+    def forward(self, pos):
+        # pos: (..., in_dim) in physical metres.
+        proj = pos[..., None] * self.freqs             # (..., in_dim, n_bands)
+        emb = t.cat([t.sin(proj), t.cos(proj)], dim=-1)  # (..., in_dim, 2*n_bands)
+        return emb.flatten(-2)                          # (..., in_dim*2*n_bands)
+
+
+class SpatialEncoder(nn.Module):
+    """Sensor-position-aware front end. Turns each trajectory point's flat
+    ``feat_dim = tau * n_sensors`` acoustic vector into a per-point ``num_hidden``
+    embedding that is *permutation-equivariant over sensors* and tagged with each
+    sensor's physical position -- so a displaced layout is a new set of
+    (position, measurement) pairs rather than a scrambled vector.
+
+    Pipeline (tokenize=True): per-sensor tokens -> concat Fourier position ->
+    shared projection -> [self-attention across sensors] -> pool -> per-point vec.
+
+    Flags expose the ablation ladder:
+      tokenize      False -> keep the flat vector, only (optionally) append a
+                             flattened position embedding, then project (the
+                             "does it just need position?" control -- NOT
+                             permutation invariant).
+      use_position  add Fourier position features (else pure acoustics).
+      use_attention cross-sensor self-attention (else Deep-Sets pool only).
+      pooling       'attention' (learned query) | 'mean'.
+
+    IMPORTANT reshape: the flat vector is tau-major / sensor-minor
+    (flat[k] = feature(tau = k // n_sensors, sensor = k % n_sensors)), so
+    ``x.view(..., tau, n_sensors)`` then move the sensor axis. A naive
+    ``view(..., n_sensors, tau)`` would mix sensors and silently break everything.
+    """
+
+    def __init__(self, feat_dim, n_sensors, num_hidden, *, tokenize=True,
+                 use_position=True, use_attention=True, n_attn_layers=1,
+                 pooling="attention", n_fourier_bands=8, min_wavelength=10.0,
+                 max_wavelength=1000.0, pos_dim=2, dropout=0.1):
+        super().__init__()
+        assert feat_dim % n_sensors == 0, \
+            f"feat_dim {feat_dim} not divisible by n_sensors {n_sensors}"
+        self.feat_dim = feat_dim
+        self.n_sensors = n_sensors
+        self.tau = feat_dim // n_sensors
+        self.tokenize = tokenize
+        self.use_position = use_position
+        self.use_attention = use_attention and tokenize
+        self.pooling = pooling
+        self.pos_dim = pos_dim
+        self.num_hidden = num_hidden
+
+        self.pos_enc = (FourierPositionEncoding(n_fourier_bands, min_wavelength,
+                                                max_wavelength, in_dim=pos_dim)
+                        if use_position else None)
+        pos_out = self.pos_enc.out_dim if use_position else 0
+
+        if tokenize:
+            # per-sensor token = (tau acoustic) [+ position embedding], shared proj
+            self.token_proj = Linear(self.tau + pos_out, num_hidden, w_init='relu')
+            if self.use_attention:
+                self.attn_layers = nn.ModuleList(
+                    [Attention(num_hidden, dropout=dropout) for _ in range(n_attn_layers)])
+            if pooling == "attention":
+                self.pool_query = nn.Parameter(t.randn(1, 1, num_hidden) * 0.02)
+                self.pool_attn = Attention(num_hidden, dropout=dropout)
+        else:
+            # flat control: raw feat vector [+ all sensors' position embeddings]
+            self.flat_proj = Linear(feat_dim + n_sensors * pos_out, num_hidden,
+                                    w_init='relu')
+
+    def forward(self, x, sensor_pos):
+        # x: (B, N, feat_dim);  sensor_pos: (B, n_sensors, 3) -- constant over the
+        # N points of a trajectory (same geometry). Returns (B, N, num_hidden).
+        B, N, F = x.shape
+        pos = sensor_pos[..., :self.pos_dim] if self.use_position else None  # (B,S,pd)
+
+        if not self.tokenize:
+            if self.use_position:
+                pe = self.pos_enc(pos).reshape(B, -1)          # (B, S*pos_out)
+                pe = pe[:, None, :].expand(B, N, -1)           # broadcast over points
+                x = t.cat([x, pe], dim=-1)
+            return t.relu(self.flat_proj(x))
+
+        # tau-major / sensor-minor -> (B, N, tau, S) -> (B, N, S, tau)
+        tok = x.view(B, N, self.tau, self.n_sensors).transpose(-1, -2)
+        if self.use_position:
+            pe = self.pos_enc(pos)                             # (B, S, pos_out)
+            pe = pe[:, None, :, :].expand(B, N, self.n_sensors, -1)
+            tok = t.cat([tok, pe], dim=-1)                     # (B, N, S, tau+pos_out)
+        tok = self.token_proj(tok)                            # (B, N, S, H)
+
+        tok = tok.reshape(B * N, self.n_sensors, self.num_hidden)
+        if self.use_attention:
+            for attn in self.attn_layers:
+                tok, _ = attn(tok, tok, tok)                   # self-attn over sensors
+        if self.pooling == "attention":
+            q = self.pool_query.expand(B * N, -1, -1)          # (B*N, 1, H)
+            pooled, _ = self.pool_attn(tok, tok, q)            # query attends sensors
+            pooled = pooled.squeeze(1)
+        else:
+            pooled = tok.mean(dim=1)                           # Deep-Sets mean pool
+        return pooled.view(B, N, self.num_hidden)
+
+
+def build_spatial_encoder(spatial_cfg, feat_dim, num_hidden, dropout):
+    """Instantiate a SpatialEncoder from a config mapping, or None if disabled.
+    Returns (encoder_or_None, encoder_output_dim). When enabled the downstream NP
+    encoders take ``num_hidden`` as their input_dim instead of the raw feat_dim."""
+    if not spatial_cfg:
+        return None, feat_dim
+    get = spatial_cfg.get
+    if not bool(get("enabled", False)):
+        return None, feat_dim
+    enc = SpatialEncoder(
+        feat_dim=feat_dim, n_sensors=int(get("n_sensors", 10)), num_hidden=num_hidden,
+        tokenize=bool(get("tokenize", True)),
+        use_position=bool(get("use_position", True)),
+        use_attention=bool(get("use_attention", True)),
+        n_attn_layers=int(get("n_attn_layers", 1)),
+        pooling=str(get("pooling", "attention")),
+        n_fourier_bands=int(get("n_fourier_bands", 8)),
+        min_wavelength=float(get("min_wavelength", 10.0)),
+        max_wavelength=float(get("max_wavelength", 1000.0)),
+        pos_dim=int(get("pos_dim", 2)), dropout=dropout)
+    return enc, num_hidden
+
+
 # LatentModel:
 
 class LatentModel(nn.Module):
-    def __init__(self, num_hidden, input_dim, output_dim, dropout=0.1):
+    def __init__(self, num_hidden, input_dim, output_dim, dropout=0.1, spatial_cfg=None):
         super(LatentModel, self).__init__()
+        # Optional sensor-position-aware front end. When enabled it maps the raw
+        # (B, N, feat_dim) acoustics to (B, N, num_hidden), so the NP encoders see
+        # num_hidden-dim inputs instead of the flat feat_dim.
+        self.spatial_encoder, enc_input_dim = build_spatial_encoder(
+            spatial_cfg, input_dim, num_hidden, dropout)
         self.latent_encoder = LatentEncoder(num_hidden, num_latent=num_hidden,
-                                            input_dim=input_dim,
+                                            input_dim=enc_input_dim,
                                             output_dim=output_dim,
                                             dropout=dropout)
         self.deterministic_encoder = DeterministicEncoder(num_hidden,
                                                           num_latent=num_hidden,
-                                                          input_dim=input_dim,
+                                                          input_dim=enc_input_dim,
                                                           output_dim=output_dim,
                                                           dropout=dropout)
         self.decoder = Decoder(num_hidden,
-                               input_dim=input_dim,
+                               input_dim=enc_input_dim,
                                output_dim=output_dim,
                                dropout=dropout)
 
     def forward(self, context_x, context_y, target_x, target_y=None, beta: float = 1.0,
-                predict_with_prior: bool = False):
+                predict_with_prior: bool = False, sensor_pos=None):
         # predict_with_prior: if True the DECODER is driven by the PRIOR latent
         # (context only) even when target_y is supplied -- the deployment-faithful
         # path (at inference the latent cannot peek at target labels). The
         # posterior + KL/NLL are still computed when target_y is given, so the
         # validation loss stays comparable to training; only the z that drives the
         # prediction changes. Use False for training (posterior teacher forcing).
+        if self.spatial_encoder is not None:
+            # sensor_pos is per-trajectory (same geometry for context & targets).
+            context_x = self.spatial_encoder(context_x, sensor_pos)
+            target_x = self.spatial_encoder(target_x, sensor_pos)
         num_targets = target_x.size(1)
         prior_mu, prior_var, prior = self.latent_encoder(context_x, context_y)
 
@@ -242,23 +397,28 @@ class DeterministicDecoder(nn.Module):
 
 class DeterministicModel(nn.Module):
     """CNP: attentive deterministic encoder + decoder, no latent variable."""
-    def __init__(self, num_hidden, input_dim, output_dim, dropout=0.1):
+    def __init__(self, num_hidden, input_dim, output_dim, dropout=0.1, spatial_cfg=None):
         super(DeterministicModel, self).__init__()
+        self.spatial_encoder, enc_input_dim = build_spatial_encoder(
+            spatial_cfg, input_dim, num_hidden, dropout)
         self.deterministic_encoder = DeterministicEncoder(num_hidden,
                                                           num_latent=num_hidden,
-                                                          input_dim=input_dim,
+                                                          input_dim=enc_input_dim,
                                                           output_dim=output_dim,
                                                           dropout=dropout)
         self.decoder = DeterministicDecoder(num_hidden,
-                                            input_dim=input_dim,
+                                            input_dim=enc_input_dim,
                                             output_dim=output_dim,
                                             dropout=dropout)
 
     def forward(self, context_x, context_y, target_x, target_y=None, beta: float = 1.0,
-                predict_with_prior: bool = False):
+                predict_with_prior: bool = False, sensor_pos=None):
         # predict_with_prior is accepted for a uniform interface with the latent
         # models but has no effect: a deterministic CNP never uses target labels
         # to predict, so there is no posterior to peek at.
+        if self.spatial_encoder is not None:
+            context_x = self.spatial_encoder(context_x, sensor_pos)
+            target_x = self.spatial_encoder(target_x, sensor_pos)
         r = self.deterministic_encoder(context_x, context_y, target_x)
         y_pred_mean, y_pred_var = self.decoder(r, target_x)
 

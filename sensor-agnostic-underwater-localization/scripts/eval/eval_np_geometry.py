@@ -56,14 +56,14 @@ import src.models.online_r_anp as online_mod  # type: ignore
 
 def build_model(name, num_hidden, input_dim, output_dim,
                 rnn_type="lstm", rnn_layers=1, rnn_dropout=0.0, dropout=0.1,
-                max_context=128):
+                max_context=128, spatial_cfg=None):
     name = name.lower()
     if name == "cnp":
         return anp_mod.DeterministicModel(num_hidden, input_dim, output_dim,
-                                          dropout=dropout), "split"
+                                          dropout=dropout, spatial_cfg=spatial_cfg), "split"
     if name == "anp":
         return anp_mod.LatentModel(num_hidden, input_dim, output_dim,
-                                   dropout=dropout), "split"
+                                   dropout=dropout, spatial_cfg=spatial_cfg), "split"
     if name == "ranp":
         return ranp_mod.LatentModel(num_hidden, input_dim, output_dim,
                                     rnn_type=rnn_type, rnn_layers=rnn_layers,
@@ -85,17 +85,23 @@ class TrajectoryDataset:
         self.samples = pickle.load(open(p, "rb"))
         x0 = np.asarray(self.samples[0]["X"]); y0 = np.asarray(self.samples[0]["y"])
         self.ppt, self.feat_dim = x0.shape; self.out_dim = y0.shape[-1]
+        sp0 = self.samples[0].get("sensor_pos", None)
+        self.has_sensor_pos = sp0 is not None
+        self.n_sensors = int(np.asarray(sp0).shape[0]) if sp0 is not None else None
     def __len__(self): return len(self.samples)
     def __getitem__(self, i):
         s = self.samples[i]
+        sp = s.get("sensor_pos", None)
+        sensor_pos = (t.as_tensor(np.asarray(sp, np.float32))
+                      if sp is not None else t.zeros(0))
         return (t.as_tensor(np.asarray(s["X"], np.float32)),
                 t.as_tensor(np.asarray(s["y"], np.float32)),
-                int(s.get("geometry_id", -1)), float(s.get("theta", -1.0)))
+                int(s.get("geometry_id", -1)), float(s.get("theta", -1.0)), sensor_pos)
 
 
 @t.no_grad()
 def forward_one(model, conv, X, y, idx, device, shuffle_temporal=False, perm=None,
-                tgt_idx=None):
+                tgt_idx=None, sensor_pos=None):
     """Single-trajectory forward for either convention. X,y: (1, ppt, ·).
 
     `tgt_idx` selects which points are predicted/returned. If None, all ppt
@@ -122,7 +128,7 @@ def forward_one(model, conv, X, y, idx, device, shuffle_temporal=False, perm=Non
         cy = ys[:, idx_s, :]
         if conv == "split":
             cx = Xs[:, idx_s, :]; tx = Xs[:, ti_s, :]
-            mean, var, *rest = model(cx, cy, tx, None)
+            mean, var, *rest = model(cx, cy, tx, None, sensor_pos=sensor_pos)
         else:
             mean, var, *rest = model(Xs, idx_s, cy, ti_s, None)
         # predictions are already in tgt_idx order (we queried those points)
@@ -130,7 +136,7 @@ def forward_one(model, conv, X, y, idx, device, shuffle_temporal=False, perm=Non
     cy = y[:, idx, :]
     if conv == "split":
         cx = X[:, idx, :]; tx = X[:, tgt_idx, :]
-        return model(cx, cy, tx, None)
+        return model(cx, cy, tx, None, sensor_pos=sensor_pos)
     else:
         return model(X, idx, cy, tgt_idx, None)
 
@@ -146,8 +152,9 @@ def per_geometry_mae(model, conv, ds, device, eval_ctx, n_draws, seed=0,
     ys = y_std.to(device)  if y_std  is not None else None
     for _ in range(n_draws):
         for i in range(len(ds)):
-            X, y, gid, th = ds[i]
+            X, y, gid, th, sensor_pos = ds[i]
             X = X.unsqueeze(0).to(device); y = y.unsqueeze(0).to(device)
+            sp = sensor_pos.unsqueeze(0).to(device) if sensor_pos.numel() > 0 else None
             y_raw = y
             ppt = X.size(1)
             n_ctx = max(1, min(eval_ctx, ppt))
@@ -166,7 +173,7 @@ def per_geometry_mae(model, conv, ds, device, eval_ctx, n_draws, seed=0,
             y_in = (y - ym) / ys if ym is not None else y
             mean, var, *_ = forward_one(model, conv, X, y_in, idx, device,
                                         shuffle_temporal=shuffle_temporal,
-                                        tgt_idx=tgt_idx)
+                                        tgt_idx=tgt_idx, sensor_pos=sp)
             if ym is not None:
                 mean = mean * ys + ym
             y_tgt = y_raw[:, tgt_idx, :]                              # score targets only
@@ -194,7 +201,7 @@ def per_geometry_mae_online(model, ds, device, eval_ctx, n_draws, chunk_size,
     ys = y_std.to(device)  if y_std  is not None else None
     for _ in range(n_draws):
         for i in range(len(ds)):
-            X, y, gid, th = ds[i]
+            X, y, gid, th, _sp = ds[i]   # online models are not spatial; ignore sensor_pos
             X = X.unsqueeze(0).to(device); y = y.unsqueeze(0).to(device)
             ppt = X.size(1)
             n_ctx = max(1, min(eval_ctx, ppt))
@@ -325,13 +332,17 @@ def main():
     feat_dim = ck.get("feat_dim"); out_dim = ck.get("out_dim", 3)
     cfg = ck.get("config", {})
     nh = cfg.get("num_hidden", 128)
+    spatial_cfg = cfg.get("spatial", None)  # resolved dict (with n_sensors) or None
     model, conv2 = build_model(name, nh, feat_dim, out_dim,
                                rnn_type=cfg.get("rnn_type", "lstm"),
                                rnn_layers=cfg.get("rnn_layers", 1),
                                rnn_dropout=cfg.get("rnn_dropout", 0.0),
                                dropout=cfg.get("dropout", 0.1),
-                               max_context=cfg.get("max_context", 128))
+                               max_context=cfg.get("max_context", 128),
+                               spatial_cfg=spatial_cfg)
     conv = conv or conv2
+    if spatial_cfg:
+        print(f"[eval] spatial encoder ON (n_sensors={spatial_cfg.get('n_sensors')})")
     model = model.to(device); model.load_state_dict(ck["model"])
 
     # online streaming granularity: CLI overrides checkpoint config

@@ -2,3 +2,21 @@
 name: anp
 num_hidden: 128
 dropout: 0.3      # dropout prob for attention + decoder-MLP LayerNorm/dropout
+
+# Sensor-position-aware front end (default OFF -> flat baseline). When enabled it
+# tokenizes each point's features by sensor, tags each with its Fourier-encoded
+# physical position, attends across sensors, and pools to a per-point vector -->
+# permutation-equivariant over sensors (see src/models/anp.py:SpatialEncoder).
+# Requires the geometry split (data=geometry, carries sensor_pos); n_sensors is
+# inferred from the data. Ablations: flip use_position / use_attention / tokenize.
+spatial:
+  enabled: false
+  tokenize: true         # per-sensor tokens (invariant). false -> flat+position control
+  use_position: true     # add Fourier position features per sensor
+  use_attention: true    # cross-sensor self-attention (else Deep-Sets pool only)
+  pooling: attention     # attention (learned query) | mean
+  n_attn_layers: 1
+  n_fourier_bands: 8
+  min_wavelength: 10.0    # metres; span the sensor-displacement scale
+  max_wavelength: 1000.0
+  pos_dim: 2             # (x, y); sensors share a constant depth

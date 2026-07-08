@@ -2,3 +2,18 @@
 name: cnp
 num_hidden: 128
 dropout: 0.2        # dropout prob for attention + decoder-MLP LayerNorm/dropout
+
+# Sensor-position-aware front end (default OFF -> flat baseline). See anp.yaml for
+# the full description; requires the geometry split (data=geometry). Ablations:
+# flip use_position / use_attention / tokenize.
+spatial:
+  enabled: false
+  tokenize: true         # per-sensor tokens (invariant). false -> flat+position control
+  use_position: true     # add Fourier position features per sensor
+  use_attention: true    # cross-sensor self-attention (else Deep-Sets pool only)
+  pooling: attention     # attention (learned query) | mean
+  n_attn_layers: 1
+  n_fourier_bands: 8
+  min_wavelength: 10.0    # metres; span the sensor-displacement scale
+  max_wavelength: 1000.0
+  pos_dim: 2             # (x, y); sensors share a constant depth
