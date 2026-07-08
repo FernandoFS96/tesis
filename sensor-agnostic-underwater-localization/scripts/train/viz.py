@@ -100,15 +100,16 @@ def _draw_ctx_idx(ppt, n_ctx, ctx_sample_mode, rng, device):
 # Per-trajectory prediction over ALL points (so the whole path can be drawn)
 # --------------------------------------------------------------------------- #
 @t.no_grad()
-def _predict_offline_all(model, conv, X, y_norm, ctx_idx, device):
+def _predict_offline_all(model, conv, X, y_norm, ctx_idx, device, sensor_pos=None):
     """X,y_norm: (1, ppt, .). Returns mean, var over ALL ppt points (normalized
-    space). conv in {'split', 'indexed'}."""
+    space). conv in {'split', 'indexed'}. sensor_pos (1, n_sensors, 3) is passed
+    for spatial-encoder models (split only); ignored by flat / recurrent ones."""
     ppt = X.size(1)
     tgt_idx = t.arange(ppt, device=device, dtype=t.long)
     cy = y_norm[:, ctx_idx, :]
     if conv == "split":
         cx = X[:, ctx_idx, :]; tx = X[:, tgt_idx, :]
-        mean, var, *_ = model(cx, cy, tx, None)
+        mean, var, *_ = model(cx, cy, tx, None, sensor_pos=sensor_pos)
     else:  # indexed (ranp)
         mean, var, *_ = model(X, ctx_idx, cy, tgt_idx, None)
     return mean, var
@@ -150,15 +151,16 @@ def _gather_predictions(model, conv, ds, fixed_idx, device, *, val_ctx,
     rng = np.random.default_rng(seed)
     out = []
     for i in fixed_idx:
-        X, y, gid, _ = ds[i]
+        X, y, gid, _, sensor_pos = ds[i]
         X = X.unsqueeze(0).to(device); y = y.unsqueeze(0).to(device)
+        sp = sensor_pos.unsqueeze(0).to(device) if sensor_pos.numel() > 0 else None
         ppt = X.size(1)
         y_norm = (y - ym) / ys if ym is not None else y
         ctx_idx = _draw_ctx_idx(ppt, val_ctx, ctx_sample_mode, rng, device)
         if conv == "online":
             mean, var = _predict_online_all(model, X, y_norm, ctx_idx, chunk_size, device)
         else:
-            mean, var = _predict_offline_all(model, conv, X, y_norm, ctx_idx, device)
+            mean, var = _predict_offline_all(model, conv, X, y_norm, ctx_idx, device, sensor_pos=sp)
         # back to physical units
         if ym is not None:
             mean = mean * ys + ym
@@ -318,15 +320,16 @@ def _per_geometry_mae(model, conv, ds, device, *, val_ctx, ctx_sample_mode,
     rng = np.random.default_rng(seed)
     err_sum = defaultdict(float); err_cnt = defaultdict(int)
     for i in range(len(ds)):
-        X, y, gid, _ = ds[i]
+        X, y, gid, _, sensor_pos = ds[i]
         X = X.unsqueeze(0).to(device); y = y.unsqueeze(0).to(device)
+        sp = sensor_pos.unsqueeze(0).to(device) if sensor_pos.numel() > 0 else None
         ppt = X.size(1)
         y_norm = (y - ym) / ys if ym is not None else y
         ctx_idx = _draw_ctx_idx(ppt, val_ctx, ctx_sample_mode, rng, device)
         if conv == "online":
             mean, _ = _predict_online_all(model, X, y_norm, ctx_idx, chunk_size, device)
         else:
-            mean, _ = _predict_offline_all(model, conv, X, y_norm, ctx_idx, device)
+            mean, _ = _predict_offline_all(model, conv, X, y_norm, ctx_idx, device, sensor_pos=sp)
         mean = mean * ys + ym if ym is not None else mean
         ctx_mask = t.zeros(ppt, dtype=t.bool); ctx_mask[ctx_idx.cpu()] = True
         tgt = (~ctx_mask if exclude_ctx_from_target else t.ones(ppt, dtype=t.bool))

@@ -49,6 +49,7 @@ sensor-agnostic-underwater-localization/data/random_task/
 sensor-agnostic-underwater-localization/data/validation/
 sensor-agnostic-underwater-localization/data/data_random_positions/
 sensor-agnostic-underwater-localization/output/
+sensor-agnostic-underwater-localization/PEACH.pdf
 
 # wandb raw run logs are large binaries — never commit them (GitHub 100MB limit)
 *.wandb

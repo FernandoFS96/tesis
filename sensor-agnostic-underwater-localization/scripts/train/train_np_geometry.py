@@ -92,14 +92,16 @@ import viz  # type: ignore  # noqa: E402  # periodic W&B training visualizations
 # --------------------------------------------------------------------------- #
 def build_model(name, num_hidden, input_dim, output_dim,
                 rnn_type="lstm", rnn_layers=1, rnn_dropout=0.0, dropout=0.1,
-                max_context=128):
+                max_context=128, spatial_cfg=None):
     name = name.lower()
+    if spatial_cfg and name not in ("cnp", "anp"):
+        raise ValueError(f"spatial encoder is only wired for cnp/anp, not '{name}'")
     if name == "cnp":
         return anp_mod.DeterministicModel(num_hidden, input_dim, output_dim,
-                                          dropout=dropout), "split"
+                                          dropout=dropout, spatial_cfg=spatial_cfg), "split"
     if name == "anp":
         return anp_mod.LatentModel(num_hidden, input_dim, output_dim,
-                                   dropout=dropout), "split"
+                                   dropout=dropout, spatial_cfg=spatial_cfg), "split"
     if name == "ranp":
         return (ranp_mod.LatentModel(num_hidden, input_dim, output_dim,
                                      rnn_type=rnn_type, rnn_layers=rnn_layers,
@@ -145,6 +147,10 @@ class TrajectoryDataset(Dataset):
         x0 = np.asarray(self.samples[0]["X"]); y0 = np.asarray(self.samples[0]["y"])
         self.ppt, self.feat_dim = x0.shape
         self.out_dim = y0.shape[-1]
+        # sensor_pos present only for the geometry split; n_sensors inferred from it.
+        sp0 = self.samples[0].get("sensor_pos", None)
+        self.has_sensor_pos = sp0 is not None
+        self.n_sensors = int(np.asarray(sp0).shape[0]) if sp0 is not None else None
 
     def __len__(self):
         return len(self.samples)
@@ -153,7 +159,10 @@ class TrajectoryDataset(Dataset):
         s = self.samples[i]
         X = t.as_tensor(np.asarray(s["X"], dtype=np.float32))
         y = t.as_tensor(np.asarray(s["y"], dtype=np.float32))
-        return X, y, int(s.get("geometry_id", -1)), float(s.get("theta", -1.0))
+        sp = s.get("sensor_pos", None)
+        sensor_pos = (t.as_tensor(np.asarray(sp, dtype=np.float32))
+                      if sp is not None else t.zeros(0))
+        return X, y, int(s.get("geometry_id", -1)), float(s.get("theta", -1.0)), sensor_pos
 
 
 def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None, ctx_sample_mode="random",
@@ -177,6 +186,9 @@ def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None, ctx_sample_mode="r
         ys = t.stack([b[1] for b in batch], dim=0)   # (B, ppt, 3)
         gids = t.tensor([b[2] for b in batch])
         ths = t.tensor([b[3] for b in batch])
+        sps = [b[4] for b in batch]
+        sensor_pos = (t.stack(sps, dim=0)            # (B, n_sensors, 3)
+                      if all(sp.numel() > 0 for sp in sps) else None)
         B, ppt, _ = Xs.shape
         n_ctx = int(fixed_ctx) if fixed_ctx is not None else int(rng.integers(ctx_min, ctx_max + 1))
         n_ctx = max(1, min(n_ctx, ppt))
@@ -199,7 +211,7 @@ def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None, ctx_sample_mode="r
             "context_indices": ctx_idx, "target_indices": tgt_idx,
             "context_x": Xs[:, ctx_idx, :], "context_y": ys[:, ctx_idx, :],
             "target_x": Xs[:, tgt_idx, :], "target_y": ys[:, tgt_idx, :],
-            "gids": gids, "thetas": ths,
+            "gids": gids, "thetas": ths, "sensor_pos": sensor_pos,
         }
     return collate
 
@@ -221,6 +233,9 @@ def make_online_collate(ctx_min, ctx_max, chunk_size, fixed_ctx=None, seed=None,
         ys = t.stack([b[1] for b in batch], dim=0)   # (B, ppt, 3)
         gids = t.tensor([b[2] for b in batch])
         ths = t.tensor([b[3] for b in batch])
+        sps = [b[4] for b in batch]
+        sensor_pos = (t.stack(sps, dim=0)
+                      if all(sp.numel() > 0 for sp in sps) else None)
         B, ppt, _ = Xs.shape
         n_ctx = int(fixed_ctx) if fixed_ctx is not None else int(rng.integers(ctx_min, ctx_max + 1))
         n_ctx = max(1, min(n_ctx, ppt))
@@ -231,7 +246,7 @@ def make_online_collate(ctx_min, ctx_max, chunk_size, fixed_ctx=None, seed=None,
         return {
             "x_seq": Xs, "y_seq": ys,
             "ctx_idx": ctx_idx, "chunk_size": int(chunk_size),
-            "gids": gids, "thetas": ths,
+            "gids": gids, "thetas": ths, "sensor_pos": sensor_pos,
         }
     return collate
 
@@ -250,11 +265,14 @@ def model_forward(model, conv, batch, device, beta, with_target_y=True,
                                        predict_with_prior=predict_with_prior)
     cy = batch["context_y"].to(device)
     ty = batch["target_y"].to(device) if with_target_y else None
+    sp = batch.get("sensor_pos")
+    sp = sp.to(device) if sp is not None else None
     if conv == "split":
         cx = batch["context_x"].to(device)
         tx = batch["target_x"].to(device)
-        return model(cx, cy, tx, ty, beta, predict_with_prior=predict_with_prior)
-    else:  # indexed (ranp)
+        return model(cx, cy, tx, ty, beta, predict_with_prior=predict_with_prior,
+                     sensor_pos=sp)
+    else:  # indexed (ranp) -- spatial encoder not wired for recurrent models
         x_seq = batch["x_seq"].to(device)
         ci = batch["context_indices"].to(device)
         ti = batch["target_indices"].to(device)
@@ -454,6 +472,24 @@ def main(cfg: DictConfig):
         num_workers=cfg.training.num_workers,
         collate_fn=val_collate)
 
+    # ---- spatial encoder config (sensor-position-aware front end) -----------
+    # Enabled via model.spatial.enabled; n_sensors is inferred from the data
+    # (present only for the geometry split, which carries sensor_pos).
+    spatial_cfg = None
+    _sc = cfg.model.get("spatial", None)
+    if _sc is not None and bool(_sc.get("enabled", False)):
+        if not train_ds.has_sensor_pos:
+            raise SystemExit(
+                "model.spatial.enabled=true but the dataset has no 'sensor_pos' "
+                "(use the geometry split: data=geometry).")
+        spatial_cfg = dict(OmegaConf.to_container(_sc, resolve=True))  # type: ignore[arg-type]
+        spatial_cfg["n_sensors"] = train_ds.n_sensors
+        print(f"[{model_name}] spatial encoder ON: n_sensors={train_ds.n_sensors} "
+              f"tokenize={spatial_cfg.get('tokenize', True)} "
+              f"pos={spatial_cfg.get('use_position', True)} "
+              f"attn={spatial_cfg.get('use_attention', True)} "
+              f"pool={spatial_cfg.get('pooling', 'attention')}")
+
     # ---- model -------------------------------------------------------------
     model, conv = build_model(
         model_name, cfg.model.num_hidden, feat_dim, out_dim,
@@ -461,7 +497,8 @@ def main(cfg: DictConfig):
         rnn_layers=cfg.model.get("rnn_layers", 1),
         rnn_dropout=cfg.model.get("rnn_dropout", 0.0),
         dropout=cfg.model.get("dropout", 0.1),
-        max_context=cfg.model.get("max_context", 128))
+        max_context=cfg.model.get("max_context", 128),
+        spatial_cfg=spatial_cfg)
     model = model.to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"[{model_name}] convention={conv}  params={n_params/1e6:.2f}M  device={device}")
@@ -491,6 +528,7 @@ def main(cfg: DictConfig):
         return base_beta * min(1.0, ep / float(kl_warmup))
 
     ckpt_cfg = flat_ckpt_config(cfg, str(device))
+    ckpt_cfg["spatial"] = spatial_cfg  # None if disabled; lets eval rebuild the model
 
     # ---- periodic visualizations (optional) --------------------------------
     viz_cfg = wb.get("viz", None)
