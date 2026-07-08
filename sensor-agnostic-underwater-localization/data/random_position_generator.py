@@ -15,7 +15,7 @@ It produces ``n_position_sets`` (default 80) datasets that differ **only in the
      position-set, so sensor geometry is the only varying factor; in ``distinct``
      mode each set gets its own ensemble.
   2. For each position-set, draws a *different* random sensor layout
-     (RANDOM topology only) via ``random_sensor_positions`` -- a COMPACT array
+     (RANDOM topology only) via ``random_sensor_positions``, a COMPACT array
      whose CENTRE is translated by a per-set random offset (the sensor-
      displacement OOD axis; see ``random_task.layout``), NOT a re-jitter of one
      fixed box. It then simulates the channel and filtered acoustic features.
@@ -29,7 +29,7 @@ Design notes vs the original ``acoustic_data_generator.py``:
   * Each position-set ``p`` uses its own reproducible layout seed
     (``master_seed + 1000 + p``), and the layout is a translated compact array
     parameterised by ``random_task.layout`` (``aperture_frac``, ``offset_frac``,
-    ``scale_jitter``) -- so the 80 layouts genuinely span sensor displacement.
+    ``scale_jitter``), so the 80 layouts genuinely span sensor displacement.
   * All feature/physics knobs (``df``, ``n_traj``, ``ppt``, ...) come from the
     shared ``channel`` block of ``config/data_pipeline.yaml``.
   * Sensor positions and the layout params are always saved next to the data
@@ -158,7 +158,7 @@ def random_sensor_positions(traj, n_sensors, hr0, layout_seed,
     ONE fixed box centred on the trajectory field (the old behaviour, which made
     all layouts nearly identical), this places a COMPACT array whose CENTRE is
     translated by a per-set random offset. Translation is the controlled OOD axis
-    -- "where the sensors sit changes between runs" -- while the aperture stays
+   , "where the sensors sit changes between runs", while the aperture stays
     roughly fixed so the localization conditioning (the difficulty floor) is
     preserved. All knobs are fractions of the trajectory field's per-axis extent,
     so the same config works for any trajectory family (spiral, hermite, ...).
@@ -302,7 +302,7 @@ def generate_one(option, position_set_idx, trajectories, layout_seed,
             f"[set {position_set_idx}, theta {option}] channel did NOT reuse the "
             f"supplied trajectories (max|diff|="
             f"{np.abs(np.asarray(c.traj) - np.asarray(trajectories)).max():.3g})."
-            " Precomputed-trajectory invariant violated -- aborting before writing."
+            " Precomputed-trajectory invariant violated, aborting before writing."
         )
     if not np.array_equal(np.asarray(c.r_posicion), r_posicion):
         raise RuntimeError(

@@ -12,7 +12,7 @@ MODES (preprocess.mode, or --mode)
   ONE training-ready dataset PER topology (ellipsoidal / random / aligned). All
   channel options (thetas) of a topology are POOLED, and the train/val/test
   split is by TRAJECTORY INDEX (default ratio 70/20/10, rescaled to whatever
-  n_traj the data actually contains) -- the same trajectory indices for every
+  n_traj the data actually contains), the same trajectory indices for every
   theta, so no trajectory leaks across splits.
   Output (dict schema, matching geometry mode so the trainer reads it as-is):
       <save-dir>/topology_<name>/{train,val,test}_data.pkl
@@ -26,7 +26,7 @@ MODES (preprocess.mode, or --mode)
   ``data_process_topology.py``: for each (theta, geometry) it splits the 100
   trajectories 70/20/10 into train/val/test. Every geometry appears in all three
   splits (val/test are unseen TRAJECTORIES of SEEN layouts), so a no-spatial-
-  encoder baseline can generalize -- this reproduces the "normal model like
+  encoder baseline can generalize, this reproduces the "normal model like
   before". Output uses the dict schema (matching geometry/topology modes) so the
   trainer reads it unchanged:
       <save-dir>/within_geometry_split/{train,val,test}_data.pkl
@@ -85,7 +85,7 @@ geometry mode:
         metadata.pkl     thetas, geometry_ids, interp/extrap labels, tau, n_sensors
         splits.json      FROZEN record: which position-sets are train/val/test,
                          each held-out set's interp/extrap label + centroid/dist.
-                         Version-control this -- it is the experiment contract.
+                         Version-control this, it is the experiment contract.
 
 USAGE
 -----
@@ -437,7 +437,7 @@ def trajectory_index_split(n_traj, n_train, n_val, n_test, seed=0):
     any remainder goes to train, so the three splits always sum to n_traj).
 
     The same indices are applied to every channel option (theta), so all thetas
-    of a given physical trajectory land in the SAME split -- this is what keeps
+    of a given physical trajectory land in the SAME split, this is what keeps
     val/test from leaking trajectories the model trained on. Returns three
     sorted index lists (train, val, test)."""
     total = n_train + n_val + n_test

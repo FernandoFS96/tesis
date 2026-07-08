@@ -17,7 +17,7 @@ defaults:
   - wandb: default
   - experiment: null           # opt-in bundles: `experiment=<name>` (see config/experiment/)
 
-# Experiment identity -- used as the wandb group name and to organise outputs.
+# Experiment identity, used as the wandb group name and to organise outputs.
 exp_name: hermite_random_topology
 
 seed: 1

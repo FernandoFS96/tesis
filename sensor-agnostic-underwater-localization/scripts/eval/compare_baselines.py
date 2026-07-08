@@ -9,7 +9,7 @@ Two things it produces:
     per-pool MAE, degradation %, and the extrap-interp gap for each model, side by side.
 
   2. If context-sweep CSVs are present (from eval_np_geometry.py --eval-ctx-sweep),
-     an OVERLAID MAE-vs-context figure across models -- the decisive diagnostic for whether a model's accuracy depends on temporal context 
+     an OVERLAID MAE-vs-context figure across models, the decisive diagnostic for whether a model's accuracy depends on temporal context 
      (recurrent models interpolating the trajectory through time) versus per-point acoustic localization. 
      A model whose held-out MAE stays low even at context size 1-2 is doing acoustic localization; one that needs many context points is leaning on temporal smoothness.
 
@@ -175,7 +175,7 @@ def main():
         fig2.savefig(os.path.join(args.out_dir, "degradation_overlay.png"), dpi=200)
         print("wrote context_sweep_overlay.png and degradation_overlay.png")
     else:
-        print("(no context_sweep.csv found in any eval dir -- run eval with "
+        print("(no context_sweep.csv found in any eval dir, run eval with "
               "--eval-ctx-sweep to enable the temporal-reliance overlay)")
 
 

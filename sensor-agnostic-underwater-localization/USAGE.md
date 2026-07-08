@@ -124,7 +124,7 @@ mode emits the **same sample schema**:
 random modes need `--data-root data/random_task/<method>_<mode>`.
 
 ```bash
-# Topology -- one run PER method; outputs auto-separate to
+# Topology, one run PER method; outputs auto-separate to
 # data/topology_task/<method>/processed/topology_<name>/ (no --save-dir needed):
 python data/process_data.py --mode topology --method spiral
 python data/process_data.py --mode topology --method hermite

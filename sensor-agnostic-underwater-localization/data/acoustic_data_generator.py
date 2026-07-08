@@ -290,8 +290,8 @@ class channel():
         * The knot tangent *directions* form a slowly-turning sequence: the
           first is uniform over all directions, and each subsequent one differs
           from the previous by at most ``max_turn`` radians. This keeps the
-          cosine distance between consecutive tangents small -- no sudden
-          turn-arounds -- while still allowing the path to wander.
+          cosine distance between consecutive tangents small, no sudden
+          turn-arounds, while still allowing the path to wander.
         * Waypoints step along those same directions, so each segment leaves a
           knot in its tangent direction (no cusps / overshoot).
         * Tangent magnitudes are tied to the adjacent segment lengths
@@ -301,7 +301,7 @@ class channel():
 
         Why this suits the context task: the first few points lie on the first
         segment and reveal roughly the first knot/tangent, but the later
-        waypoints are sampled independently and stay hidden -- so the first 5
+        waypoints are sampled independently and stay hidden, so the first 5
         context points do not determine the rest of the trajectory.
         """
         assert self.params is not None, "params must be initialized"
@@ -1030,7 +1030,7 @@ def process(channel_options, snr, rep, nop=-1, n_traj_override=None,
             # (and their matched features) are stored in the SAME order for every
             # topology. Without it, channel.filter() draws a RANDOM trajectory
             # ordering (np.random.choice over n_traj) per call, which would store
-            # each topology's trajectories in a different row order -- breaking
+            # each topology's trajectories in a different row order, breaking
             # row-alignment across geometries (trajectory i in 'ellipsoidal' would
             # not correspond to trajectory i in 'random') even though they share
             # the same underlying ensemble.
