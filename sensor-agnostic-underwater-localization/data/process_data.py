@@ -342,7 +342,7 @@ def build_geometry_samples(set_dirs_by_id, ids, thetas):
             for j in range(X.shape[0]):
                 samples.append({
                     "X": X[j], "y": y[j], "sensor_pos": pos,
-                    "geometry_id": int(sid), "theta": float(th),
+                    "geometry_id": int(sid), "theta": float(th), "traj_id": int(j),
                 })
                 geom_ids.append(int(sid)); theta_list.append(float(th))
     assert len(tau_seen) == 1 and len(ns_seen) == 1, \
@@ -509,7 +509,7 @@ def run_topology(data_root, method, save_base, thetas_filter,
                 for j in idxs:
                     pools[pool].append({
                         "X": X[j], "y": y[j],
-                        "theta": float(th), "topology": name,
+                        "theta": float(th), "topology": name, "traj_id": int(j),
                     })
                     pool_thetas[pool].append(float(th))
 

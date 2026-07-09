@@ -13,3 +13,14 @@ ctx_sample_mode: first   # 'first': ordered prefix | 'random': random subset
 
 # Streaming granularity for the online model (model=online_ranp); offline ignore.
 chunk_size: 8
+
+# Cap the number of TRAINING geometries (null = use all). Only affects the train
+# pool; val/test stay fixed. Keeps the first N distinct geometry_ids (sorted), so
+# 10 subset of 20 subset of 40 -- for "how many sensor layouts do we need?" sweeps.
+max_train_geometries: null
+
+# Cap the number of TRAINING trajectories / source paths (null = use all). Same
+# idea on the trajectory axis; composes with max_train_geometries so the training
+# set is (first N layouts) x (first M paths). Needs data with traj_id (geometry /
+# topology modes). val/test stay fixed (Option 1: test uses all trajectories).
+max_train_trajectories: null

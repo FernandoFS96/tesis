@@ -37,6 +37,11 @@ training:
   # converging setup warmed up over 500 epochs. Set 0 to disable (constant beta).
   kl_warmup_epochs: 500
   num_workers: 1
+  # Early stopping on validation MAE: stop after this many epochs with no
+  # improvement (> early_stop_min_delta). 0/null disables (train the full epochs).
+  # The counter shows in the tqdm bar as es=<counter>/<patience>.
+  early_stop_patience: 200
+  early_stop_min_delta: 0.0
 
 
 

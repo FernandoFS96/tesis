@@ -420,6 +420,29 @@ def main(cfg: DictConfig):
     print(f"[{model_name}] cwd={os.getcwd()}  data_dir={data_dir}")
     train_ds = TrajectoryDataset(os.path.join(data_dir, "train_data.pkl"))
     val_ds = TrajectoryDataset(os.path.join(data_dir, "val_data.pkl"))
+
+    # Optionally cap the number of TRAINING geometries (val/test untouched) so a
+    # "how many sensor layouts do we need?" sweep holds the held-out set fixed and
+    # only varies training coverage. Keeps the FIRST N distinct geometry_ids
+    # (sorted) -> nested subsets (10 subset of 20 subset of 40) for a clean curve.
+    max_train_geoms = cfg.data.get("max_train_geometries", None)
+    if max_train_geoms:
+        keep = sorted(set(int(s.get("geometry_id", -1)) for s in train_ds.samples))[:int(max_train_geoms)]
+        keep_set = set(keep)
+        train_ds.samples = [s for s in train_ds.samples if int(s.get("geometry_id", -1)) in keep_set]
+        print(f"[{model_name}] capped training to {len(keep)} geometries: {keep}")
+
+    # Optionally cap the number of TRAINING trajectories (source paths). Composes
+    # with the geometry cap -> training = (first N layouts) x (first M paths).
+    # Keeps the first M distinct traj_ids (sorted) -> nested subsets. Needs data
+    # processed with traj_id (geometry / topology modes); no-op on older data.
+    max_train_trajs = cfg.data.get("max_train_trajectories", None)
+    if max_train_trajs:
+        keep_t = sorted(set(int(s.get("traj_id", -1)) for s in train_ds.samples))[:int(max_train_trajs)]
+        keep_tset = set(keep_t)
+        train_ds.samples = [s for s in train_ds.samples if int(s.get("traj_id", -1)) in keep_tset]
+        print(f"[{model_name}] capped training to {len(keep_t)} trajectories")
+
     feat_dim, out_dim, ppt = train_ds.feat_dim, train_ds.out_dim, train_ds.ppt
     print(f"[{model_name}] feat_dim={feat_dim} out_dim={out_dim} ppt={ppt} "
           f"| train={len(train_ds)} val={len(val_ds)}")
@@ -558,6 +581,12 @@ def main(cfg: DictConfig):
               f"every {viz_cfg.get('every_n_epochs', 50)} epochs")
 
     best_val_mae = float("inf")  # best.pt is selected by validation MAE (physical units)
+    best_epoch = 0
+    # Early stopping: stop after `early_stop_patience` epochs with no val-MAE
+    # improvement (> min_delta). 0/null disables (train the full `epochs`).
+    es_patience = int(cfg.training.get("early_stop_patience", 0) or 0)
+    es_min_delta = float(cfg.training.get("early_stop_min_delta", 0.0))
+    es_counter = 0
     epoch_bar = tqdm(range(1, cfg.training.epochs + 1), desc=f"{model_name} epochs", dynamic_ncols=True)
     for ep in epoch_bar:
         t0 = time.time()
@@ -587,8 +616,24 @@ def main(cfg: DictConfig):
                 region_maes["val/mae_gap_extrap_interp"] = (
                     region_maes["val/mae_extrap"] - region_maes["val/mae_interp"])
 
+        # ---- best-checkpoint selection + early stopping (by val MAE) ----------
+        if va[2] < best_val_mae - es_min_delta:
+            best_val_mae = va[2]; best_epoch = ep; es_counter = 0
+            t.save({"model": model.state_dict(), "config": ckpt_cfg,
+                    "model_name": model_name, "convention": conv,
+                    "feat_dim": feat_dim, "out_dim": out_dim, "epoch": ep,
+                    "y_mean": y_mean, "y_std": y_std},
+                   os.path.join(out_dir, "best.pt"))
+            if use_wandb and wandb.run is not None:
+                wandb.run.summary["best_val_mae"] = best_val_mae
+                wandb.run.summary["best_val_loss"] = va[0]
+                wandb.run.summary["best_epoch"] = ep
+        else:
+            es_counter += 1
+
         epoch_bar.set_postfix(tr_mae=f"{tr[2]:.2f}", va_mae=f"{va[2]:.2f}",
-                              va_loss=f"{va[0]:.3f}")
+                              va_loss=f"{va[0]:.3f}",
+                              es=(f"{es_counter}/{es_patience}" if es_patience else "off"))
 
         if use_wandb:
             wandb.log({
@@ -596,6 +641,7 @@ def main(cfg: DictConfig):
                 "train/loss": tr[0], "train/nll": tr[1], "train/mae": tr[2],
                 "val/loss": va[0], "val/nll": va[1], "val/mae": va[2],
                 "lr": lr_now, "beta": beta, "epoch_time_sec": dt,
+                "es_counter": es_counter,
                 **region_maes,
             }, step=ep)
 
@@ -615,24 +661,20 @@ def main(cfg: DictConfig):
             except Exception as e:  # viz must never crash training
                 print(f"[{model_name}] viz failed at epoch {ep}: {e}")
 
-        if va[2] < best_val_mae:
-            best_val_mae = va[2]
-            t.save({"model": model.state_dict(), "config": ckpt_cfg,
-                    "model_name": model_name, "convention": conv,
-                    "feat_dim": feat_dim, "out_dim": out_dim, "epoch": ep,
-                    "y_mean": y_mean, "y_std": y_std},
-                   os.path.join(out_dir, "best.pt"))
-            if use_wandb and wandb.run is not None:
-                wandb.run.summary["best_val_mae"] = best_val_mae
-                wandb.run.summary["best_val_loss"] = va[0]
-                wandb.run.summary["best_epoch"] = ep
+        # early stop: no val-MAE improvement for `es_patience` epochs
+        if es_patience and es_counter >= es_patience:
+            print(f"[{model_name}] early stop at epoch {ep} "
+                  f"(no val-MAE improvement for {es_patience} epochs; "
+                  f"best={best_val_mae:.4f} @ epoch {best_epoch})")
+            break
 
     t.save({"model": model.state_dict(), "config": ckpt_cfg,
             "model_name": model_name, "convention": conv,
-            "feat_dim": feat_dim, "out_dim": out_dim, "epoch": cfg.training.epochs,
+            "feat_dim": feat_dim, "out_dim": out_dim, "epoch": ep,
             "y_mean": y_mean, "y_std": y_std},
            os.path.join(out_dir, "last.pt"))
-    print(f"[{model_name}] done. best val mae={best_val_mae:.4f} -> {out_dir}/best.pt")
+    print(f"[{model_name}] done. best val mae={best_val_mae:.4f} @ epoch {best_epoch} "
+          f"(stopped at {ep}/{cfg.training.epochs}) -> {out_dir}/best.pt")
 
     if use_wandb:
         wandb.finish()
