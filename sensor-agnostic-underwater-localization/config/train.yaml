@@ -11,14 +11,14 @@
 # =============================================================================
 defaults:
   - _self_
-  - dataset: topology_hermite   # which generated dataset (identity: task/method/mode)
-  - data: topology             # split view: topology | geometry | within_geometry
+  - dataset: random_hermite_shared   # which generated dataset (identity: task/method/mode)
+  - data: geometry             # split view: topology | geometry | within_geometry
   - model: cnp                 # cnp | anp | rcnp | ranp | online_ranp
   - wandb: default
   - experiment: null           # opt-in bundles: `experiment=<name>` (see config/experiment/)
 
 # Experiment identity, used as the wandb group name and to organise outputs.
-exp_name: hermite_random_topology
+exp_name: spatial_cnp_hermite_full_set
 
 seed: 1
 device: auto  # 'auto' -> cuda if available else cpu; or set 'cuda' / 'cpu'
@@ -36,7 +36,7 @@ training:
   # only). A constant full beta from epoch 1 invites posterior collapse; the old
   # converging setup warmed up over 500 epochs. Set 0 to disable (constant beta).
   kl_warmup_epochs: 500
-  num_workers: 1
+  num_workers: 4
   # Early stopping on validation MAE: stop after this many epochs with no
   # improvement (> early_stop_min_delta). 0/null disables (train the full epochs).
   # The counter shows in the tqdm bar as es=<counter>/<patience>.

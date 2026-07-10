@@ -28,14 +28,14 @@ task: random
 # method: add a parameter block below AND the matching submethod in
 # data/acoustic_data_generator.py.
 # -----------------------------------------------------------------------------
-method: spiral # spiral | hermite
+method: hermite # spiral | hermite
 
 # -----------------------------------------------------------------------------
 # Shared acoustic-channel knobs (BOTH tasks read these).
 # -----------------------------------------------------------------------------
 channel:
   channel_options: [0.1, 0.2]  # theta values (channel variability; low band 0.1-0.3)
-  n_traj: 50         # trajectories per (theta[, topology / position-set]). Random task:
+  n_traj: 400         # trajectories per (theta[, topology / position-set]). Random task:
                      # kept small on purpose, geometry DIVERSITY (n_position_sets),
                      # not trajectory count, is the axis that matters for the
                      # sensor-displacement study. Topology task can be raised for a
@@ -95,7 +95,7 @@ topology_task:
 #   (<mode> = shared | distinct, from distinct_trajectories below)
 # =============================================================================
 random_task:
-  n_position_sets: 100          # distinct sensor layouts (the meta-learning "tasks").
+  n_position_sets: 200          # distinct sensor layouts (the meta-learning "tasks").
                                # Diversity here, not n_traj, is what an OOD-to-
                                # unseen-layout model needs.
   # false -> ONE shared trajectory ensemble reused by all sets (geometry is the
