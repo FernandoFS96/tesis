@@ -7,7 +7,7 @@ dropout: 0.2        # dropout prob for attention + decoder-MLP LayerNorm/dropout
 # the full description; requires the geometry split (data=geometry). Ablations:
 # flip use_position / use_attention / tokenize.
 spatial:
-  enabled: false
+  enabled: true
   tokenize: true         # per-sensor tokens (invariant). false -> flat+position control
   use_position: true     # add Fourier position features per sensor
   use_attention: true    # cross-sensor self-attention (else Deep-Sets pool only)
