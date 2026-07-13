@@ -79,7 +79,7 @@ sys.path.insert(0, _PROJECT_ROOT)
 # Anchor Hydra's output dir (and any config path) to the repo root regardless of
 # the launch directory: `${repo_root:}` in config/train.yaml resolves to here.
 # Registered at import time so it is available when Hydra composes the config.
-OmegaConf.register_new_resolver("repo_root", lambda: _PROJECT_ROOT, replace=True)
+OmegaConf.register_resolver("repo_root", lambda: _PROJECT_ROOT, replace=True)
 import src.models.anp as anp_mod  # type: ignore  # noqa: E402
 import src.models.r_anp as ranp_mod  # type: ignore  # noqa: E402
 import src.models.online_r_anp as online_mod  # type: ignore  # noqa: E402

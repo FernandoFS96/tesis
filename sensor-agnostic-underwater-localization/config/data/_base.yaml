@@ -23,4 +23,4 @@ max_train_geometries: 60
 # idea on the trajectory axis; composes with max_train_geometries so the training
 # set is (first N layouts) x (first M paths). Needs data with traj_id (geometry /
 # topology modes). val/test stay fixed (Option 1: test uses all trajectories).
-max_train_trajectories: 50
+max_train_trajectories: 100
