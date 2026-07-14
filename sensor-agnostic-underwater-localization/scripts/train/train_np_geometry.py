@@ -443,6 +443,18 @@ def main(cfg: DictConfig):
         train_ds.samples = [s for s in train_ds.samples if int(s.get("traj_id", -1)) in keep_tset]
         print(f"[{model_name}] capped training to {len(keep_t)} trajectories")
 
+    # Optionally cap the VALIDATION trajectories too. Set this equal to
+    # max_train_trajectories to validate on the SAME source paths as training
+    # (pure layout-generalization, matching the original test) -- this removes the
+    # train/val path mismatch that inflates the late-epoch overfitting overshoot.
+    # Only the val pool is touched; the geometries (held-out layouts) are untouched.
+    max_val_trajs = cfg.data.get("max_val_trajectories", None)
+    if max_val_trajs:
+        keep_v = sorted(set(int(s.get("traj_id", -1)) for s in val_ds.samples))[:int(max_val_trajs)]
+        keep_vset = set(keep_v)
+        val_ds.samples = [s for s in val_ds.samples if int(s.get("traj_id", -1)) in keep_vset]
+        print(f"[{model_name}] capped validation to {len(keep_v)} trajectories")
+
     feat_dim, out_dim, ppt = train_ds.feat_dim, train_ds.out_dim, train_ds.ppt
     print(f"[{model_name}] feat_dim={feat_dim} out_dim={out_dim} ppt={ppt} "
           f"| train={len(train_ds)} val={len(val_ds)}")

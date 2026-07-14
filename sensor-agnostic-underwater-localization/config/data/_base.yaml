@@ -19,8 +19,14 @@ chunk_size: 8
 # 10 subset of 20 subset of 40 -- for "how many sensor layouts do we need?" sweeps.
 max_train_geometries: 60
 
-# Cap the number of TRAINING trajectories / source paths (null = use all). Same
-# idea on the trajectory axis; composes with max_train_geometries so the training
-# set is (first N layouts) x (first M paths). Needs data with traj_id (geometry /
-# topology modes). val/test stay fixed (Option 1: test uses all trajectories).
-max_train_trajectories: 100
+# Cap the number of TRAINING trajectories / source paths (null = use all). Composes 
+# with max_train_geometries so the training set is (first N layouts) x (first M paths). 
+# Needs data with traj_id (geometry / topology modes).
+max_train_trajectories: 200
+
+# Cap the VALIDATION trajectories (null = use all). Set equal to
+# max_train_trajectories to train and validate on the SAME source paths (pure
+# layout-generalization, as in the original test) -- removes the train/val path
+# mismatch that inflates the late-epoch overfitting overshoot. Held-out val
+# geometries are untouched; only their trajectories are subsampled.
+max_val_trajectories: 200
