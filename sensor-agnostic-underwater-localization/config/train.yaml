@@ -18,7 +18,7 @@ defaults:
   - experiment: null           # opt-in bundles: `experiment=<name>` (see config/experiment/)
 
 # Experiment identity, used as the wandb group name and to organise outputs.
-exp_name: spatial_cnp_spiral_full_set
+exp_name: spatial_cnp_layernorm_lr_5e-5
 
 seed: 1
 device: auto  # 'auto' -> cuda if available else cpu; or set 'cuda' / 'cpu'
@@ -27,9 +27,9 @@ device: auto  # 'auto' -> cuda if available else cpu; or set 'cuda' / 'cpu'
 # Optimisation / training-loop hyperparameters
 # -----------------------------------------------------------------------------
 training:
-  epochs: 2000
+  epochs: 500
   batch_size: 8
-  lr: 2.0e-4
+  lr: 5.0e-5
   weight_decay: 1.0e-4
   beta: 1.0          # base KL weight (used only by latent models: anp / ranp)
   # Linearly warm the KL weight 0 -> beta over this many epochs (latent models
@@ -39,9 +39,8 @@ training:
   num_workers: 1
   # Early stopping on validation MAE: stop after this many epochs with no
   # improvement (> early_stop_min_delta). 0/null disables (train the full epochs).
-  # The counter shows in the tqdm bar as es=<counter>/<patience>.
-  early_stop_patience: 200
-  early_stop_min_delta: 0.0
+  early_stop_patience: 50
+  early_stop_min_delta: 1.0
 
 
 

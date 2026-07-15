@@ -211,7 +211,7 @@ class SpatialEncoder(nn.Module):
     def __init__(self, feat_dim, n_sensors, num_hidden, *, tokenize=True,
                  use_position=True, use_attention=True, n_attn_layers=1,
                  pooling="attention", n_fourier_bands=8, min_wavelength=10.0,
-                 max_wavelength=1000.0, pos_dim=2, dropout=0.1, norm_acoustic=True):
+                 max_wavelength=1000.0, pos_dim=2, dropout=0.1, norm_acoustic="layernorm"):
         super().__init__()
         assert feat_dim % n_sensors == 0, \
             f"feat_dim {feat_dim} not divisible by n_sensors {n_sensors}"
@@ -230,13 +230,27 @@ class SpatialEncoder(nn.Module):
                         if use_position else None)
         pos_out = self.pos_enc.out_dim if use_position else 0
 
-        # CRITICAL: the raw acoustic features are ~2 orders of magnitude smaller
-        # (std ~5e-3) than the unit-scale Fourier position features, so without
-        # this the position swamps the acoustics in the token and the model
-        # collapses to constant prediction. LayerNorm brings the acoustic token to
-        # unit scale so it competes with position from step 1.
+        # CRITICAL: raw acoustics have std ~5e-3 vs ~0.7 for the Fourier position
+        # features, so without balancing them the position swamps the token and
+        # the model collapses to constant prediction. Modes:
+        #   layernorm   -- per-sensor LayerNorm; unit-scales each spectrum but
+        #                  DESTROYS cross-sensor amplitude ratios (a range cue).
+        #   standardize -- divide by ONE global std (set from train data); keeps
+        #                  the relative amplitudes across sensors/bins/points.
+        #   none        -- no balancing (collapses; ablation only).
+        if isinstance(norm_acoustic, bool):
+            norm_acoustic = "layernorm" if norm_acoustic else "none"
+        self.norm_mode = str(norm_acoustic).lower()
+        assert self.norm_mode in ("layernorm", "standardize", "none"), \
+            f"norm_acoustic must be layernorm|standardize|none, got {norm_acoustic}"
+        norm_dim = self.tau if tokenize else feat_dim
+        self.acoustic_norm = nn.LayerNorm(norm_dim) if self.norm_mode == "layernorm" else None
+        if self.norm_mode == "standardize":
+            # global scalar stats; populated from data via set_acoustic_stats().
+            self.register_buffer("x_mean", t.zeros(1))
+            self.register_buffer("x_scale", t.ones(1))
+
         if tokenize:
-            self.acoustic_norm = nn.LayerNorm(self.tau) if norm_acoustic else None
             # per-sensor token = (tau acoustic) [+ position embedding], shared proj
             self.token_proj = Linear(self.tau + pos_out, num_hidden, w_init='relu')
             if self.use_attention:
@@ -246,10 +260,23 @@ class SpatialEncoder(nn.Module):
                 self.pool_query = nn.Parameter(t.randn(1, 1, num_hidden) * 0.02)
                 self.pool_attn = Attention(num_hidden, dropout=dropout)
         else:
-            self.acoustic_norm = nn.LayerNorm(feat_dim) if norm_acoustic else None
             # flat control: raw feat vector [+ all sensors' position embeddings]
             self.flat_proj = Linear(feat_dim + n_sensors * pos_out, num_hidden,
                                     w_init='relu')
+
+    def set_acoustic_stats(self, mean, std):
+        """Set global acoustic mean/std for the 'standardize' mode (no-op otherwise).
+        Called by the trainer after computing stats on the train set."""
+        if self.norm_mode == "standardize":
+            self.x_mean.fill_(float(mean))
+            self.x_scale.fill_(float(std) + 1e-8)
+
+    def _norm_acoustic(self, a):
+        if self.norm_mode == "layernorm":
+            return self.acoustic_norm(a)
+        if self.norm_mode == "standardize":
+            return (a - self.x_mean) / self.x_scale
+        return a
 
     def forward(self, x, sensor_pos):
         # x: (B, N, feat_dim);  sensor_pos: (B, n_sensors, 3), constant over the
@@ -258,7 +285,7 @@ class SpatialEncoder(nn.Module):
         pos = sensor_pos[..., :self.pos_dim] if self.use_position else None  # (B,S,pd)
 
         if not self.tokenize:
-            xa = self.acoustic_norm(x) if self.acoustic_norm is not None else x
+            xa = self._norm_acoustic(x)
             if self.use_position:
                 pe = self.pos_enc(pos).reshape(B, -1)          # (B, S*pos_out)
                 pe = pe[:, None, :].expand(B, N, -1)           # broadcast over points
@@ -267,8 +294,7 @@ class SpatialEncoder(nn.Module):
 
         # tau-major / sensor-minor -> (B, N, tau, S) -> (B, N, S, tau)
         tok = x.view(B, N, self.tau, self.n_sensors).transpose(-1, -2)
-        if self.acoustic_norm is not None:
-            tok = self.acoustic_norm(tok)                     # balance acoustic vs position scale
+        tok = self._norm_acoustic(tok)                        # balance acoustic vs position scale
         if self.use_position:
             pe = self.pos_enc(pos)                             # (B, S, pos_out)
             pe = pe[:, None, :, :].expand(B, N, self.n_sensors, -1)
@@ -308,7 +334,7 @@ def build_spatial_encoder(spatial_cfg, feat_dim, num_hidden, dropout):
         min_wavelength=float(get("min_wavelength", 10.0)),
         max_wavelength=float(get("max_wavelength", 1000.0)),
         pos_dim=int(get("pos_dim", 2)),
-        norm_acoustic=bool(get("norm_acoustic", True)), dropout=dropout)
+        norm_acoustic=get("norm_acoustic", "layernorm"), dropout=dropout)
     return enc, num_hidden
 
 
