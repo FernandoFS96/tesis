@@ -137,6 +137,15 @@ def compute_y_stats(dataset):
             t.tensor(ys.std(axis=0) + 1e-6, dtype=t.float32))
 
 
+def compute_x_stats(dataset, max_samples=200):
+    """Single global mean/std of the acoustic features (for the spatial encoder's
+    'standardize' mode). A subsample is enough -- the global scale is stable."""
+    n = min(len(dataset.samples), max_samples)
+    xs = np.concatenate(
+        [np.asarray(dataset.samples[i]["X"], dtype=np.float32).ravel() for i in range(n)])
+    return float(xs.mean()), float(xs.std() + 1e-8)
+
+
 # --------------------------------------------------------------------------- #
 # Dataset (one item = one trajectory) + collate producing BOTH conventions
 # --------------------------------------------------------------------------- #
@@ -535,6 +544,14 @@ def main(cfg: DictConfig):
         max_context=cfg.model.get("max_context", 128),
         spatial_cfg=spatial_cfg)
     model = model.to(device)
+    # For the spatial encoder's 'standardize' acoustic mode, set the global
+    # acoustic mean/std from the train data (preserves cross-sensor amplitude
+    # ratios, unlike per-sensor LayerNorm).
+    _se = getattr(model, "spatial_encoder", None)
+    if _se is not None and getattr(_se, "norm_mode", "") == "standardize":
+        xm, xs_ = compute_x_stats(train_ds)
+        _se.set_acoustic_stats(xm, xs_)
+        print(f"[{model_name}] acoustic standardize: mean={xm:.4g} std={xs_:.4g}")
     n_params = sum(p.numel() for p in model.parameters())
     print(f"[{model_name}] convention={conv}  params={n_params/1e6:.2f}M  device={device}")
 
