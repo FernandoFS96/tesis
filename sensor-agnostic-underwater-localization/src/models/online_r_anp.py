@@ -185,7 +185,11 @@ class OnlineLatentModel(nn.Module):
         if target_y is not None:
             nll = (0.5 * t.log(2 * t.pi * var)
                    + 0.5 * ((target_y - mean) ** 2) / var).mean()
-            kl = self._kl(prior_mu, prior_var, post_mu, post_var)
+            # KL normalized to per-target-point, per-dim units to match the meaned
+            # NLL (see anp.py LatentModel.forward for the full rationale); beta=1
+            # then reads as the standard per-point ELBO.
+            kl = self._kl(prior_mu, prior_var, post_mu, post_var) \
+                 / (num_targets * target_y.size(-1))
         return mean, var, kl, nll
 
     @staticmethod

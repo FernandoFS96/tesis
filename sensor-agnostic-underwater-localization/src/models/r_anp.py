@@ -323,7 +323,11 @@ class LatentModel(nn.Module):
             nll = 0.5 * t.log(2 * t.pi * y_pred_var) + \
                   0.5 * ((target_y - y_pred_mean) ** 2) / y_pred_var
             nll = nll.mean()
+            # KL normalized to per-target-point, per-dim units to match the meaned
+            # NLL (see anp.py LatentModel.forward for the full rationale); beta=1
+            # then reads as the standard ELBO instead of ~num_targets*output_dim.
             kl = self.kl_div(prior_mu, prior_var, posterior_mu, posterior_var) #type: ignore[assignment]
+            kl = kl / (num_targets * target_y.size(-1))
             loss = nll + beta * kl
         else:
             kl = loss = nll = None

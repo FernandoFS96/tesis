@@ -11,14 +11,14 @@
 # =============================================================================
 defaults:
   - _self_
-  - dataset: random_spiral_shared   # which generated dataset (identity: task/method/mode)
-  - data: geometry             # split view: topology | geometry | within_geometry
-  - model: cnp                 # cnp | anp | rcnp | ranp | online_ranp
+  - dataset: topology_spiral   # which generated dataset (identity: task/method/mode)
+  - data: topology             # split view: topology | geometry | within_geometry
+  - model: anp                 # cnp | anp | rcnp | ranp | online_ranp
   - wandb: default
   - experiment: null           # opt-in bundles: `experiment=<name>` (see config/experiment/)
 
 # Experiment identity, used as the wandb group name and to organise outputs.
-exp_name: spatial_cnp_layernorm_lr_5e-5
+exp_name: topology_spiral_anp
 
 seed: 1
 device: auto  # 'auto' -> cuda if available else cpu; or set 'cuda' / 'cpu'
@@ -27,20 +27,28 @@ device: auto  # 'auto' -> cuda if available else cpu; or set 'cuda' / 'cpu'
 # Optimisation / training-loop hyperparameters
 # -----------------------------------------------------------------------------
 training:
-  epochs: 500
+  epochs: 1000
   batch_size: 8
-  lr: 5.0e-5
+  lr: 5.0e-4
   weight_decay: 1.0e-4
-  beta: 1.0          # base KL weight (used only by latent models: anp / ranp)
+  # Base KL weight (latent models only: anp / ranp). The KL is now normalized to
+  # per-target-point, per-dim ELBO units inside the models (divided by
+  # num_targets * output_dim, matching the meaned NLL), so beta=1.0 is the
+  # standard ELBO. Under the OLD unnormalized loss beta=1.0 acted like ~120
+  # (num_targets*output_dim) and collapsed the posterior onto the prior (KL -> 0
+  # by epoch ~50 in the 2026-07-07 baseline runs); old and new beta values are
+  # NOT comparable.
+  beta: 1.0
   # Linearly warm the KL weight 0 -> beta over this many epochs (latent models
-  # only). A constant full beta from epoch 1 invites posterior collapse; the old
-  # converging setup warmed up over 500 epochs. Set 0 to disable (constant beta).
-  kl_warmup_epochs: 500
+  # only); 0 disables (constant beta). With the normalized KL the pressure at
+  # beta=1 is ~120x weaker than before, so a long warmup is likely unnecessary;
+  # kept as a safety net against early collapse.
+  kl_warmup_epochs: 100
   num_workers: 1
   # Early stopping on validation MAE: stop after this many epochs with no
   # improvement (> early_stop_min_delta). 0/null disables (train the full epochs).
-  early_stop_patience: 50
-  early_stop_min_delta: 1.0
+  early_stop_patience: 100
+  early_stop_min_delta: 0.5
 
 
 

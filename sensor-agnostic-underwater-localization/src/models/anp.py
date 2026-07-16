@@ -72,7 +72,11 @@ class Decoder(nn.Module):
         super(Decoder, self).__init__()
         self.target_projection = Linear(input_dim, num_hidden)
         self.linears = nn.ModuleList([Linear(num_hidden * 3, num_hidden * 3, w_init='relu') for _ in range(3)])
-        # Legacy decoder body: plain relu(Linear(...)) stack (no LayerNorm/dropout).
+        # Per-layer LayerNorm + dropout, matching the CNP's DeterministicDecoder
+        # (and the RANP decoder in r_anp.py) so ANP-vs-CNP comparisons differ in
+        # the latent path only, not in decoder regularization.
+        self.norms = nn.ModuleList([nn.LayerNorm(num_hidden * 3) for _ in range(3)])
+        self.dropout = nn.Dropout(p=dropout)
         self.mean_projection = Linear(num_hidden*3, output_dim)
         self.log_var_projection = Linear(num_hidden*3, output_dim)
 
@@ -81,8 +85,10 @@ class Decoder(nn.Module):
         batch_size, num_targets, _ = target_x.size()
         target_x = self.target_projection(target_x)
         hidden = t.cat([t.cat([r, z], dim=-1), target_x], dim=-1)
-        for linear in self.linears:
+        for linear, norm in zip(self.linears, self.norms):
             hidden = t.relu(linear(hidden))
+            hidden = norm(hidden)
+            hidden = self.dropout(hidden)
         mean = self.mean_projection(hidden)
         var = 1e-3 + F.softplus(self.log_var_projection(hidden))
         return mean, var
@@ -392,7 +398,14 @@ class LatentModel(nn.Module):
         if target_y is not None:
             nll = 0.5 * t.log(2 * t.pi * y_pred_var) + 0.5 * ((target_y - y_pred_mean) ** 2) / y_pred_var
             nll = nll.mean()
+            # NLL is a MEAN over batch x targets x output dims while kl_div SUMS
+            # over the latent dims, so an unnormalized `nll + beta*kl` weighs the
+            # KL ~ num_targets*output_dim times more than the per-point ELBO
+            # (~120x here) and crushes the posterior onto the prior. Normalize the
+            # KL to the same per-target-point, per-dim units (Le et al. 2018) so
+            # beta=1 reads as the standard ELBO.
             kl = self.kl_div(prior_mu, prior_var, posterior_mu, posterior_var) #type: ignore[assignment]
+            kl = kl / (num_targets * target_y.size(-1))
             loss = nll + beta * kl
         else:
             kl = None
