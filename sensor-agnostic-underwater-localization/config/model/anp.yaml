@@ -1,7 +1,8 @@
 # Attentive latent NP (posterior + KL) -> anp.LatentModel
 name: anp
 num_hidden: 128
-dropout: 0.3      # dropout prob for attention + decoder-MLP LayerNorm/dropout
+dropout: 0.2      # dropout prob for attention + decoder-MLP LayerNorm/dropout
+                  # (matched to cnp.yaml so ANP-vs-CNP differs only in the latent)
 
 # Sensor-position-aware front end (default OFF -> flat baseline). When enabled it
 # tokenizes each point's features by sensor, tags each with its Fourier-encoded

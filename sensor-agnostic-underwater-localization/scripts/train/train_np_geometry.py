@@ -297,7 +297,7 @@ def run_epoch(model, conv, loader, device, beta, optimizer=None, desc="",
     denormalized before MAE computation so the metric stays in physical units."""
     train = optimizer is not None
     model.train(train)
-    tot_loss = tot_nll = tot_mae = 0.0; n = 0
+    tot_loss = tot_nll = tot_kl = tot_mae = 0.0; n = 0
     # Per-geometry error accumulators, so the caller can break the metric down by
     # region (train / interp / extrap) using the splits.json labels.
     err_sum = defaultdict(float); err_cnt = defaultdict(int)
@@ -334,6 +334,7 @@ def run_epoch(model, conv, loader, device, beta, optimizer=None, desc="",
         b = ty_raw.size(0)
         tot_loss += loss.item() * b
         tot_nll += nll.item() * b
+        tot_kl += (kl.item() if kl is not None else 0.0) * b  # 0 for deterministic models
         with t.no_grad():
             mean_phys = mean * ys + ym if ym is not None else mean
             dist = t.sqrt(((mean_phys - ty_raw) ** 2).sum(-1) + 1e-12)  # (B, n_tgt)
@@ -345,7 +346,8 @@ def run_epoch(model, conv, loader, device, beta, optimizer=None, desc="",
         n += b
         bar.set_postfix(loss=f"{loss.item():.3f}", mae=f"{mae:.2f}")
     per_geo_mae = {g: err_sum[g] / err_cnt[g] for g in err_sum}
-    return tot_loss / n, tot_nll / n, tot_mae / n, per_geo_mae
+    # kl appended LAST so existing tr[0..3]/va[0..3] index uses stay valid.
+    return tot_loss / n, tot_nll / n, tot_mae / n, per_geo_mae, tot_kl / n
 
 
 # --------------------------------------------------------------------------- #
@@ -565,7 +567,8 @@ def main(cfg: DictConfig):
 
     log_path = os.path.join(out_dir, "train_log.csv")
     with open(log_path, "w") as f:
-        f.write("epoch,train_loss,train_nll,train_mae,val_loss,val_nll,val_mae,lr,sec\n")
+        f.write("epoch,train_loss,train_nll,train_kl,train_mae,"
+                "val_loss,val_nll,val_kl,val_mae,lr,sec\n")
 
     # latent models use beta; deterministic ignore it (no KL). The effective KL
     # weight is linearly warmed up from 0 to base_beta over kl_warmup_epochs (a
@@ -628,8 +631,8 @@ def main(cfg: DictConfig):
         dt = time.time() - t0
         lr_now = opt.param_groups[0]["lr"]
         with open(log_path, "a") as f:
-            f.write(f"{ep},{tr[0]:.6f},{tr[1]:.6f},{tr[2]:.6f},"
-                    f"{va[0]:.6f},{va[1]:.6f},{va[2]:.6f},{lr_now:.2e},{dt:.1f}\n")
+            f.write(f"{ep},{tr[0]:.6f},{tr[1]:.6f},{tr[4]:.6e},{tr[2]:.6f},"
+                    f"{va[0]:.6f},{va[1]:.6f},{va[4]:.6e},{va[2]:.6f},{lr_now:.2e},{dt:.1f}\n")
         # Break the (blended) val MAE down by held-out region so interp vs extrap
         # are tracked separately, the blended number is dominated by the few
         # extrapolation geometries. va[3] is {geometry_id: mae} from the val pass.
@@ -667,8 +670,8 @@ def main(cfg: DictConfig):
         if use_wandb:
             wandb.log({
                 "epoch": ep,
-                "train/loss": tr[0], "train/nll": tr[1], "train/mae": tr[2],
-                "val/loss": va[0], "val/nll": va[1], "val/mae": va[2],
+                "train/loss": tr[0], "train/nll": tr[1], "train/kl": tr[4], "train/mae": tr[2],
+                "val/loss": va[0], "val/nll": va[1], "val/kl": va[4], "val/mae": va[2],
                 "lr": lr_now, "beta": beta, "epoch_time_sec": dt,
                 "es_counter": es_counter,
                 **region_maes,
