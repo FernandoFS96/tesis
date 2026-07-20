@@ -1,0 +1,15 @@
+# @package _global_
+# ============================================================================
+# Experiment: RANDOM task, held-out sensor layouts (OOD, spiral).
+# Pairs the dataset with its split; the model stays whatever you pick:
+#   python scripts/train/train_np_geometry.py experiment=layout_ood model=cnp
+#   python scripts/train/train_np_geometry.py experiment=layout_ood model=spatial_anp
+# Flat baselines (cnp/anp) are expected to DEGRADE here by construction; the
+# spatial_* models are the ones meant to close that gap.
+# Generate + preprocess first:
+#   python data/generate.py dataset=random_spiral_shared
+#   python data/process_data.py --data-root data/random_task/spiral_shared --mode geometry
+# ============================================================================
+defaults:
+  - override /dataset: random_spiral_shared
+  - override /data: layout_ood

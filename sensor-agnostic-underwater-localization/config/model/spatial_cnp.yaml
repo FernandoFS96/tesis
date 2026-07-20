@@ -1,0 +1,10 @@
+# Spatial CNP: the cnp baseline + sensor-position-aware front end ENABLED.
+# Everything else is inherited from cnp.yaml; ablate via model.spatial.* flags
+# (ablation ladder documented in _spatial.yaml).
+defaults:
+  - cnp
+  - _self_
+
+name: spatial_cnp
+spatial:
+  enabled: true

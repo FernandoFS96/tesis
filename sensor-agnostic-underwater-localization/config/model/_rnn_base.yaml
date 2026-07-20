@@ -1,0 +1,7 @@
+# Shared hyperparameters for the recurrent model family (ranp / rcnp /
+# online_ranp). Each variant file sets only its arch/name (+ extras).
+num_hidden: 128
+rnn_type: lstm      # lstm | gru
+rnn_layers: 1
+rnn_dropout: 0.1    # dropout between stacked RNN layers (needs rnn_layers > 1)
+dropout: 0.2        # dropout prob for attention + decoder-MLP LayerNorm/dropout

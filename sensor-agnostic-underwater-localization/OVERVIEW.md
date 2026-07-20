@@ -12,8 +12,8 @@ config/                     # Hydra (training/eval) + plain-YAML (generation)
   train.yaml                # composition root: defaults(dataset+data+model+wandb+experiment) + seed/device/training
   data_pipeline.yaml        # data generation + preprocessing (plain OmegaConf, no Hydra)
   dataset/                  # SHARED identity (task/method/mode) read by BOTH generate.py and training
-  data/                     # split view + context sampling: _base + geometry | topology | within_geometry
-  experiment/              # one file == one runnable experiment (bundles dataset+data+model+exp_name)
+  data/                     # split view + context sampling: _base + layout_ood | layout_seen | topology
+  experiment/              # one file == one dataset+split pairing (model composes freely on top)
   model/                    # cnp | anp | ranp | rcnp | online_ranp
   wandb/default.yaml        # W&B + periodic-visualization config
 data/
@@ -203,12 +203,13 @@ Model configs (`config/model/*.yaml`): `num_hidden: 128`, `dropout` (0.0 for cnp
 
 ## 5. Training protocol (`scripts/train/train_np_geometry.py`)
 
-Single Hydra entry point for all five models. `train.yaml` composes five groups:
-`dataset` (identity: task/method/mode), `data` (split view + context sampling),
-`model`, `wandb`, and an opt-in `experiment`. The cleanest way to launch is an
-**experiment** (one file pinning dataset+data+model+exp_name):
+Single Hydra entry point for all model variants. `train.yaml` composes five
+groups: `dataset` (identity: task/method/mode), `data` (split view + context
+sampling), `model` (arch + name, incl. `spatial_cnp`/`spatial_anp` variants),
+`wandb`, and an opt-in `experiment` (one file pinning dataset+data; `exp_name`
+is auto-derived from the composition). The cleanest way to launch:
 ```bash
-python scripts/train/train_np_geometry.py experiment=within_geometry
+python scripts/train/train_np_geometry.py experiment=layout_seen
 python scripts/train/train_np_geometry.py experiment=topology data.topology=aligned model=ranp
 ```
 Or compose manually: `dataset=<id> data=<split> model=<name>`. Because the `data`
@@ -242,15 +243,15 @@ path/sync bookkeeping.
 
 **Targets & metric.** `y` (source coords) is z-normalized using train-set stats (`normalize_y: true`); predictions are **denormalized** so reported MAE is in physical units (meters). `X` (acoustic features) is used **raw** (no standardization).
 
-**Outputs.** Per Hydra run dir: `best.pt` (selected by val MAE), `last.pt`, `train_log.csv`, `config.yaml`. W&B logs train/val loss/nll/mae, lr, beta, plus periodic figures (`viz.py`) every `every_n_epochs`. The degradation-scatter figure needs `splits.json` and auto-disables for `topology`/`within_geometry`.
+**Outputs.** Per Hydra run dir: `best.pt` (selected by val MAE), `last.pt`, `train_log.csv`, `config.yaml`. W&B logs train/val loss/nll/mae, lr, beta, plus periodic figures (`viz.py`) every `every_n_epochs`. The degradation-scatter figure needs `splits.json` and auto-disables for `topology`/`layout_seen`.
 
 ### Which `data=` config to use
 
 | data group | Task | Baseline expectation |
 |---|---|---|
-| `within_geometry` | position-set, within-geometry (target = all points) | **converges** (reproduces old repo) |
+| `layout_seen` | position-set, seen layouts (target = all points) | **converges** (reproduces old repo) |
 | `topology` | three-topology, per-topology | converges (per-topology model) |
-| `geometry` | position-set, held-out layouts (OOD) | degrades — no spatial encoder (by design) |
+| `layout_ood` | position-set, held-out layouts (OOD) | flat models degrade (by design); `model=spatial_*` is meant to close the gap |
 
 ---
 
@@ -298,7 +299,7 @@ python scripts/train/train_np_geometry.py experiment=topology data.topology=rand
 python data/generate.py dataset=random_spiral_shared
 python data/process_data.py \
     --data-root data/random_task/spiral_shared --mode legacy
-python scripts/train/train_np_geometry.py experiment=within_geometry
+python scripts/train/train_np_geometry.py experiment=layout_seen
 ```
 
 **Problem 2 — random, held-out geometries (OOD):**
@@ -306,7 +307,7 @@ python scripts/train/train_np_geometry.py experiment=within_geometry
 python data/generate.py dataset=random_spiral_shared
 python data/process_data.py \
     --data-root data/random_task/spiral_shared --mode geometry
-python scripts/train/train_np_geometry.py experiment=geometry_ood
+python scripts/train/train_np_geometry.py experiment=layout_ood
 ```
 
 **Evaluate** any run (data_dir defaults to the checkpoint's):
@@ -321,8 +322,8 @@ python scripts/eval/eval_np_geometry.py --ckpt <run>/best.pt --out-dir <run>/eva
 - **`df` is shared now** (`channel.df`, default 50 → feature dim 2010 for both
   tasks). A model's `input_dim` is tied to the feature dim it trained on, so keep
   `df` consistent between the data you train and evaluate on.
-- **No spatial encoder** in any current baseline: they never see `sensor_pos`, so the held-out-`geometry` split is expected to fail — use `within_geometry`/`topology` for tasks the baselines can actually solve.
-- **`exclude_ctx_from_target`**: `within_geometry.yaml` sets it `false` (all-points targets, matches old); `geometry.yaml`/`topology.yaml` set it `true`.
+- **Flat baselines (`model=cnp/anp`) never see `sensor_pos`**, so the held-out-layout split (`data=layout_ood`) is expected to fail for them — that gap is the point; `model=spatial_cnp/spatial_anp` are the variants meant to close it. Use `layout_seen`/`topology` for tasks the flat baselines can actually solve.
+- **`data.context.exclude_from_target`**: `layout_seen.yaml` sets it `false` (all-points targets, matches old); `layout_ood.yaml`/`topology.yaml` inherit `true` from `_base`.
 - **Use the same `dataset=<id>` for generation and training** — that's the single
   source of truth. Training derives `data_dir` from `${dataset.method}_${dataset.mode}`,
   so a matching `generate.py dataset=<id>` guarantees the paths line up.

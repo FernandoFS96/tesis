@@ -1,0 +1,12 @@
+# RANDOM task -- seen-layout split (every layout in training; val/test are new
+# trajectories of seen layouts). Reproduces the old converging setup.
+# data_dir is derived from the composed `dataset` identity (method + mode).
+# context.exclude_from_target=false -> targets are ALL points (old convention).
+# (Disk path keeps the historical name `within_geometry_split`.)
+defaults:
+  - _base
+  - _self_
+
+data_dir: data/random_task/${dataset.method}_${dataset.mode}/processed/within_geometry_split
+context:
+  exclude_from_target: false

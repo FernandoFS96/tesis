@@ -4,4 +4,4 @@
 # so the two never disagree on which dataset is being built/consumed.
 task: topology        # topology | random
 method: spiral        # spiral | hermite  (trajectory shape)
-mode: na              # shared | distinct  (random task only; ignored for topology)
+mode: null            # shared | distinct  (random task only; unused for topology)
