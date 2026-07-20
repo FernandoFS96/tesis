@@ -1,9 +1,12 @@
 # =============================================================================
 # Data-generation + preprocessing config (plain OmegaConf; no Hydra).
 #
-# Single entry point:  python data/generate.py task=topology | task=random
-# Override any field on the CLI, dotlist style, e.g.:
-#   python data/generate.py task=random method=hermite channel.df=100 \
+# Single entry point (select the dataset IDENTITY by name, same names the
+# training config composes, so generation and training never disagree):
+#   python data/generate.py dataset=topology_spiral
+#   python data/generate.py dataset=random_spiral_shared
+# Any other field can be overridden dotlist style, e.g.:
+#   python data/generate.py dataset=random_hermite_shared channel.df=100 \
 #       random_task.n_position_sets=5 channel.channel_options=[0.1,0.2]
 #
 # There are TWO problems, each with its own block below (they SHARE `method`,
@@ -100,7 +103,7 @@ random_task:
                                # unseen-layout model needs.
   # false -> ONE shared trajectory ensemble reused by all sets (geometry is the
   #          only varying factor). true -> each set gets its OWN trajectories.
-  distinct_trajectories: false
+  distinct_trajectories: true
   # Per-set trajectory seed = master_seed + traj_seed_offset + set_idx (kept in a
   # separate numeric band from layout seeds master_seed + 1000 + p).
   traj_seed_offset: 2000
@@ -138,7 +141,7 @@ random_task:
 preprocess:
   mode: geometry
   method: ${method}
-  data_root: ./data/topology_task
+  data_root: ./data/random_task/hermite_distinct
   # null -> topology mode: <data_root>/<method>/processed (method-separated);
   #         position-set modes: <data_root>/processed.
   save_dir: null
@@ -155,6 +158,6 @@ preprocess:
   # Must sum to n_position_sets (100). 60/20/20 keeps the 60:20:20 proportion:
   # 60 meta-training layouts, 20+20 held out for a stable interp/extrap curve.
   geometry_split:
-    n_train: 60
-    n_val: 20
+    n_train: 140
+    n_val: 40
     n_test: 20

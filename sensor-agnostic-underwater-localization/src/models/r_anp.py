@@ -306,10 +306,19 @@ class LatentModel(nn.Module):
 
         posterior_mu = posterior_var = None
         if target_y is not None:
-            posterior_mu, posterior_var, posterior = self.latent_encoder(target_x, target_y)
+            # Posterior conditions on context UNION targets (standard ANP; see
+            # anp.py LatentModel.forward for the rationale). Training-only.
+            posterior_mu, posterior_var, posterior = self.latent_encoder(
+                t.cat([context_x, target_x], dim=1),
+                t.cat([context_y, target_y], dim=1))
 
         use_posterior = (target_y is not None) and (not predict_with_prior)
-        z = posterior if use_posterior else prior
+        # train(): decode a SAMPLE of z; eval(): decode the distribution MEAN
+        # (deterministic point prediction; see anp.py for the rationale).
+        if use_posterior:
+            z = posterior if self.training else posterior_mu
+        else:
+            z = prior if self.training else prior_mu
 
         z = z.unsqueeze(1).repeat(1, num_targets, 1)
 

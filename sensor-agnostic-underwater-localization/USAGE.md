@@ -17,7 +17,7 @@ Two choices define an experiment end-to-end:
 - **dataset identity** = `task` + `method` + `mode` (e.g. `random_spiral_shared`).
   Used by BOTH generation and training so paths always line up.
 - **split** = how the data is carved into train/val/test
-  (`topology` / `within_geometry` / `geometry`).
+  (`topology` / `layout_seen` / `layout_ood`).
 
 ---
 
@@ -168,24 +168,28 @@ optional **`experiment`**. `data_dir` is derived from the composed `dataset`, so
 training points at exactly what `generate.py dataset=<same>` built.
 
 ### 3a. Models (`model=`)
-`cnp` · `anp` (latent) · `ranp` (recurrent latent) · `rcnp` (recurrent det.) ·
-`online_ranp` (streaming). All read `feat_dim` from the data.
+`cnp` · `anp` (latent) · `spatial_cnp` / `spatial_anp` (same archs + spatial
+front end **on**) · `ranp` (recurrent latent) · `rcnp` (recurrent det.) ·
+`online_ranp` (streaming). All read `feat_dim` from the data. Each model config
+has `arch` (which class is built) and `name` (display name for runs/dirs).
 
 ### 3b. Splits (`data=`)
 - `data=topology` (+ `data.topology=ellipsoidal|random|aligned`) — single fixed layout.
-- `data=within_geometry` — random task, all layouts seen in training.
-- `data=geometry` — random task, **held-out layouts** (the displacement/OOD task; carries `sensor_pos`).
+- `data=layout_seen` — random task, all layouts seen in training (disk: `within_geometry_split`).
+- `data=layout_ood` — random task, **held-out layouts** (the displacement/OOD task; carries `sensor_pos`; disk: `geometry_split`).
 
-### 3c. Spatial encoder (`model.spatial.*`) — sensor-position-aware front end
+### 3c. Spatial encoder (`model=spatial_*`, knobs under `model.spatial.*`)
 
 Turns each point's flat `feat_dim` vector into per-sensor tokens, tags each with
 its Fourier-encoded physical position, attends across sensors and pools →
-permutation-equivariant over sensors. **Requires `data=geometry`** (needs
-`sensor_pos`); `n_sensors` is inferred from the data. Off ⇒ the flat baseline.
+permutation-equivariant over sensors. **Requires a layout split** (needs
+`sensor_pos`); `n_sensors` is inferred from the data. The flat `cnp`/`anp`
+baselines have it off; `spatial_cnp`/`spatial_anp` turn it on. The block lives
+once in `config/model/_spatial.yaml`.
 
 | Knob | Default | Meaning |
 |---|---|---|
-| `enabled` | false* | master switch (`true` in `model/cnp.yaml` currently). |
+| `enabled` | false | master switch (`true` in the `spatial_*` variants). |
 | `tokenize` | true | per-sensor tokens (permutation-equivariant). `false` = flat+position control. |
 | `use_position` | true | add Fourier position features per sensor. |
 | `use_attention` | true | cross-sensor self-attention (else Deep-Sets pooling only). |
@@ -196,13 +200,13 @@ permutation-equivariant over sensors. **Requires `data=geometry`** (needs
 | `pos_dim` | 2 | use (x, y); sensors share a constant depth. |
 
 ```bash
-# full spatial model
-python scripts/train/train_np_geometry.py experiment=spatial_geometry model=cnp
+# full spatial model (layout_ood is already the default data split)
+python scripts/train/train_np_geometry.py model=spatial_cnp
 # ablations (attribute the gain):
-python scripts/train/train_np_geometry.py experiment=spatial_geometry model.spatial.enabled=false        # flat baseline
-python scripts/train/train_np_geometry.py experiment=spatial_geometry model.spatial.tokenize=false       # flat + position (not invariant)
-python scripts/train/train_np_geometry.py experiment=spatial_geometry model.spatial.use_position=false   # invariance alone
-python scripts/train/train_np_geometry.py experiment=spatial_geometry model.spatial.use_attention=false  # Deep-Sets (no self-attn)
+python scripts/train/train_np_geometry.py model=cnp                                          # flat baseline
+python scripts/train/train_np_geometry.py model=spatial_cnp model.spatial.tokenize=false      # flat + position (not invariant)
+python scripts/train/train_np_geometry.py model=spatial_cnp model.spatial.use_position=false  # invariance alone
+python scripts/train/train_np_geometry.py model=spatial_cnp model.spatial.use_attention=false # Deep-Sets (no self-attn)
 ```
 
 ### 3d. Data-budget subsampling (`data.max_*`) — "how much data do we need?" sweeps
@@ -220,7 +224,7 @@ nested subsets.
 ```bash
 # layout-budget sweep (val/test fixed)
 for G in 40 80 120 160; do
-  python scripts/train/train_np_geometry.py experiment=spatial_geometry model=cnp \
+  python scripts/train/train_np_geometry.py model=spatial_cnp \
       data.max_train_geometries=$G exp_name=spatial_cnp_g$G
 done
 ```
@@ -231,19 +235,22 @@ Stops after `early_stop_patience` epochs with no val-MAE improvement
 bar as `es=<counter>/<patience>`. `best.pt` is always the val-MAE minimum.
 
 ### 3f. Experiments (`experiment=`)
-One file pins dataset + data + model + `exp_name` + training tweaks:
+One file pins the dataset + split pairing (model stays whatever you pick):
 
 | `experiment=` | What |
 |---|---|
 | `topology` | single fixed layout, per topology |
-| `within_geometry` | random task, all layouts seen |
-| `geometry_ood` | random task, held-out layouts, **flat** baseline |
-| `spatial_geometry` | random task, held-out layouts, **spatial encoder on** |
+| `layout_seen` | random task, all layouts seen |
+| `layout_ood` | random task, held-out layouts (also the no-experiment default) |
+
+`exp_name` is auto-derived from what you composed
+(`<model.name>_<dataset>_<data>`, e.g. `spatial_cnp_random_spiral_shared_layout_ood`);
+override `exp_name=...` only for special runs.
 
 ### 3g. Common overrides
-- Model / seed: `model=cnp`, `seed=1`
+- Model / seed: `model=spatial_cnp`, `seed=1`
 - Optim: `training.epochs=500 training.lr=5e-5 training.batch_size=8 training.early_stop_patience=50`
-- Context: `data.ctx_min=2 data.ctx_max=40 data.val_ctx=10 data.ctx_sample_mode=first|random data.exclude_ctx_from_target=true`
+- Context: `data.context.min=2 data.context.max=40 data.context.eval=10 data.context.sample_mode=first|random data.context.exclude_from_target=true`
 - Logging: `wandb.enabled=false`, `exp_name=my_run`, `device=cpu`
 
 > **Batch size:** the context size is drawn **once per batch** and shared by all
@@ -302,10 +309,10 @@ done
 python data/generate.py dataset=random_hermite_shared
 python data/process_data.py --data-root data/random_task/hermite_shared --mode geometry \
     --train-geoms 160 --val-geoms 20 --test-geoms 20
-# flat baseline (the gap)
-python scripts/train/train_np_geometry.py experiment=geometry_ood model=cnp
+# flat baseline (the gap) — dataset override matches the hermite data generated above
+python scripts/train/train_np_geometry.py experiment=layout_ood dataset=random_hermite_shared model=cnp
 # spatial encoder (closes it)
-python scripts/train/train_np_geometry.py experiment=spatial_geometry model=cnp
+python scripts/train/train_np_geometry.py experiment=layout_ood dataset=random_hermite_shared model=spatial_cnp
 python scripts/eval/eval_np_geometry.py --ckpt <run>/best.pt --out-dir <run>/eval \
     --eval-ctx 10 --n-context-draws 3 --ctx-sample-mode first
 ```
@@ -313,7 +320,7 @@ python scripts/eval/eval_np_geometry.py --ckpt <run>/best.pt --out-dir <run>/eva
 **C. Within-geometry (aliasing baseline — all layouts seen)**
 ```bash
 python data/process_data.py --data-root data/random_task/spiral_shared --mode legacy
-python scripts/train/train_np_geometry.py experiment=within_geometry
+python scripts/train/train_np_geometry.py experiment=layout_seen
 ```
 
 ---

@@ -1,15 +1,20 @@
-# Shared context-sampling defaults for every data (split) config. Each variant
-# below includes this via `defaults: [_base, _self_]` and only sets what differs
-# (data_dir + exclude_ctx_from_target). Edit shared knobs here, once.
+# Shared defaults for every data (split) config. Each split file includes this
+# via `defaults: [_base, _self_]` and only sets what differs (data_dir +
+# context.exclude_from_target). Edit shared knobs here, once.
 
 # Target normalisation (zero-mean / unit-std, stats computed on the train set).
 normalize_y: true
 
-# Context-set sampling.
-ctx_min: 2               # min context points (random size per train batch)
-ctx_max: 40              # max context points
-val_ctx: 10              # fixed context size used for validation
-ctx_sample_mode: first   # 'first': ordered prefix | 'random': random subset
+# Context-set sampling (one block, one concept).
+context:
+  min: 2               # min context points (random size per train batch)
+  max: 40              # max context points
+  eval: 10             # fixed context size for validation / evaluation
+  sample_mode: first   # 'first': ordered prefix | 'random': random subset
+  # Target-set composition: true -> targets are the COMPLEMENT of the context
+  # (non-overlapping); false -> targets are ALL points (context is a subset of
+  # the targets). Split files override where the task demands it.
+  exclude_from_target: true
 
 # Streaming granularity for the online model (model=online_ranp); offline ignore.
 chunk_size: 8
@@ -17,16 +22,16 @@ chunk_size: 8
 # Cap the number of TRAINING geometries (null = use all). Only affects the train
 # pool; val/test stay fixed. Keeps the first N distinct geometry_ids (sorted), so
 # 10 subset of 20 subset of 40 -- for "how many sensor layouts do we need?" sweeps.
-max_train_geometries: 160
+max_train_geometries: 140
 
-# Cap the number of TRAINING trajectories / source paths (null = use all). Composes 
-# with max_train_geometries so the training set is (first N layouts) x (first M paths). 
+# Cap the number of TRAINING trajectories / source paths (null = use all). Composes
+# with max_train_geometries so the training set is (first N layouts) x (first M paths).
 # Needs data with traj_id (geometry / topology modes).
-max_train_trajectories: 250
+max_train_trajectories: 350
 
 # Cap the VALIDATION trajectories (null = use all). Set equal to
 # max_train_trajectories to train and validate on the SAME source paths (pure
 # layout-generalization, as in the original test) -- removes the train/val path
 # mismatch that inflates the late-epoch overfitting overshoot. Held-out val
 # geometries are untouched; only their trajectories are subsampled.
-max_val_trajectories: 250
+max_val_trajectories: 350

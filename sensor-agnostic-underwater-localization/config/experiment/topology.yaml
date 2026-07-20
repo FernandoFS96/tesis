@@ -8,9 +8,3 @@
 defaults:
   - override /dataset: topology_spiral
   - override /data: topology
-  - override /model: cnp
-
-exp_name: topology_spiral
-training:
-  epochs: 2000
-  kl_warmup_epochs: 1000

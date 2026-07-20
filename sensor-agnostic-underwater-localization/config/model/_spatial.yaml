@@ -1,0 +1,35 @@
+# Shared sensor-position-aware (spatial) front-end block — single source of
+# truth included by cnp.yaml and anp.yaml (disabled there; the spatial_cnp /
+# spatial_anp variants flip `enabled: true`). See src/models/anp.py:SpatialEncoder.
+#
+# When enabled it tokenizes each point's features by sensor, tags each token
+# with its Fourier-encoded physical position, attends across sensors, and pools
+# to a per-point vector --> permutation-equivariant over sensors. Requires the
+# geometry split (data=layout_ood / layout_seen, carries sensor_pos); n_sensors
+# is inferred from the data.
+#
+# ---------------------------------------------------------------------------
+# ABLATION LADDER (attributes the gain: tokenization vs position vs attention).
+# Same data + protocol; override the flags on the CLI:
+#
+#  1. flat baseline            model=cnp (or anp)                    spatial off
+#  2. flat + position          model=spatial_cnp model.spatial.tokenize=false
+#                              (NOT permutation-invariant; "just needs position?")
+#  3. tokens + attn, no pos    model=spatial_cnp model.spatial.use_position=false
+#                              (invariance alone)
+#  4. tokens + pos, no attn    model=spatial_cnp model.spatial.use_attention=false
+#                              (Deep-Sets; is attention needed?)
+#  5. full                     model=spatial_cnp (or spatial_anp)
+# ---------------------------------------------------------------------------
+spatial:
+  enabled: false
+  tokenize: true         # per-sensor tokens (invariant). false -> flat+position control
+  use_position: true     # add Fourier position features per sensor
+  use_attention: true    # cross-sensor self-attention (else Deep-Sets pool only)
+  pooling: attention     # attention (learned query) | mean
+  norm_acoustic: layernorm  # balance acoustic vs position scale: layernorm (per-sensor, drops amplitude ratios) | standardize (global scale, keeps them) | none (collapses)
+  n_attn_layers: 1
+  n_fourier_bands: 8
+  min_wavelength: 10.0    # metres; span the sensor-displacement scale
+  max_wavelength: 1000.0
+  pos_dim: 2             # (x, y); sensors share a constant depth

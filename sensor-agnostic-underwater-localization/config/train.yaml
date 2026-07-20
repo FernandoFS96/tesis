@@ -1,43 +1,47 @@
 # =============================================================================
 # Main training config for the neural-process geometry baselines.
 #
-# Run examples:
-#   python scripts/train/train_np_geometry.py                # defaults (cnp)
+# Pick WHAT to train by name; everything else has sensible defaults:
+#   python scripts/train/train_np_geometry.py                      # defaults (cnp)
+#   python scripts/train/train_np_geometry.py model=spatial_cnp    # spatial variant
 #   python scripts/train/train_np_geometry.py model=anp
+#   python scripts/train/train_np_geometry.py experiment=topology model=anp
 #   python scripts/train/train_np_geometry.py model=ranp training.epochs=500
-#   python scripts/train/train_np_geometry.py model=anp data.normalize_y=true \
-#       data.ctx_sample_mode=first
 #   python scripts/train/train_np_geometry.py wandb.enabled=false
+# Models: cnp | anp | spatial_cnp | spatial_anp | ranp | rcnp | online_ranp
+# Splits (data=): layout_ood | layout_seen | topology
 # =============================================================================
 defaults:
   - _self_
-  - dataset: topology_spiral   # which generated dataset (identity: task/method/mode)
-  - data: topology             # split view: topology | geometry | within_geometry
-  - model: anp                 # cnp | anp | rcnp | ranp | online_ranp
+  - dataset: random_hermite_shared   # which generated dataset (identity: task/method/mode)
+  - data: layout_ood           # split view: layout_ood | layout_seen | topology
+  - model: rcnp                 # cnp | anp | spatial_cnp | spatial_anp | ranp | rcnp | online_ranp
   - wandb: default
   - experiment: null           # opt-in bundles: `experiment=<name>` (see config/experiment/)
 
 # Experiment identity, used as the wandb group name and to organise outputs.
-exp_name: topology_spiral_anp
+# AUTO-DERIVED from what you composed (e.g. "spatial_cnp_random_spiral_shared_layout_ood"),
+# so it is always truthful; override `exp_name=...` only for special runs.
+exp_name: ${model.name}_${hydra:runtime.choices.dataset}_${hydra:runtime.choices.data}
 
 seed: 1
 device: auto  # 'auto' -> cuda if available else cpu; or set 'cuda' / 'cpu'
 
 # -----------------------------------------------------------------------------
-# Optimisation / training-loop hyperparameters
+# Optimisation / training-loop hyperparameters (canonical here; experiments
+# should only override values that are genuinely task-specific).
 # -----------------------------------------------------------------------------
 training:
-  epochs: 1000
+  epochs: 500
   batch_size: 8
-  lr: 5.0e-4
+  lr: 3.0e-5
   weight_decay: 1.0e-4
-  # Base KL weight (latent models only: anp / ranp). The KL is now normalized to
-  # per-target-point, per-dim ELBO units inside the models (divided by
-  # num_targets * output_dim, matching the meaned NLL), so beta=1.0 is the
-  # standard ELBO. Under the OLD unnormalized loss beta=1.0 acted like ~120
-  # (num_targets*output_dim) and collapsed the posterior onto the prior (KL -> 0
-  # by epoch ~50 in the 2026-07-07 baseline runs); old and new beta values are
-  # NOT comparable.
+  # Base KL weight (latent models only: anp / spatial_anp / ranp / online_ranp).
+  # The KL is normalized to per-target-point, per-dim ELBO units inside the
+  # models (divided by num_targets * output_dim, matching the meaned NLL), so
+  # beta=1.0 is the standard ELBO. Under the OLD unnormalized loss beta=1.0
+  # acted like ~120 (num_targets*output_dim) and collapsed the posterior onto
+  # the prior; old and new beta values are NOT comparable.
   beta: 1.0
   # Linearly warm the KL weight 0 -> beta over this many epochs (latent models
   # only); 0 disables (constant beta). With the normalized KL the pressure at
@@ -54,7 +58,7 @@ training:
 
 hydra:
   run:
-    dir: ${repo_root:}/output/hydra/training/${now:%Y-%m-%d}/${exp_name}/${model.name}_seed_${seed}
+    dir: ${repo_root:}/output/hydra/training/${now:%Y-%m-%d}/${exp_name}/seed_${seed}
   sweep:
     dir: ${repo_root:}/output/hydra/training/${now:%Y-%m-%d}
     subdir: ${exp_name}/${sub_dir_shortener:${hydra:job.override_dirname}, 3, False}/seed_${format:${seed}, '{:02d}'}

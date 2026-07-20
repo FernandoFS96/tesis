@@ -385,10 +385,24 @@ class LatentModel(nn.Module):
 
         posterior_mu = posterior_var = None
         if target_y is not None:
-            posterior_mu, posterior_var, posterior = self.latent_encoder(target_x, target_y)
+            # Posterior conditions on context UNION targets (standard ANP; also
+            # what online_r_anp.py does): the best-informed distribution the KL
+            # teaches the context-only prior to approximate. Training-only
+            # machinery -- deployment always runs the prior path (target_y=None).
+            posterior_mu, posterior_var, posterior = self.latent_encoder(
+                t.cat([context_x, target_x], dim=1),
+                t.cat([context_y, target_y], dim=1))
 
         use_posterior = (target_y is not None) and (not predict_with_prior)
-        z = posterior if use_posterior else prior
+        # train(): decode a SAMPLE of z (stochastic ELBO). eval(): decode the
+        # distribution MEAN -- the point-prediction analogue of disabling dropout;
+        # a single sampled z adds zero-mean noise that only inflates MAE and makes
+        # checkpoint selection jittery. Sampling at eval is still available by
+        # calling with the module in train() mode.
+        if use_posterior:
+            z = posterior if self.training else posterior_mu
+        else:
+            z = prior if self.training else prior_mu
 
         z = z.unsqueeze(1).repeat(1, num_targets, 1)
         r = self.deterministic_encoder(context_x, context_y, target_x)

@@ -9,4 +9,3 @@ defaults:
 
 topology: random         # ellipsoidal | random | aligned
 data_dir: data/topology_task/${dataset.method}/processed/topology_${data.topology}
-exclude_ctx_from_target: true

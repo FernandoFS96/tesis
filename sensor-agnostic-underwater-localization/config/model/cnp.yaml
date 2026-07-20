@@ -1,20 +1,10 @@
 # Attentive CNP (deterministic, no latent, no RNN) -> anp.DeterministicModel
-name: cnp
+# Flat baseline: spatial front end DISABLED here (see model=spatial_cnp).
+defaults:
+  - _spatial        # shared spatial block (single source of truth, disabled)
+  - _self_
+
+arch: cnp           # architecture: what build_model instantiates (cnp|anp|ranp|rcnp|online_ranp)
+name: cnp           # display name: unique per config file; used in exp/run/dir naming
 num_hidden: 128
 dropout: 0.2        # dropout prob for attention + decoder-MLP LayerNorm/dropout
-
-# Sensor-position-aware front end (default OFF -> flat baseline). See anp.yaml for
-# the full description; requires the geometry split (data=geometry). Ablations:
-# flip use_position / use_attention / tokenize.
-spatial:
-  enabled: false
-  tokenize: true         # per-sensor tokens (invariant). false -> flat+position control
-  use_position: true     # add Fourier position features per sensor
-  use_attention: true    # cross-sensor self-attention (else Deep-Sets pool only)
-  pooling: attention     # attention (learned query) | mean
-  norm_acoustic: layernorm  # balance acoustic vs position scale: layernorm (per-sensor, drops amplitude ratios) | standardize (global scale, keeps them) | none (collapses)
-  n_attn_layers: 1
-  n_fourier_bands: 8
-  min_wavelength: 10.0    # metres; span the sensor-displacement scale
-  max_wavelength: 1000.0
-  pos_dim: 2             # (x, y); sensors share a constant depth

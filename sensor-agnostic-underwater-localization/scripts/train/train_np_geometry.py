@@ -2,17 +2,20 @@
 train_np_geometry.py
 ====================
 
-Unified trainer for the three neural-process baselines on the geometry-split
-data, selected with the Hydra ``model`` group:
+Unified trainer for the neural-process baselines, selected with the Hydra
+``model`` group. Each model config carries two identity fields: ``arch`` (which
+class to build, dispatched below) and ``name`` (display name for runs/dirs).
 
-    cnp   -> anp.DeterministicModel      (attentive CNP, no latent, no RNN)
-    anp   -> anp.LatentModel             (attentive latent NP)
-    ranp  -> r_anp.LatentModel           (recurrent attentive latent NP; LSTM)
-    rcnp  -> r_anp.DeterministicModel    (bonus: recurrent CNP, indexed conv.)
+    arch=cnp   -> anp.DeterministicModel   (attentive CNP, no latent, no RNN)
+    arch=anp   -> anp.LatentModel          (attentive latent NP)
+    arch=ranp  -> r_anp.LatentModel        (recurrent attentive latent NP; LSTM)
+    arch=rcnp  -> r_anp.DeterministicModel (bonus: recurrent CNP, indexed conv.)
+    arch=online_ranp -> online_r_anp.OnlineLatentModel (causal streaming)
 
-All baselines are trained with NO spatial encoding: the model sees only the raw
-acoustic features, never sensor_pos. They measure how much out-of-position
-degradation exists per architecture - the gap the spatial encoder will close.
+model=cnp/anp are FLAT baselines (no spatial encoding: raw acoustics only,
+never sensor_pos) measuring the out-of-position degradation per architecture;
+model=spatial_cnp/spatial_anp are the same archs with the sensor-position-aware
+front end enabled (the models meant to close that gap).
 
 WHY TWO CALLING CONVENTIONS (the one thing that matters here)
 -------------------------------------------------------------
@@ -44,8 +47,9 @@ All hyperparameters live in ``config/`` and are composed by Hydra. Override
 anything from the command line, e.g.:
 
     python train_np_geometry.py model=cnp
+    python train_np_geometry.py model=spatial_cnp
     python train_np_geometry.py model=anp data.normalize_y=true \
-        data.ctx_sample_mode=first training.epochs=500
+        data.context.sample_mode=first training.epochs=500
     python train_np_geometry.py model=ranp wandb.enabled=false
 
 Outputs (to the Hydra run dir, or ``out_dir`` if set):
@@ -363,8 +367,13 @@ def flat_ckpt_config(cfg, device):
     """A flat dict stored in the checkpoint so eval_np_geometry.py can read
     num_hidden / rnn_* / ctx_sample_mode etc. via simple ``.get`` calls."""
     m = cfg.model
+    ctx = cfg.data.context
     return {
-        "model": m.name,
+        # "model" holds the ARCH (dispatch key for eval's build_model); "name"
+        # is the display name (e.g. spatial_cnp). Checkpoint keys keep the
+        # historical flat names so eval_np_geometry.py needs no changes.
+        "model": m.get("arch", m.name),
+        "name": m.name,
         "num_hidden": m.num_hidden,
         "rnn_type": m.get("rnn_type", "lstm"),
         "rnn_layers": m.get("rnn_layers", 1),
@@ -372,11 +381,11 @@ def flat_ckpt_config(cfg, device):
         "dropout": m.get("dropout", 0.1),
         "data_dir": cfg.data.data_dir,
         "normalize_y": cfg.data.normalize_y,
-        "ctx_min": cfg.data.ctx_min,
-        "ctx_max": cfg.data.ctx_max,
-        "val_ctx": cfg.data.val_ctx,
-        "ctx_sample_mode": cfg.data.ctx_sample_mode,
-        "exclude_ctx_from_target": cfg.data.get("exclude_ctx_from_target", True),
+        "ctx_min": ctx.min,
+        "ctx_max": ctx.max,
+        "val_ctx": ctx.eval,
+        "ctx_sample_mode": ctx.sample_mode,
+        "exclude_ctx_from_target": ctx.get("exclude_from_target", True),
         "max_context": m.get("max_context", 128),     # online-only
         "chunk_size": cfg.data.get("chunk_size", 8),   # online-only (streaming granularity)
         "epochs": cfg.training.epochs,
@@ -396,7 +405,8 @@ def flat_ckpt_config(cfg, device):
 # --------------------------------------------------------------------------- #
 @hydra.main(version_base=None, config_path="../../config", config_name="train")
 def main(cfg: DictConfig):
-    model_name = cfg.model.name
+    model_name = cfg.model.name                    # display name (runs/dirs/prints)
+    arch = str(cfg.model.get("arch", model_name))  # architecture (build/dispatch)
     seed = cfg.seed
     t.manual_seed(seed); np.random.seed(seed)
 
@@ -487,26 +497,27 @@ def main(cfg: DictConfig):
         y_mean, y_std = compute_y_stats(train_ds)
         print(f"[{model_name}] y_mean={y_mean.numpy()}  y_std={y_std.numpy()}")
 
-    online = model_name.lower() == "online_ranp"
-    excl_ctx = cfg.data.get("exclude_ctx_from_target", True)
+    online = arch.lower() == "online_ranp"
+    ctx = cfg.data.context
+    excl_ctx = ctx.get("exclude_from_target", True)
     if online:
         chunk_size = cfg.data.get("chunk_size", 8)
         train_collate = make_online_collate(
-            cfg.data.ctx_min, cfg.data.ctx_max, chunk_size, seed=seed,
-            ctx_sample_mode=cfg.data.ctx_sample_mode)
+            ctx.min, ctx.max, chunk_size, seed=seed,
+            ctx_sample_mode=ctx.sample_mode)
         val_collate = make_online_collate(
-            cfg.data.ctx_min, cfg.data.ctx_max, chunk_size,
-            fixed_ctx=cfg.data.val_ctx, seed=seed + 1,
-            ctx_sample_mode=cfg.data.ctx_sample_mode)
+            ctx.min, ctx.max, chunk_size,
+            fixed_ctx=ctx.eval, seed=seed + 1,
+            ctx_sample_mode=ctx.sample_mode)
     else:
         train_collate = make_collate(
-            cfg.data.ctx_min, cfg.data.ctx_max, seed=seed,
-            ctx_sample_mode=cfg.data.ctx_sample_mode,
+            ctx.min, ctx.max, seed=seed,
+            ctx_sample_mode=ctx.sample_mode,
             exclude_ctx_from_target=excl_ctx)
         val_collate = make_collate(
-            cfg.data.ctx_min, cfg.data.ctx_max,
-            fixed_ctx=cfg.data.val_ctx, seed=seed + 1,
-            ctx_sample_mode=cfg.data.ctx_sample_mode,
+            ctx.min, ctx.max,
+            fixed_ctx=ctx.eval, seed=seed + 1,
+            ctx_sample_mode=ctx.sample_mode,
             exclude_ctx_from_target=excl_ctx)
 
     train_loader = DataLoader(
@@ -527,7 +538,7 @@ def main(cfg: DictConfig):
         if not train_ds.has_sensor_pos:
             raise SystemExit(
                 "model.spatial.enabled=true but the dataset has no 'sensor_pos' "
-                "(use the geometry split: data=geometry).")
+                "(use a layout split: data=layout_ood or data=layout_seen).")
         spatial_cfg = dict(OmegaConf.to_container(_sc, resolve=True))  # type: ignore[arg-type]
         spatial_cfg["n_sensors"] = train_ds.n_sensors
         print(f"[{model_name}] spatial encoder ON: n_sensors={train_ds.n_sensors} "
@@ -538,7 +549,7 @@ def main(cfg: DictConfig):
 
     # ---- model -------------------------------------------------------------
     model, conv = build_model(
-        model_name, cfg.model.num_hidden, feat_dim, out_dim,
+        arch, cfg.model.num_hidden, feat_dim, out_dim,
         rnn_type=cfg.model.get("rnn_type", "lstm"),
         rnn_layers=cfg.model.get("rnn_layers", 1),
         rnn_dropout=cfg.model.get("rnn_dropout", 0.0),
@@ -574,7 +585,7 @@ def main(cfg: DictConfig):
     # weight is linearly warmed up from 0 to base_beta over kl_warmup_epochs (a
     # constant beta from epoch 1 invites posterior collapse); kl_warmup_epochs=0
     # disables the warmup (constant base_beta).
-    base_beta = cfg.training.beta if is_latent(model_name) else 0.0
+    base_beta = cfg.training.beta if is_latent(arch) else 0.0
     kl_warmup = int(cfg.training.get("kl_warmup_epochs", 0))
 
     def beta_at(ep):
@@ -651,8 +662,9 @@ def main(cfg: DictConfig):
         # ---- best-checkpoint selection + early stopping (by val MAE) ----------
         if va[2] < best_val_mae - es_min_delta:
             best_val_mae = va[2]; best_epoch = ep; es_counter = 0
+            # "model_name" stores the ARCH: eval_np_geometry.py dispatches on it.
             t.save({"model": model.state_dict(), "config": ckpt_cfg,
-                    "model_name": model_name, "convention": conv,
+                    "model_name": arch, "convention": conv,
                     "feat_dim": feat_dim, "out_dim": out_dim, "epoch": ep,
                     "y_mean": y_mean, "y_std": y_std},
                    os.path.join(out_dir, "best.pt"))
@@ -684,8 +696,8 @@ def main(cfg: DictConfig):
                 viz.log_visualizations(
                     model, conv, ep=ep, viz_cfg=viz_cfg, val_ds=val_ds,
                     fixed_idx=fixed_idx, device=device,
-                    val_ctx=cfg.data.val_ctx,
-                    ctx_sample_mode=cfg.data.ctx_sample_mode,
+                    val_ctx=ctx.eval,
+                    ctx_sample_mode=ctx.sample_mode,
                     exclude_ctx_from_target=excl_ctx,
                     chunk_size=cfg.data.get("chunk_size", 8),
                     y_mean=y_mean, y_std=y_std,
@@ -701,7 +713,7 @@ def main(cfg: DictConfig):
             break
 
     t.save({"model": model.state_dict(), "config": ckpt_cfg,
-            "model_name": model_name, "convention": conv,
+            "model_name": arch, "convention": conv,
             "feat_dim": feat_dim, "out_dim": out_dim, "epoch": ep,
             "y_mean": y_mean, "y_std": y_std},
            os.path.join(out_dir, "last.pt"))
