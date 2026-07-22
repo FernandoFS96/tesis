@@ -15,16 +15,16 @@ defaults:
   - _self_
   - dataset: random_hermite_shared   # which generated dataset (identity: task/method/mode)
   - data: layout_ood           # split view: layout_ood | layout_seen | topology
-  - model: rcnp                 # cnp | anp | spatial_cnp | spatial_anp | ranp | rcnp | online_ranp
+  - model: spatial_cnp                 # cnp | anp | spatial_cnp | spatial_anp | ranp | rcnp | online_ranp
   - wandb: default
   - experiment: null           # opt-in bundles: `experiment=<name>` (see config/experiment/)
 
 # Experiment identity, used as the wandb group name and to organise outputs.
 # AUTO-DERIVED from what you composed (e.g. "spatial_cnp_random_spiral_shared_layout_ood"),
 # so it is always truthful; override `exp_name=...` only for special runs.
-exp_name: ${model.name}_${hydra:runtime.choices.dataset}_${hydra:runtime.choices.data}
+exp_name: ${model.name}_${hydra:runtime.choices.dataset}_${hydra:runtime.choices.data}_256
 
-seed: 1
+seed: 2
 device: auto  # 'auto' -> cuda if available else cpu; or set 'cuda' / 'cpu'
 
 # -----------------------------------------------------------------------------
@@ -32,9 +32,9 @@ device: auto  # 'auto' -> cuda if available else cpu; or set 'cuda' / 'cpu'
 # should only override values that are genuinely task-specific).
 # -----------------------------------------------------------------------------
 training:
-  epochs: 500
-  batch_size: 8
-  lr: 3.0e-5
+  epochs: 1000
+  batch_size: 128
+  lr: 5.0e-5
   weight_decay: 1.0e-4
   # Base KL weight (latent models only: anp / spatial_anp / ranp / online_ranp).
   # The KL is normalized to per-target-point, per-dim ELBO units inside the
@@ -48,11 +48,11 @@ training:
   # beta=1 is ~120x weaker than before, so a long warmup is likely unnecessary;
   # kept as a safety net against early collapse.
   kl_warmup_epochs: 100
-  num_workers: 1
+  num_workers: 4
   # Early stopping on validation MAE: stop after this many epochs with no
   # improvement (> early_stop_min_delta). 0/null disables (train the full epochs).
   early_stop_patience: 100
-  early_stop_min_delta: 0.5
+  early_stop_min_delta: 0.3
 
 
 

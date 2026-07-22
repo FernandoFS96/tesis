@@ -299,6 +299,11 @@ def main():
                          "omitted, reads from checkpoint config (default 8). "
                          "Ignored by offline models.")
     ap.add_argument("--device", default="cuda" if t.cuda.is_available() else "cpu")
+    ap.add_argument("--require-causal", action="store_true",
+                    help="hard-fail unless the eval is deployment-causal "
+                         "(ctx_sample_mode=first AND exclude_ctx_from_target=true): "
+                         "context is a past prefix, so no target attends a FUTURE "
+                         "fix. Use for real-time-localization (no-GPS) numbers.")
     args = ap.parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
     device = t.device(args.device)
@@ -355,8 +360,17 @@ def main():
     y_mean = ck.get("y_mean")
     y_std  = ck.get("y_std")
 
-    # context sampling mode: CLI flag overrides checkpoint config
-    ctx_sample_mode = args.ctx_sample_mode or cfg.get("ctx_sample_mode", "random")
+    # context sampling mode: CLI flag overrides checkpoint config. Fallback is
+    # 'first' (the causal-safe choice) so a checkpoint that never stored the mode
+    # is not silently evaluated with future-fix leakage; we warn when we assume it.
+    if args.ctx_sample_mode:
+        ctx_sample_mode = args.ctx_sample_mode
+    elif "ctx_sample_mode" in cfg:
+        ctx_sample_mode = cfg["ctx_sample_mode"]
+    else:
+        ctx_sample_mode = "first"
+        print("[eval] checkpoint did not store ctx_sample_mode; assuming 'first' "
+              "(causal). Pass --ctx-sample-mode to override.")
 
     # target-set composition: CLI flag overrides checkpoint config (old
     # checkpoints, trained on all points, default to False).
@@ -364,6 +378,29 @@ def main():
         exclude_ctx = args.exclude_ctx == "true"
     else:
         exclude_ctx = bool(cfg.get("exclude_ctx_from_target", False))
+
+    # ---- deployment-causality check (real-time localization, no GPS) ----------
+    # Causal <=> context is a PAST prefix of every target: ctx_sample_mode='first'
+    # AND targets are the complement (exclude_ctx=true). Otherwise a target can
+    # attend a fix that lies in its FUTURE -- unavailable at deployment, and it
+    # inflates exactly the models that aggregate context (latent/recurrent). The
+    # causal LSTM never leaks future acoustics; this is only about future FIXES.
+    is_causal = (ctx_sample_mode == "first") and exclude_ctx
+    if not is_causal:
+        reasons = []
+        if ctx_sample_mode != "first":
+            reasons.append(f"ctx_sample_mode='{ctx_sample_mode}' (scattered fixes)")
+        if not exclude_ctx:
+            reasons.append("exclude_ctx_from_target=false (targets include non-future points)")
+        msg = ("[eval] NON-CAUSAL eval: " + "; ".join(reasons) + ". Targets may "
+               "attend FUTURE position fixes -> NOT deployment-faithful for "
+               "real-time localization; recurrent/latent numbers are optimistic.")
+        if args.require_causal:
+            raise SystemExit(msg + " (--require-causal is set)")
+        print(msg)
+    else:
+        print("[eval] causal eval (ctx=first prefix, targets=future complement): "
+              "no future-fix leakage.")
 
     pools = {}
     for nm in ["train", "val", "test"]:
