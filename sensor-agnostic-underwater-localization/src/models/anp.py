@@ -52,18 +52,22 @@ class DeterministicEncoder(nn.Module):
         self.context_projection = Linear(input_dim, num_hidden)
         self.target_projection = Linear(input_dim, num_hidden)
 
-    def forward(self, context_x, context_y, target_x):
+    def forward(self, context_x, context_y, target_x, context_mask=None):
+        # context_mask: optional bool (B, n_ctx), True = real context point (else
+        # a padded slot to be ignored). Lets a batch hold per-sample context sizes.
         encoder_input = t.cat([context_x, context_y], dim=-1)
         encoder_input = self.input_projection(encoder_input)
 
         for attention in self.self_attentions:
-            encoder_input, _ = attention(encoder_input, encoder_input, encoder_input)
+            encoder_input, _ = attention(encoder_input, encoder_input, encoder_input,
+                                         key_padding_mask=context_mask)
 
         query = self.target_projection(target_x)
         keys = self.context_projection(context_x)
 
         for attention in self.cross_attentions:
-            query, _ = attention(keys, encoder_input, query)
+            query, _ = attention(keys, encoder_input, query,
+                                 key_padding_mask=context_mask)
 
         return query
 
@@ -99,10 +103,11 @@ class MultiheadAttention(nn.Module):
         self.num_hidden_k = num_hidden_k
         self.attn_dropout = nn.Dropout(p=dropout)
 
-    def forward(self, key, value, query):
+    def forward(self, key, value, query, attn_mask=None):
         """
         key, value: (B', Lk, d)
         query:      (B', Lq, d)
+        attn_mask:  optional bool (B', Lq, Lk), True = attend (else masked out).
         """
         # SDPA apply scale 1/sqrt(d) internally and can use optimized kernels
         dropout_p = self.attn_dropout.p if self.training else 0.0
@@ -110,7 +115,7 @@ class MultiheadAttention(nn.Module):
         # scaled_dot_product_attention expects (query, key, value)
         out = F.scaled_dot_product_attention(
             query, key, value,
-            attn_mask=None,
+            attn_mask=attn_mask,
             dropout_p=dropout_p,
             is_causal=False
         )
@@ -134,7 +139,8 @@ class Attention(nn.Module):
         self.final_linear = Linear(num_hidden * 2, num_hidden)
         self.layer_norm = nn.LayerNorm(num_hidden)
 
-    def forward(self, key, value, query):
+    def forward(self, key, value, query, key_padding_mask=None):
+        # key_padding_mask: optional bool (batch_size, seq_k), True = valid key.
         batch_size = key.size(0)
         seq_k = key.size(1)
         seq_q = query.size(1)
@@ -148,7 +154,15 @@ class Attention(nn.Module):
         value = value.permute(2, 0, 1, 3).contiguous().view(-1, seq_k, self.num_hidden_per_attn)
         query = query.permute(2, 0, 1, 3).contiguous().view(-1, seq_q, self.num_hidden_per_attn)
 
-        result, attns = self.multihead(key, value, query)
+        # Build the (h*batch, seq_q, seq_k) attend-mask matching the h-major /
+        # batch-minor flatten above. Keys are the same across query positions.
+        attn_mask = None
+        if key_padding_mask is not None:
+            attn_mask = (key_padding_mask.view(1, batch_size, 1, seq_k)
+                         .expand(self.h, batch_size, seq_q, seq_k)
+                         .reshape(self.h * batch_size, seq_q, seq_k))
+
+        result, attns = self.multihead(key, value, query, attn_mask=attn_mask)
 
         result = result.view(self.h, batch_size, seq_q, self.num_hidden_per_attn)
         result = result.permute(1, 2, 0, 3).contiguous().view(batch_size, seq_q, -1)
@@ -476,19 +490,30 @@ class DeterministicModel(nn.Module):
                                             dropout=dropout)
 
     def forward(self, context_x, context_y, target_x, target_y=None, beta: float = 1.0,
-                predict_with_prior: bool = False, sensor_pos=None):
+                predict_with_prior: bool = False, sensor_pos=None, context_mask=None,
+                target_mask=None):
         # predict_with_prior is accepted for a uniform interface with the latent
         # models but has no effect: a deterministic CNP never uses target labels
         # to predict, so there is no posterior to peek at.
+        # context_mask: optional bool (B, n_ctx) marking real vs padded context
+        # slots, so one batch can carry per-sample context sizes (masked pooling).
+        # target_mask: optional bool (B, T) marking which target points to SCORE
+        # (per-sample; e.g. exclude each sample's own context points). Both come
+        # from the per-sample context-batching path (data.context.per_sample).
         if self.spatial_encoder is not None:
             context_x = self.spatial_encoder(context_x, sensor_pos)
             target_x = self.spatial_encoder(target_x, sensor_pos)
-        r = self.deterministic_encoder(context_x, context_y, target_x)
+        r = self.deterministic_encoder(context_x, context_y, target_x, context_mask=context_mask)
         y_pred_mean, y_pred_var = self.decoder(r, target_x)
 
         if target_y is not None:
             nll = 0.5 * t.log(2 * t.pi * y_pred_var) + 0.5 * ((target_y - y_pred_mean) ** 2) / y_pred_var
-            nll = nll.mean()
+            if target_mask is not None:
+                m = target_mask.unsqueeze(-1)                       # (B, T, 1)
+                denom = m.sum().clamp(min=1) * y_pred_mean.size(-1)
+                nll = (nll * m).sum() / denom
+            else:
+                nll = nll.mean()
             loss = nll
         else:
             nll = None

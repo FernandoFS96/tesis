@@ -27,8 +27,8 @@ spatial:
   use_position: true     # add Fourier position features per sensor
   use_attention: true    # cross-sensor self-attention (else Deep-Sets pool only)
   pooling: attention     # attention (learned query) | mean
-  norm_acoustic: layernorm  # balance acoustic vs position scale: layernorm (per-sensor, drops amplitude ratios) | standardize (global scale, keeps them) | none (collapses)
-  n_attn_layers: 1
+  norm_acoustic: standardize  # balance acoustic vs position scale: layernorm (per-sensor, drops amplitude ratios) | standardize (global scale, keeps them) | none (collapses)
+  n_attn_layers: 3
   n_fourier_bands: 8
   min_wavelength: 10.0    # metres; span the sensor-displacement scale
   max_wavelength: 1000.0

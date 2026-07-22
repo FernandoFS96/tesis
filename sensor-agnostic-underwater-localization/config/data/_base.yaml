@@ -6,15 +6,35 @@
 normalize_y: true
 
 # Context-set sampling (one block, one concept).
+#
+# DEPLOYMENT CAUSALITY (real-time acoustic localization, no GPS): the vehicle
+# localizes each point as it arrives, from that point's acoustics + fixes it
+# already has in the PAST. That scenario is faithfully reproduced iff context is
+# a PAST PREFIX of every target, i.e. sample_mode='first' AND
+# exclude_from_target=true (targets = the future complement). With those two,
+# no target can attend a future fix, and the causal LSTM never sees future
+# acoustics. sample_mode='random' or exclude_from_target=false break causality
+# (a target may attend a fix that lies in its future) -- use them only for
+# non-deployment diagnostics. eval enforces this with --require-causal.
 context:
   min: 2               # min context points (random size per train batch)
   max: 40              # max context points
   eval: 10             # fixed context size for validation / evaluation
-  sample_mode: first   # 'first': ordered prefix | 'random': random subset
+  sample_mode: first   # 'first': ordered prefix (CAUSAL) | 'random': subset (non-causal)
   # Target-set composition: true -> targets are the COMPLEMENT of the context
-  # (non-overlapping); false -> targets are ALL points (context is a subset of
-  # the targets). Split files override where the task demands it.
+  # (non-overlapping; CAUSAL with sample_mode=first); false -> targets are ALL
+  # points (non-causal). Split files override where the task demands it.
   exclude_from_target: true
+  # Per-sample context batching (Option C). false (default) = ORIGINAL behaviour:
+  # one context size is drawn per BATCH and shared by all its samples, so context
+  # -size variability is tied to the number of batches (small batch -> more
+  # variety but slow). true = each sample in a batch gets its OWN context size
+  # (padded + masked), decoupling variability from batch size -> you can raise
+  # batch_size for GPU throughput without losing diversity (equal wall-clock it
+  # matched/beat small-batch training in smoke tests). TRAIN only; validation
+  # keeps the fixed `eval` size. Supported for model=cnp / spatial_cnp only
+  # (deterministic split); errors for anp/ranp/rcnp/online_ranp.
+  per_sample: true
 
 # Streaming granularity for the online model (model=online_ranp); offline ignore.
 chunk_size: 8

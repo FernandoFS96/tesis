@@ -178,8 +178,24 @@ class TrajectoryDataset(Dataset):
         return X, y, int(s.get("geometry_id", -1)), float(s.get("theta", -1.0)), sensor_pos
 
 
+def _worker_rng(base_seed):
+    """NumPy Generator seeded uniquely per DataLoader worker.
+
+    A ``default_rng(seed)`` captured in a collate closure is forked to every
+    worker with the SAME seed, so with num_workers>1 all workers draw the
+    identical context-size sequence -> context diversity collapses by ~num_workers
+    (the whole point of per-batch context sampling is lost). Seeding by
+    (base_seed, worker_id) via a SeedSequence gives each worker a decorrelated
+    stream while staying deterministic for a given run seed. Single-process
+    loading (worker_info is None) reduces to worker id 0."""
+    wi = t.utils.data.get_worker_info()
+    wid = 0 if wi is None else wi.id
+    base = 0 if base_seed is None else int(base_seed)
+    return np.random.default_rng([base, wid])
+
+
 def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None, ctx_sample_mode="random",
-                 exclude_ctx_from_target=True):
+                 exclude_ctx_from_target=True, per_sample=False):
     """Builds a batch carrying BOTH calling conventions:
        - context_x/context_y/target_x/target_y  (for cnp/anp)
        - x_seq + context_indices/target_indices (for ranp)
@@ -191,10 +207,22 @@ def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None, ctx_sample_mode="r
          True  -> targets are the COMPLEMENT of the context (non-overlapping;
                   the model is scored only on unseen points). [default]
          False -> targets are ALL points (context is a subset of the targets,
-                  the standard NP convention)."""
-    rng = np.random.default_rng(seed)
+                  the standard NP convention).
+
+       per_sample (Option C): if True, each sample in the batch gets its OWN
+       context size (instead of one size shared by the whole batch). Context is
+       padded to the batch-max and a `context_mask` marks the real slots; targets
+       become ALL points with a per-sample `target_mask` selecting the scored set.
+       This decouples context-size variability from batch size, so a large GPU
+       batch still carries many context sizes. SPLIT convention only (cnp/anp/
+       spatial_*); it emits no context_indices, so ranp/rcnp/online can't use it.
+       Ignored when fixed_ctx is set (validation keeps one fixed size for all)."""
+    _rng = {"g": None}   # created lazily, once per DataLoader worker
 
     def collate(batch):
+        if _rng["g"] is None:                        # first call in this worker
+            _rng["g"] = _worker_rng(seed)
+        rng = _rng["g"]                              # per-worker, decorrelated
         Xs = t.stack([b[0] for b in batch], dim=0)   # (B, ppt, feat)
         ys = t.stack([b[1] for b in batch], dim=0)   # (B, ppt, 3)
         gids = t.tensor([b[2] for b in batch])
@@ -203,6 +231,31 @@ def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None, ctx_sample_mode="r
         sensor_pos = (t.stack(sps, dim=0)            # (B, n_sensors, 3)
                       if all(sp.numel() > 0 for sp in sps) else None)
         B, ppt, _ = Xs.shape
+
+        # ---- Option C: per-sample context sizes (padded + masked) -------------
+        if per_sample and fixed_ctx is None:
+            ncs = rng.integers(ctx_min, ctx_max + 1, size=B).clip(1, ppt)
+            max_ctx = int(ncs.max())
+            cx = t.zeros(B, max_ctx, Xs.size(-1), dtype=Xs.dtype)
+            cy = t.zeros(B, max_ctx, ys.size(-1), dtype=ys.dtype)
+            cmask = t.zeros(B, max_ctx, dtype=t.bool)
+            tmask = t.ones(B, ppt, dtype=t.bool)     # which points to SCORE
+            for b in range(B):
+                k = int(ncs[b])
+                if ctx_sample_mode == "first":
+                    idx = t.arange(k, dtype=t.long)
+                else:
+                    idx = t.as_tensor(np.sort(rng.permutation(ppt)[:k]), dtype=t.long)
+                cx[b, :k] = Xs[b, idx]; cy[b, :k] = ys[b, idx]; cmask[b, :k] = True
+                if exclude_ctx_from_target:
+                    tmask[b, idx] = False            # don't score a sample's own context
+            return {
+                "context_x": cx, "context_y": cy, "context_mask": cmask,
+                "target_x": Xs, "target_y": ys, "target_mask": tmask,
+                "gids": gids, "thetas": ths, "sensor_pos": sensor_pos,
+            }
+
+        # ---- standard: one context size shared by the whole batch -------------
         n_ctx = int(fixed_ctx) if fixed_ctx is not None else int(rng.integers(ctx_min, ctx_max + 1))
         n_ctx = max(1, min(n_ctx, ppt))
         if ctx_sample_mode == "first":
@@ -239,9 +292,12 @@ def make_online_collate(ctx_min, ctx_max, chunk_size, fixed_ctx=None, seed=None,
                                     (realistic: periodic position fixes)
        ctx_sample_mode='first'  -> fixes are an initial prefix (known start,
                                     then dead-reckon)."""
-    rng = np.random.default_rng(seed)
+    _rng = {"g": None}   # created lazily, once per DataLoader worker
 
     def collate(batch):
+        if _rng["g"] is None:                        # first call in this worker
+            _rng["g"] = _worker_rng(seed)
+        rng = _rng["g"]                              # per-worker, decorrelated
         Xs = t.stack([b[0] for b in batch], dim=0)   # (B, ppt, feat)
         ys = t.stack([b[1] for b in batch], dim=0)   # (B, ppt, 3)
         gids = t.tensor([b[2] for b in batch])
@@ -283,8 +339,13 @@ def model_forward(model, conv, batch, device, beta, with_target_y=True,
     if conv == "split":
         cx = batch["context_x"].to(device)
         tx = batch["target_x"].to(device)
+        # Per-sample context-batching (Option C) supplies these; None otherwise.
+        cmask = batch.get("context_mask")
+        cmask = cmask.to(device) if cmask is not None else None
+        tmask = batch.get("target_mask")
+        tmask = tmask.to(device) if tmask is not None else None
         return model(cx, cy, tx, ty, beta, predict_with_prior=predict_with_prior,
-                     sensor_pos=sp)
+                     sensor_pos=sp, context_mask=cmask, target_mask=tmask)
     else:  # indexed (ranp), spatial encoder not wired for recurrent models
         x_seq = batch["x_seq"].to(device)
         ci = batch["context_indices"].to(device)
@@ -342,9 +403,18 @@ def run_epoch(model, conv, loader, device, beta, optimizer=None, desc="",
         with t.no_grad():
             mean_phys = mean * ys + ym if ym is not None else mean
             dist = t.sqrt(((mean_phys - ty_raw) ** 2).sum(-1) + 1e-12)  # (B, n_tgt)
-            mae = dist.mean().item()
+            # Per-sample context-batching scores only each sample's target subset;
+            # mask the MAE the same way (else padded/context points would count).
+            tmask = batch.get("target_mask")
+            if tmask is not None:
+                tmask = tmask.to(device).float()
+                denom = tmask.sum(dim=1).clamp(min=1)
+                per_sample = ((dist * tmask).sum(dim=1) / denom).tolist()
+                mae = float(((dist * tmask).sum() / tmask.sum().clamp(min=1)).item())
+            else:
+                mae = dist.mean().item()
+                per_sample = dist.mean(dim=1).tolist()  # mean target error per trajectory
             tot_mae += mae * b
-            per_sample = dist.mean(dim=1).tolist()  # mean target error per trajectory
             for g, e in zip(gids, per_sample):
                 err_sum[int(g)] += e; err_cnt[int(g)] += 1
         n += b
@@ -500,6 +570,15 @@ def main(cfg: DictConfig):
     online = arch.lower() == "online_ranp"
     ctx = cfg.data.context
     excl_ctx = ctx.get("exclude_from_target", True)
+    # Per-sample context batching (Option C): decouples context-size variability
+    # from batch size so a large GPU batch stays diverse. Only the deterministic
+    # split model handles the padding/target masks; block it elsewhere loudly.
+    per_sample = bool(ctx.get("per_sample", False))
+    if per_sample and arch != "cnp":
+        raise SystemExit(
+            f"data.context.per_sample=true is only supported for the deterministic "
+            f"split model (model=cnp / spatial_cnp), not '{model_name}' (arch={arch}). "
+            f"Set data.context.per_sample=false for this model.")
     if online:
         chunk_size = cfg.data.get("chunk_size", 8)
         train_collate = make_online_collate(
@@ -510,24 +589,36 @@ def main(cfg: DictConfig):
             fixed_ctx=ctx.eval, seed=seed + 1,
             ctx_sample_mode=ctx.sample_mode)
     else:
+        if per_sample:
+            print(f"[{model_name}] per-sample context batching ON (Option C): "
+                  f"per-sample context sizes + padding mask (train only; "
+                  f"validation keeps the fixed ctx={ctx.eval}).")
         train_collate = make_collate(
             ctx.min, ctx.max, seed=seed,
             ctx_sample_mode=ctx.sample_mode,
-            exclude_ctx_from_target=excl_ctx)
+            exclude_ctx_from_target=excl_ctx, per_sample=per_sample)
+        # Validation stays standard fixed-ctx (comparable across configs); the
+        # fixed_ctx path ignores per_sample by construction.
         val_collate = make_collate(
             ctx.min, ctx.max,
             fixed_ctx=ctx.eval, seed=seed + 1,
             ctx_sample_mode=ctx.sample_mode,
             exclude_ctx_from_target=excl_ctx)
 
+    # pin_memory speeds host->device copies on CUDA (harmless/off on CPU).
+    # persistent_workers avoids re-forking workers every epoch when num_workers>0
+    # (and lets each worker's rng keep advancing across epochs -> more variety).
+    nw = int(cfg.training.num_workers)
+    pin = (device.type == "cuda")
+    persist = nw > 0
     train_loader = DataLoader(
         train_ds, batch_size=cfg.training.batch_size, shuffle=True,
-        num_workers=cfg.training.num_workers, drop_last=True,
-        collate_fn=train_collate)
+        num_workers=nw, drop_last=True, collate_fn=train_collate,
+        pin_memory=pin, persistent_workers=persist)
     val_loader = DataLoader(
         val_ds, batch_size=cfg.training.batch_size, shuffle=False,
-        num_workers=cfg.training.num_workers,
-        collate_fn=val_collate)
+        num_workers=nw, collate_fn=val_collate,
+        pin_memory=pin, persistent_workers=persist)
 
     # ---- spatial encoder config (sensor-position-aware front end) -----------
     # Enabled via model.spatial.enabled; n_sensors is inferred from the data
