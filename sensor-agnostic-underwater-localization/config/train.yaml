@@ -22,9 +22,8 @@ defaults:
 # Experiment identity, used as the wandb group name and to organise outputs.
 # AUTO-DERIVED from what you composed (e.g. "spatial_cnp_random_spiral_shared_layout_ood"),
 # so it is always truthful; override `exp_name=...` only for special runs.
-exp_name: ${model.name}_${hydra:runtime.choices.dataset}_${hydra:runtime.choices.data}_256
-
-seed: 2
+exp_name: ${model.name}_${hydra:runtime.choices.dataset}_${hydra:runtime.choices.data}_${training.lr}_aug_m${data.trans_aug_m}
+seed: 0
 device: auto  # 'auto' -> cuda if available else cpu; or set 'cuda' / 'cpu'
 
 # -----------------------------------------------------------------------------

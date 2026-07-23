@@ -195,7 +195,7 @@ def _worker_rng(base_seed):
 
 
 def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None, ctx_sample_mode="random",
-                 exclude_ctx_from_target=True, per_sample=False):
+                 exclude_ctx_from_target=True, per_sample=False, aug_m=0.0):
     """Builds a batch carrying BOTH calling conventions:
        - context_x/context_y/target_x/target_y  (for cnp/anp)
        - x_seq + context_indices/target_indices (for ranp)
@@ -231,6 +231,24 @@ def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None, ctx_sample_mode="r
         sensor_pos = (t.stack(sps, dim=0)            # (B, n_sensors, 3)
                       if all(sp.numel() > 0 for sp in sps) else None)
         B, ppt, _ = Xs.shape
+
+        # ---- translation augmentation (train-only; aug_m == 0 disables) -------
+        # Per-sample rigid 2-D shift of the WHOLE scene (sensor_pos AND y
+        # together). The simulated channel depends only on RELATIVE source-
+        # sensor geometry (acoustic_data_generator.py: d0 = ||r_pos - traj||),
+        # so the acoustic features X stay EXACTLY valid while the scene moves ->
+        # free sensor-displacement diversity along precisely the layout-OOD axis
+        # (teaches the absolute-frame Fourier position encoding offsets beyond
+        # the training hull of array centres, where the extrap penalty lives).
+        if aug_m and aug_m > 0:
+            if sensor_pos is None:
+                raise ValueError("translation augmentation needs sensor_pos in "
+                                 "the data (layout splits); got none")
+            delta = t.as_tensor(rng.uniform(-aug_m, aug_m, size=(B, 1, 2)),
+                                dtype=ys.dtype)
+            ys = ys.clone(); ys[..., :2] = ys[..., :2] + delta
+            sensor_pos = sensor_pos.clone()
+            sensor_pos[..., :2] = sensor_pos[..., :2] + delta
 
         # ---- Option C: per-sample context sizes (padded + masked) -------------
         if per_sample and fixed_ctx is None:
@@ -579,6 +597,19 @@ def main(cfg: DictConfig):
             f"data.context.per_sample=true is only supported for the deterministic "
             f"split model (model=cnp / spatial_cnp), not '{model_name}' (arch={arch}). "
             f"Set data.context.per_sample=false for this model.")
+    # Translation augmentation (train only): rigid per-sample 2-D shift of the
+    # scene. Only meaningful when the model actually SEES sensor_pos; for a flat
+    # model shifting the labels alone would just inject label noise.
+    aug_m = float(cfg.data.get("trans_aug_m", 0.0) or 0.0)
+    if aug_m > 0:
+        _sc0 = cfg.model.get("spatial", None)
+        if not (_sc0 is not None and bool(_sc0.get("enabled", False))):
+            raise SystemExit(
+                "data.trans_aug_m > 0 requires a spatial model (model=spatial_cnp"
+                " / spatial_anp): translating (sensor_pos, y) is only learnable "
+                "when the model consumes sensor_pos.")
+        print(f"[{model_name}] translation augmentation ON: per-sample rigid "
+              f"shift U(-{aug_m:.0f}, +{aug_m:.0f}) m in x/y (train only).")
     if online:
         chunk_size = cfg.data.get("chunk_size", 8)
         train_collate = make_online_collate(
@@ -596,7 +627,8 @@ def main(cfg: DictConfig):
         train_collate = make_collate(
             ctx.min, ctx.max, seed=seed,
             ctx_sample_mode=ctx.sample_mode,
-            exclude_ctx_from_target=excl_ctx, per_sample=per_sample)
+            exclude_ctx_from_target=excl_ctx, per_sample=per_sample,
+            aug_m=aug_m)
         # Validation stays standard fixed-ctx (comparable across configs); the
         # fixed_ctx path ignores per_sample by construction.
         val_collate = make_collate(
