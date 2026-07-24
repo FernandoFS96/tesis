@@ -44,7 +44,7 @@ context:
 # lives outside the training hull of array centres). Requires model=spatial_*
 # (errors otherwise). Set to ~1.5-2x the generation displacement scale so the
 # test hull is over-covered.
-trans_aug_m: 300
+trans_aug_m: 150
 
 # Streaming granularity for the online model (model=online_ranp); offline ignore.
 chunk_size: 8
