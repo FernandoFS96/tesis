@@ -1,6 +1,6 @@
 # Recurrent CNP (deterministic, LSTM, indexed convention) -> r_anp.DeterministicModel
 defaults:
-  - _rnn_base       # shared RNN-family hyperparameters
+  - _rnn_base # shared RNN-family hyperparameters
   - _self_
 
 arch: rcnp

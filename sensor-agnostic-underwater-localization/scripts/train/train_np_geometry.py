@@ -129,6 +129,25 @@ def is_latent(name):
     return name.lower() in ("anp", "ranp", "online_ranp")  # posterior + KL
 
 
+def should_log_viz(ep, total_epochs, viz_cfg):
+    """Whether to build+log the training figures at this epoch.
+
+    Schedule: the explicit `milestones` epochs (dense early on), then every
+    `every_n_epochs` once past the last milestone, plus always the final epoch.
+    With the default config (milestones=[5,10,25,50,100], every_n_epochs=100)
+    this fires at 5, 10, 25, 50, 100, then 200, 300, 400, ... If `milestones`
+    is empty it degrades to a plain every-N-epochs cadence.
+    """
+    if ep == total_epochs:
+        return True  # always capture the final state
+    milestones = list(viz_cfg.get("milestones", []) or [])
+    if ep in milestones:
+        return True
+    every = int(viz_cfg.get("every_n_epochs", 0) or 0)
+    last_milestone = max(milestones) if milestones else 0
+    return every > 0 and ep > last_milestone and ep % every == 0
+
+
 # --------------------------------------------------------------------------- #
 # Y normalization helpers
 # --------------------------------------------------------------------------- #
@@ -743,8 +762,9 @@ def main(cfg: DictConfig):
                 print(f"[{model_name}] no splits.json; degradation_scatter disabled")
         if viz_cfg.get("watch_gradients", False) and wandb.run is not None:
             wandb.watch(model, log="all", log_freq=max(1, int(viz_cfg.get("every_n_epochs", 50))))
+        _ms = list(viz_cfg.get("milestones", []) or [])
         print(f"[{model_name}] viz on: {len(fixed_idx)} fixed trajectories, "
-              f"every {viz_cfg.get('every_n_epochs', 50)} epochs")
+              f"at epochs {_ms} then every {viz_cfg.get('every_n_epochs', 50)}")
 
     best_val_mae = float("inf")  # best.pt is selected by validation MAE (physical units)
     best_epoch = 0
@@ -813,8 +833,7 @@ def main(cfg: DictConfig):
             }, step=ep)
 
         # periodic figures (also on the final epoch so the last state is logged)
-        if use_viz and (ep % int(viz_cfg.get("every_n_epochs", 50)) == 0
-                        or ep == cfg.training.epochs):
+        if use_viz and should_log_viz(ep, cfg.training.epochs, viz_cfg):
             try:
                 viz.log_visualizations(
                     model, conv, ep=ep, viz_cfg=viz_cfg, val_ds=val_ds,

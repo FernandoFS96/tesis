@@ -1,8 +1,5 @@
-# TOPOLOGY task -- one model per sensor topology (within-topology trajectory
-# split). Pick the topology with data.topology; override on the CLI to sweep.
-# data_dir is method-aware (derived from the composed dataset identity), so
-# spiral and hermite processed datasets coexist and training picks the right one
-# from `dataset=topology_<method>`.
+# TOPOLOGY task -- one model per sensor topology (within-topology trajectory split). Pick the topology with data.topology; override on the CLI to sweep.
+# data_dir is method-aware (derived from the composed dataset identity), so spiral and hermite processed datasets coexist and training picks the right one from `dataset=topology_<method>`.
 defaults:
   - _base
   - _self_

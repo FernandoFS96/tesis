@@ -10,15 +10,19 @@ dev: false           # mark this run in wandb as a development run
 tags: null           # list of custom tags to sort/find these runs by
 
 # -----------------------------------------------------------------------------
-# Periodic training-time visualizations (logged as wandb.Image media). Logging
-# under a stable key every N epochs gives a step slider in the W&B UI, so we
-# can scrub through epochs and watch each figure evolve as the model trains.
+# Periodic training-time visualizations (logged as wandb.Image media). 
+# Logging under a stable key every N epochs gives a step slider in the W&B UI, so we can scrub through epochs and watch each figure evolve as the model trains.
 # All of this is ignored when enabled=false above.
 # -----------------------------------------------------------------------------
 viz:
   enabled: true
-  every_n_epochs: 50     # build + log the figures every N epochs (and at the end)
-  n_trajectories: 6      # how many FIXED val trajectories to track in pred_trajectory
+  # Figure-logging schedule: the explicit `milestones` epochs (dense early on),
+  # then `every_n_epochs` once past the last milestone, plus always the final
+  # epoch. Default -> 5, 10, 25, 50, 100, then 200, 300, 400, ...
+  # Set milestones: [] to fall back to a plain every-N-epochs cadence.
+  milestones: [5, 10, 25, 50, 100]  # explicit epochs to log within the first 100
+  every_n_epochs: 100    # after the last milestone, log every N epochs
+  n_trajectories: 4      # how many FIXED val trajectories to track in pred_trajectory
   plot_uncertainty: true # draw predicted 1-std ellipses on the trajectory plot
   watch_gradients: false # wandb.watch(model): log gradient/param histograms
   plots:                 # toggle each figure independently

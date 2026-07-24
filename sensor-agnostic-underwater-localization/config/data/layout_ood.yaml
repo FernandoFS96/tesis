@@ -1,9 +1,6 @@
-# RANDOM task -- held-out sensor-layout split (OOD). Val/test geometries were
-# never seen in training; this is the gap a spatial front end (model=spatial_*)
-# is meant to close, and flat baselines are expected to degrade here.
-# data_dir is derived from the composed `dataset` identity (method + mode), so
-# it always matches what `generate.py dataset=<same>` produced. (Disk path keeps
-# the historical name `geometry_split`; only the config name changed.)
+# RANDOM task -- held-out sensor-layout split (OOD). Val/test geometries were never seen in training; this is the gap a spatial front end (model=spatial_*) is meant to close, and flat baselines are expected to degrade here.
+# data_dir is derived from the composed `dataset` identity (method + mode), so it always matches what `generate.py dataset=<same>` produced. 
+# (Disk path keeps the historical name `geometry_split`; only the config name changed.)
 defaults:
   - _base
   - _self_

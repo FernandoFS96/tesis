@@ -20,15 +20,13 @@ defaults:
   - experiment: null           # opt-in bundles: `experiment=<name>` (see config/experiment/)
 
 # Experiment identity, used as the wandb group name and to organise outputs.
-# AUTO-DERIVED from what you composed (e.g. "spatial_cnp_random_spiral_shared_layout_ood"),
-# so it is always truthful; override `exp_name=...` only for special runs.
-exp_name: ${model.name}_${hydra:runtime.choices.dataset}_${hydra:runtime.choices.data}_${training.lr}_aug_m${data.trans_aug_m}
+# AUTO-DERIVED from what is composed (e.g. "spatial_cnp_random_spiral_shared_layout_ood"), so it is always truthful; override `exp_name=...` only for special runs.
+exp_name: ${model.name}_${hydra:runtime.choices.dataset}_${hydra:runtime.choices.data}_${model.num_hidden}_${training.batch_size}_${training.lr}_aug_m${data.trans_aug_m}
 seed: 0
 device: auto  # 'auto' -> cuda if available else cpu; or set 'cuda' / 'cpu'
 
 # -----------------------------------------------------------------------------
-# Optimisation / training-loop hyperparameters (canonical here; experiments
-# should only override values that are genuinely task-specific).
+# Optimisation / training-loop hyperparameters (canonical here; experiments should only override values that are genuinely task-specific).
 # -----------------------------------------------------------------------------
 training:
   epochs: 1000
@@ -36,20 +34,14 @@ training:
   lr: 5.0e-5
   weight_decay: 1.0e-4
   # Base KL weight (latent models only: anp / spatial_anp / ranp / online_ranp).
-  # The KL is normalized to per-target-point, per-dim ELBO units inside the
-  # models (divided by num_targets * output_dim, matching the meaned NLL), so
-  # beta=1.0 is the standard ELBO. Under the OLD unnormalized loss beta=1.0
-  # acted like ~120 (num_targets*output_dim) and collapsed the posterior onto
-  # the prior; old and new beta values are NOT comparable.
+  # The KL is normalized to per-target-point, per-dim ELBO units inside the models (divided by num_targets * output_dim, matching the meaned NLL), so beta=1.0 is the standard ELBO.
   beta: 1.0
-  # Linearly warm the KL weight 0 -> beta over this many epochs (latent models
-  # only); 0 disables (constant beta). With the normalized KL the pressure at
-  # beta=1 is ~120x weaker than before, so a long warmup is likely unnecessary;
-  # kept as a safety net against early collapse.
+  # Linearly warm the KL weight 0 -> beta over this many epochs (latent models only); 0 disables (constant beta). 
+  # With the normalized KL the pressure at beta=1 is ~120x weaker than before, so a long warmup is likely unnecessary; kept as a safety net against early collapse.
   kl_warmup_epochs: 100
+
   num_workers: 4
-  # Early stopping on validation MAE: stop after this many epochs with no
-  # improvement (> early_stop_min_delta). 0/null disables (train the full epochs).
+  # Early stopping on validation MAE: stop after this many epochs with no improvement (> early_stop_min_delta). 0/null disables (train the full epochs).
   early_stop_patience: 100
   early_stop_min_delta: 0.3
 

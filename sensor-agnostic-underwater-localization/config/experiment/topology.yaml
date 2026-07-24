@@ -1,4 +1,3 @@
-# @package _global_
 # ============================================================================
 # Experiment: TOPOLOGY task (spiral), one model per sensor topology.
 #   python scripts/train/train_np_geometry.py experiment=topology data.topology=random
