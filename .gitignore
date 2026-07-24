@@ -53,6 +53,7 @@ sensor-agnostic-underwater-localization/PEACH.pdf
 sensor-agnostic-underwater-localization/run_2.log
 sensor-agnostic-underwater-localization/nohup.out
 sensor-agnostic-underwater-localization/pfn_reframe_spec.md
+sensor-agnostic-underwater-localization/pfn_feasibility_questions.md
 
 # wandb raw run logs are large binaries — never commit them (GitHub 100MB limit)
 *.wandb
