@@ -1,6 +1,6 @@
 # Recurrent attentive latent NP (LSTM, posterior + KL) -> r_anp.LatentModel
 defaults:
-  - _rnn_base       # shared RNN-family hyperparameters
+  - _rnn_base # shared RNN-family hyperparameters
   - _self_
 
 arch: ranp

@@ -1,4 +1,3 @@
-# @package _global_
 # ============================================================================
 # Experiment: RANDOM task, seen-layout split (spiral). Reproduces the old
 # converging setup (every layout seen in train; all-points targets).

@@ -1,7 +1,5 @@
-# Streaming / online-deployable latent RANP -> online_r_anp.OnlineLatentModel
-# Trained with a CAUSAL streaming loop (context comes only from the past); the
-# RNN is run once over the full trajectory for efficiency, but the NP context
-# aggregation is restricted to past 'fixes'. See src/models/online_r_anp.py.
+# Streaming / online-deployable latent RANP -> online_r_anp.OnlineLatentModel Trained with a CAUSAL streaming loop (context comes only from the past); 
+# the RNN is run once over the full trajectory for efficiency, but the NP context aggregation is restricted to past 'fixes'. See src/models/online_r_anp.py.
 defaults:
   - _rnn_base       # shared RNN-family hyperparameters
   - _self_
@@ -9,6 +7,5 @@ defaults:
 arch: online_ranp
 name: online_ranp
 
-# Max number of labelled context tokens ('fixes') kept in the online ring
-# buffer. Bounds per-step attention cost at deployment.
+# Max number of labelled context tokens ('fixes') kept in the online ring buffer. Bounds per-step attention cost at deployment.
 max_context: 128

@@ -1,4 +1,3 @@
-# @package _global_
 # ============================================================================
 # Experiment: RANDOM task, held-out sensor layouts (OOD, spiral).
 # Pairs the dataset with its split; the model stays whatever you pick:

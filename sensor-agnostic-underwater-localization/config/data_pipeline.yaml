@@ -1,35 +1,29 @@
 # =============================================================================
 # Data-generation + preprocessing config (plain OmegaConf; no Hydra).
 #
-# Single entry point (select the dataset IDENTITY by name, same names the
-# training config composes, so generation and training never disagree):
+# Single entry point (select the dataset IDENTITY by name, same names the training config composes, so generation and training never disagree):
 #   python data/generate.py dataset=topology_spiral
 #   python data/generate.py dataset=random_spiral_shared
 # Any other field can be overridden dotlist style, e.g.:
 #   python data/generate.py dataset=random_hermite_shared channel.df=100 \
 #       random_task.n_position_sets=5 channel.channel_options=[0.1,0.2]
 #
-# There are TWO problems, each with its own block below (they SHARE `method`,
-# the `channel:` knobs, and the spiral/hermite parameter blocks):
+# There are TWO problems, each with its own block below (they SHARE `method`, the `channel:` knobs, and the spiral/hermite parameter blocks):
 #
-#   1. TOPOLOGY task (topology_task), three sensor topologies (ellipsoidal /
-#      random / aligned) that all share the SAME trajectories and the SAME
-#      acoustic-channel levels; only the sensor arrangement changes.
+#   1. TOPOLOGY task (topology_task), three sensor topologies (ellipsoidal / random / aligned) 
+#      that all share the SAME trajectories and the SAME acoustic-channel levels; only the sensor arrangement changes.
 #
-#   2. RANDOM task (random_task), X randomly-placed sensor sets. The sets may
-#      SHARE one trajectory ensemble (distinct_trajectories: false; geometry is
-#      the only varying factor) or get their OWN trajectories per set
-#      (distinct_trajectories: true) depending on the subtask.
+#   2. RANDOM task (random_task), X randomly-placed sensor sets. The sets may SHARE one trajectory ensemble (distinct_trajectories: false; geometry is
+#      the only varying factor) or get their OWN trajectories per set (distinct_trajectories: true) depending on the subtask.
 # =============================================================================
 
 # Which problem to generate: topology | random. Override on the CLI.
 task: random 
 
 # -----------------------------------------------------------------------------
-# Trajectory shape, shared by BOTH tasks ('spiral', 'hermite', ...). Dispatched
-# by channel.generate_trajectories -> _generate_<method>_trajectories. To add a
-# method: add a parameter block below AND the matching submethod in
-# data/acoustic_data_generator.py.
+# Trajectory shape, shared by BOTH tasks ('spiral', 'hermite', ...).
+# Dispatched by channel.generate_trajectories -> _generate_<method>_trajectories. 
+# To add a method: add a parameter block below AND the matching submethod in data/acoustic_data_generator.py.
 # -----------------------------------------------------------------------------
 method: hermite # spiral | hermite
 
@@ -38,11 +32,9 @@ method: hermite # spiral | hermite
 # -----------------------------------------------------------------------------
 channel:
   channel_options: [0.1, 0.2]  # theta values (channel variability; low band 0.1-0.3)
-  n_traj: 400         # trajectories per (theta[, topology / position-set]). Random task:
-                     # kept small on purpose, geometry DIVERSITY (n_position_sets),
-                     # not trajectory count, is the axis that matters for the
-                     # sensor-displacement study. Topology task can be raised for a
-                     # denser single-geometry fit (regenerate that task separately).
+  n_traj: 400        # trajectories per (theta[, topology / position-set]).
+                     # Random task: kept small on purpose, geometry DIVERSITY (n_position_sets), not trajectory count, is the axis that matters for the sensor-displacement study. 
+                     # Topology task can be raised for a denser single-geometry fit (regenerate that task separately).
   ppt: 50            # points per trajectory
   df: 50.0           # frequency resolution [Hz]; feature dim = (B/df + 1) * n_sensors
   snr: 10.0          # SNR [dB] for the filtered features
@@ -66,10 +58,9 @@ spiral:
 # -----------------------------------------------------------------------------
 # Parameters for the "hermite" method (free-tangent piecewise-cubic Hermite).
 #
-# Each trajectory is n_segments cubic Hermite pieces joined with C1 continuity
-# (matched position and tangent at every knot). Knot tangent directions form a
-# slowly-turning sequence: the first is uniform over all directions, each later
-# one turns by at most `max_turn` radians. Segment length controls speed.
+# Each trajectory is n_segments cubic Hermite pieces joined with C1 continuity (matched position and tangent at every knot). 
+# Knot tangent directions form a slowly-turning sequence: the first is uniform over all directions, each later one turns by at most `max_turn` radians. 
+# Segment length controls speed.
 # -----------------------------------------------------------------------------
 hermite:
   n_segments: 3       # number of Hermite segments (-> n_segments + 1 knots)
@@ -82,8 +73,7 @@ hermite:
 
 # =============================================================================
 # PROBLEM 1 -- TOPOLOGY task  (data/acoustic_data_generator.py)
-# Emits one dataset per topology; all topologies share the same trajectories and
-# channels (per theta). Output:
+# Emits one dataset per topology; all topologies share the same trajectories and channels (per theta). Output:
 #   <out_dir>/<method>/<topology>/channel_option_<theta>/{trajectory,filtered_data,channel_info}/
 # =============================================================================
 topology_task:
@@ -92,30 +82,24 @@ topology_task:
 
 # =============================================================================
 # PROBLEM 2 -- RANDOM task  (data/random_position_generator.py)
-# Emits n_position_sets datasets of the 'random' topology, each a distinct seeded
-# sensor layout. Output:
+# Emits n_position_sets datasets of the 'random' topology, each a distinct seeded sensor layout. Output:
 #   <out_dir>/<method>_<mode>/position_set_XX/channel_option_<theta>/random/{...}/
 #   (<mode> = shared | distinct, from distinct_trajectories below)
 # =============================================================================
 random_task:
-  n_position_sets: 200          # distinct sensor layouts (the meta-learning "tasks").
-                               # Diversity here, not n_traj, is what an OOD-to-
-                               # unseen-layout model needs.
-  # false -> ONE shared trajectory ensemble reused by all sets (geometry is the
-  #          only varying factor). true -> each set gets its OWN trajectories.
+  n_position_sets: 200    # distinct sensor layouts (the meta-learning "tasks").
+                          # Diversity here, not n_traj, is what an OOD-to-unseen-layout model needs.
+  # false -> ONE shared trajectory ensemble reused by all sets (geometry is the only varying factor). 
+  # true  -> each set gets its OWN trajectories.
   distinct_trajectories: true
-  # Per-set trajectory seed = master_seed + traj_seed_offset + set_idx (kept in a
-  # separate numeric band from layout seeds master_seed + 1000 + p).
+  # Per-set trajectory seed = master_seed + traj_seed_offset + set_idx (kept in a separate numeric band from layout seeds master_seed + 1000 + p).
   traj_seed_offset: 2000
   out_dir: ./data/random_task
   # -----------------------------------------------------------------------------
   # Sensor-layout distribution (the 'random' topology, sensor-displacement study).
-  # Each position-set places a COMPACT sensor array whose CENTRE is translated by a
-  # per-set random offset -> layouts genuinely differ by DISPLACEMENT (not a re-
-  # jitter of one fixed box). All fractions are of the trajectory field's per-axis
-  # extent, so the same knobs work for any trajectory method. offset_frac is the
-  # controlled OOD axis; aperture_frac sets the (roughly fixed) array size so the
-  # localization difficulty floor stays comparable to the single-geometry task.
+  # Each position-set places a COMPACT sensor array whose CENTRE is translated by a per-set random offset -> layouts genuinely differ by DISPLACEMENT (not a re-jitter of one fixed box). 
+  # All fractions are of the trajectory field's per-axis extent, so the same knobs work for any trajectory method. 
+  # offset_frac is the controlled OOD axis; aperture_frac sets the (roughly fixed) array size so the localization difficulty floor stays comparable to the single-geometry task.
   # -----------------------------------------------------------------------------
   layout:
     aperture_frac: 0.5   # array span as a fraction of field extent (compactness)
@@ -127,9 +111,8 @@ random_task:
 # Preprocessing (data/data_process_random_positions.py). CLI flags override.
 #
 # `mode` selects the split:
-#   topology -> TOPOLOGY task: one training dataset per topology, split by
-#               TRAJECTORY INDEX (70/20/10), pooling all thetas. Reads
-#               topology_task.out_dir (<data_root>/<method>/<topology>/...).
+#   topology -> TOPOLOGY task: one training dataset per topology, split by TRAJECTORY INDEX (70/20/10), pooling all thetas. 
+#               Reads topology_task.out_dir (<data_root>/<method>/<topology>/...).
 #   legacy   -> RANDOM task: within-geometry 70/20/10 (all layouts seen in train).
 #   geometry -> RANDOM task: held-out sensor-layout split (interp/extrap).
 #   all      -> geometry + legacy.
@@ -142,8 +125,7 @@ preprocess:
   mode: geometry
   method: ${method}
   data_root: ./data/random_task/hermite_distinct
-  # null -> topology mode: <data_root>/<method>/processed (method-separated);
-  #         position-set modes: <data_root>/processed.
+  # null -> topology mode: <data_root>/<method>/processed (method-separated); position-set modes: <data_root>/processed.
   save_dir: null
   thetas: null              # null -> all found; or e.g. [0.1, 0.2, 0.3]
 

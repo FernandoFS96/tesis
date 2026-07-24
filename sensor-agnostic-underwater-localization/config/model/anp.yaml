@@ -8,4 +8,3 @@ arch: anp           # architecture: what build_model instantiates (cnp|anp|ranp|
 name: anp           # display name: unique per config file; used in exp/run/dir naming
 num_hidden: 128
 dropout: 0.2        # dropout prob for attention + decoder-MLP LayerNorm/dropout
-                    # (matched to cnp.yaml so ANP-vs-CNP differs only in the latent)
