@@ -52,26 +52,46 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import src.models.anp as anp_mod  # type: ignore
 import src.models.r_anp as ranp_mod  # type: ignore
 import src.models.online_r_anp as online_mod  # type: ignore
+import src.models.pfn as pfn_mod  # type: ignore
 
 
 def build_model(name, num_hidden, input_dim, output_dim,
                 rnn_type="lstm", rnn_layers=1, rnn_dropout=0.0, dropout=0.1,
-                max_context=128, spatial_cfg=None):
+                max_context=128, spatial_cfg=None, **kw):
     name = name.lower()
+    if name == "pfn":  # masked single-stack transformer (spatial_cfg -> spatial_pfn)
+        return pfn_mod.PFNModel(num_hidden, input_dim, output_dim, dropout=dropout,
+                                spatial_cfg=spatial_cfg,
+                                n_layers=kw.get("n_layers", 6),
+                                n_heads=kw.get("n_heads", 8),
+                                ffn_mult=kw.get("ffn_mult", 4),
+                                # readout/n_cross_layers were NOT forwarded here:
+                                # a cross-readout checkpoint was silently rebuilt
+                                # as joint, then failed the strict load.
+                                readout=kw.get("readout", "joint"),
+                                n_cross_layers=kw.get("n_cross_layers", 2)), "split"
     if name == "cnp":
         return anp_mod.DeterministicModel(num_hidden, input_dim, output_dim,
-                                          dropout=dropout, spatial_cfg=spatial_cfg), "split"
+                                          dropout=dropout, spatial_cfg=spatial_cfg,
+                                          full_cov=kw.get("full_cov", False),
+                                          attn_ffn=kw.get("attn_ffn", False)), "split"
     if name == "anp":
         return anp_mod.LatentModel(num_hidden, input_dim, output_dim,
-                                   dropout=dropout, spatial_cfg=spatial_cfg), "split"
-    if name == "ranp":
+                                   dropout=dropout, spatial_cfg=spatial_cfg,
+                                          full_cov=kw.get("full_cov", False),
+                                          attn_ffn=kw.get("attn_ffn", False)), "split"
+    if name == "ranp":  # spatial_cfg enables the spatial_ranp front end
         return ranp_mod.LatentModel(num_hidden, input_dim, output_dim,
                                     rnn_type=rnn_type, rnn_layers=rnn_layers,
-                                    rnn_dropout=rnn_dropout, dropout=dropout), "indexed"
-    if name == "rcnp":
+                                    rnn_dropout=rnn_dropout, dropout=dropout,
+                                    spatial_cfg=spatial_cfg,
+                                    attn_ffn=kw.get("attn_ffn", False)), "indexed"
+    if name == "rcnp":  # spatial_cfg -> spatial_rcnp
         return ranp_mod.DeterministicModel(num_hidden, input_dim, output_dim,
                                            rnn_type=rnn_type, rnn_layers=rnn_layers,
-                                           rnn_dropout=rnn_dropout, dropout=dropout), "indexed"
+                                           rnn_dropout=rnn_dropout, dropout=dropout,
+                                           spatial_cfg=spatial_cfg,
+                                           attn_ffn=kw.get("attn_ffn", False)), "indexed"
     if name == "online_ranp":
         return online_mod.OnlineLatentModel(num_hidden, input_dim, output_dim,
                                             rnn_type=rnn_type, rnn_layers=rnn_layers,
@@ -130,7 +150,7 @@ def forward_one(model, conv, X, y, idx, device, shuffle_temporal=False, perm=Non
             cx = Xs[:, idx_s, :]; tx = Xs[:, ti_s, :]
             mean, var, *rest = model(cx, cy, tx, None, sensor_pos=sensor_pos)
         else:
-            mean, var, *rest = model(Xs, idx_s, cy, ti_s, None)
+            mean, var, *rest = model(Xs, idx_s, cy, ti_s, None, sensor_pos=sensor_pos)
         # predictions are already in tgt_idx order (we queried those points)
         return (mean, var, *rest)
     cy = y[:, idx, :]
@@ -138,7 +158,7 @@ def forward_one(model, conv, X, y, idx, device, shuffle_temporal=False, perm=Non
         cx = X[:, idx, :]; tx = X[:, tgt_idx, :]
         return model(cx, cy, tx, None, sensor_pos=sensor_pos)
     else:
-        return model(X, idx, cy, tgt_idx, None)
+        return model(X, idx, cy, tgt_idx, None, sensor_pos=sensor_pos)
 
 
 @t.no_grad()
@@ -344,7 +364,11 @@ def main():
                                rnn_dropout=cfg.get("rnn_dropout", 0.0),
                                dropout=cfg.get("dropout", 0.1),
                                max_context=cfg.get("max_context", 128),
-                               spatial_cfg=spatial_cfg)
+                               spatial_cfg=spatial_cfg,
+                               full_cov=cfg.get("full_cov", False),
+                               n_layers=cfg.get("n_layers", 6),
+                               n_heads=cfg.get("n_heads", 8),
+                               ffn_mult=cfg.get("ffn_mult", 4))
     conv = conv or conv2
     if spatial_cfg:
         print(f"[eval] spatial encoder ON (n_sensors={spatial_cfg.get('n_sensors')})")

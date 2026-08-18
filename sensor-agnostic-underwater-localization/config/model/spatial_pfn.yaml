@@ -1,0 +1,9 @@
+# Spatial PFN: the pfn backbone + sensor-position-aware front end ENABLED.
+# This is the arm directly comparable to model=spatial_cnp on the frozen split.
+defaults:
+  - pfn
+  - _self_
+
+name: spatial_pfn
+spatial:
+  enabled: true

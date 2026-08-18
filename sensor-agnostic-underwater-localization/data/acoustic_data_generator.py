@@ -29,6 +29,17 @@ def load_traj_config(path=None):
         path = DEFAULT_TRAJ_CONFIG_PATH
     return OmegaConf.load(path)
 
+def _fftconv(a, v, mode='full'):
+    """FFT-based convolution (scipy if available, else numpy direct). Used by the
+    matched-filter receiver path, where a direct O(N*M) correlate over a 1024-tap
+    probe would dominate generation time."""
+    try:
+        from scipy.signal import fftconvolve
+        return fftconvolve(a, v, mode=mode)
+    except Exception:
+        return np.convolve(a, v, mode)
+
+
 def range_m(init, end, step):  # Matlab-like range, including end!
     out = np.arange(init, end, step)
     if out[-1] + step <= end:  # Include end only if it is in the interval
@@ -331,6 +342,25 @@ class channel():
 
         traj = np.zeros([3, n_traj, ppt + 1])
 
+        # --- optional SPEED CONTROL (null/absent -> legacy behaviour) ----------
+        # Without it the speed is whatever the sampled segment lengths imply
+        # (measured: mean 1.71 m/s, only 31% of steps in 2-5 m/s), which is slow
+        # for a crewed/uncrewed underwater vessel. With speed_min/speed_max set,
+        # each trajectory draws a target speed and is re-parameterised BY ARC
+        # LENGTH so it holds that speed exactly. Shape sampling is untouched, so
+        # only the scale (and hence the speed) changes.
+        #
+        # The step time is T_tot: acoustic_data_generator uses exactly that when
+        # it forms the vehicular Doppler term
+        # (v_t0 = (traj[t+1] - traj[t]) / T_tot), so realistic speeds here also
+        # mean a realistic Doppler in the simulated channel.
+        v_min = cfg.get('speed_min', None)
+        v_max = cfg.get('speed_max', None)
+        speed_ctrl = (v_min is not None) and (v_max is not None)
+        dt_step = float(self.params['ci']['T_tot'])
+        if speed_ctrl:
+            v_min = float(v_min); v_max = float(v_max)
+
         # Knot times 0, 1, ..., K and the global sampling parameter in [0, K].
         t_samples = np.linspace(0.0, K, ppt + 1)
         seg_idx = np.clip(np.floor(t_samples).astype(int), 0, K - 1)
@@ -363,8 +393,30 @@ class channel():
             M = tension * mag[:, None] * dirs                   # (n_knots, 2)
 
             # --- evaluate the piecewise-Hermite curve ---
-            xy = hermite_segment(P[seg_idx], M[seg_idx],
-                                 P[seg_idx + 1], M[seg_idx + 1], u_local)
+            if speed_ctrl:
+                # Sample the curve densely, measure its arc length, rescale the
+                # SHAPE about its start point so the total length equals
+                # v * dt_step * ppt, then resample at equal arc-length steps.
+                # Scaling about P[0] is exact: P and M scale linearly, so the
+                # whole curve (and its arc length) scales by the same factor
+                # while the start point stays put.
+                t_dense = np.linspace(0.0, K, max(2000, 40 * (ppt + 1)))
+                sd = np.clip(np.floor(t_dense).astype(int), 0, K - 1)
+                xyd = hermite_segment(P[sd], M[sd], P[sd + 1], M[sd + 1],
+                                      t_dense - sd)
+                s = np.concatenate([[0.0],
+                                    np.cumsum(np.linalg.norm(np.diff(xyd, axis=0), axis=1))])
+                v = np.random.uniform(v_min, v_max)
+                L = v * dt_step * ppt
+                if s[-1] > 1e-9:
+                    xyd = xyd[0] + (xyd - xyd[0]) * (L / s[-1])
+                    s = s * (L / s[-1])
+                s_t = np.clip(np.arange(ppt + 1) * (v * dt_step), 0.0, s[-1])
+                xy = np.column_stack([np.interp(s_t, s, xyd[:, 0]),
+                                      np.interp(s_t, s, xyd[:, 1])])
+            else:
+                xy = hermite_segment(P[seg_idx], M[seg_idx],
+                                     P[seg_idx + 1], M[seg_idx + 1], u_local)
             traj[0, it, :] = xy[:, 0]
             traj[1, it, :] = xy[:, 1]
             traj[2, it, :] = 0
@@ -383,6 +435,9 @@ class channel():
         def process_sensor(ise):
             assert self.params is not None, "params must be initialized"
             import scipy.signal as signal
+            # Opt-in: keep the absolute time-of-flight so inter-sensor TDOA
+            # survives into the features (default False == original behaviour).
+            abs_delay = bool(self.params.get('absolute_delay', False))
             Lf = len(range_m(self.params['ci']['fmin'], self.params['ci']['fmax'], self.params['ci']['df']))
             h_val = np.zeros([self.params['n_traj'], self.params['ppt'], Lf],
                              dtype=np.complex128)
@@ -639,6 +694,27 @@ class channel():
                             gamma = np.squeeze(gamma) * Dopp
                             H = H + hp[p] * np.tile(np.exp(-1j * 2 * np.pi * f_vec * taumean[p]), [1, Lt]) * gamma
                         H = np.tile(H0, [1, Lt]) * H
+                        if abs_delay:
+                            # Restore the ABSOLUTE propagation delay of the direct
+                            # path, as a common phase ramp over the whole response.
+                            #
+                            # WHY: mpgeometry returns delays RELATIVE to each
+                            # sensor's own direct arrival (tau = dell - dell[0], and
+                            # taumean[0] == 0). That independently zeroes EVERY
+                            # sensor's time origin, so the inter-sensor time
+                            # differences (TDOA) -- the quantity array geometry is
+                            # actually encoded in -- are deleted before the features
+                            # are ever formed. Applying the direct-path delay here
+                            # shifts the finished impulse response as a whole and
+                            # leaves its relative multipath structure untouched.
+                            #
+                            # AMBIGUITY: the response is sampled at df over the band,
+                            # so delays are unambiguous only while max(tau) < 1/df
+                            # (c/df in range). With df=50 Hz that is 30 m and this
+                            # flag is useless; pick df from the longest range you
+                            # need (see config/data_pipeline.yaml channel.df).
+                            H = H * np.exp(-1j * 2 * np.pi * f_vec
+                                           * (lmean[0] / self.params['ci']['c']))
                         H_LS[:, LScount * Lt: (LScount + 1) * Lt] = H.T
                     # find channel impulse response:
                     Lt_tot = np.shape(H_LS)[1]
@@ -672,6 +748,8 @@ class channel():
         def process_sensor(ise):
             assert self.params is not None, "params must be initialized"
             assert self.h is not None, "channel matrix (h) must be initialized"
+            # Opt-in receiver pulse compression (default False == legacy path).
+            mfilt = bool(self.params.get('matched_filter', False))
             h = np.roll(self.h, 50, axis=0)
             s = np.zeros([n, self.params['ppt']])
             x = np.zeros([n, self.params['ppt']])
@@ -688,6 +766,24 @@ class channel():
                     s[:, ipt] = conv(np.exp(-10 * np.arange(n) / n), np.random.randn(2 * n - 1))
                     x[:, ipt] = (1 + self.params['m'] * np.cos(self.params['w0'] * np.arange(n))) * s[:, ipt]
                     x[:, ipt] = x[:, ipt] / np.sqrt(np.sum(np.power(x[:, ipt], 2)))
+                elif signal_type == 'chirp':
+                    # Broadband linear-FM sweep (the active-sonar probe).
+                    #
+                    # WHY: a single tone probes the channel at ONE frequency, so the
+                    # filtered record collapses to (amplitude, phase) -- measured
+                    # effective rank 2 of 201 -- and carries no delay information;
+                    # amplitude alone correlates with range at r = -0.08 because
+                    # multipath destroys the spreading law. A chirp excites the whole
+                    # band, so the record retains the impulse-response structure and
+                    # therefore the time-of-arrival.
+                    #
+                    # Band is in NORMALISED frequency (cycles/sample) of this
+                    # abstract probe-signal domain, like w0 for 'sinusoid'.
+                    f0, f1 = self.params.get('chirp_band', (0.02, 0.45))
+                    kk = np.arange(n)
+                    x[:, ipt] = np.cos(2 * np.pi * (f0 * kk
+                                                    + 0.5 * (f1 - f0) / max(n - 1, 1) * kk ** 2))
+                    x[:, ipt] = x[:, ipt] / np.sqrt(np.sum(np.power(x[:, ipt], 2)))
                 else:
                     raise RuntimeError('Signal type not recognized')
 
@@ -697,14 +793,36 @@ class channel():
                 if n < 2 * h.shape[0]:
                     raise RuntimeError('Too low number of samples')
                 y = np.zeros([h.shape[0], self.params['ppt']])
-                n_aux = np.random.randn(h.shape[0], self.params['ppt'])
-                for ptx in range(self.params['ppt']):
-                    signal = np.real(np.convolve(x[:, ptx], h[:, ptx, itx, ise], 'valid'))[0: h.shape[0]]
-                    noise = n_aux[:, ptx]
-                    signal_power = np.sum(np.power(signal, 2))
-                    noise_power = np.sum(np.power(noise, 2))
-                    noise = noise * np.sqrt(np.power(10, - snr / 10) * signal_power / noise_power)
-                    y[:, ptx] = signal + noise
+                if mfilt:
+                    # ---- receiver-side PULSE COMPRESSION (matched filter) -------
+                    # A broadband probe only reveals time-of-arrival after being
+                    # correlated with the transmitted waveform -- that is what a
+                    # sonar receiver does. Two details matter and both were wrong
+                    # in the legacy path:
+                    #   * use the FULL convolution: the legacy 'valid'[0:tau] window
+                    #     truncates away the region the delay lives in, which
+                    #     destroys the alignment (measured: corr 0.96 -> -0.04).
+                    #   * window the correlation at the delay origin, index n-1,
+                    #     so output tap k corresponds to delay k.
+                    # Noise is added BEFORE compression (it enters at the receiver).
+                    Lh = h.shape[0]
+                    for ptx in range(self.params['ppt']):
+                        yf = np.real(np.convolve(x[:, ptx], h[:, ptx, itx, ise], 'full'))
+                        nz = np.random.randn(yf.size)
+                        sp = np.sum(np.power(yf, 2)); npw = np.sum(np.power(nz, 2))
+                        nz = nz * np.sqrt(np.power(10, - snr / 10) * sp / npw)
+                        # correlate(a, v) == convolve(a, v[::-1]); FFT for speed
+                        z = _fftconv(yf + nz, x[::-1, ptx], mode='full')
+                        y[:, ptx] = z[n - 1: n - 1 + Lh]
+                else:
+                    n_aux = np.random.randn(h.shape[0], self.params['ppt'])
+                    for ptx in range(self.params['ppt']):
+                        signal = np.real(np.convolve(x[:, ptx], h[:, ptx, itx, ise], 'valid'))[0: h.shape[0]]
+                        noise = n_aux[:, ptx]
+                        signal_power = np.sum(np.power(signal, 2))
+                        noise_power = np.sum(np.power(noise, 2))
+                        noise = noise * np.sqrt(np.power(10, - snr / 10) * signal_power / noise_power)
+                        y[:, ptx] = signal + noise
                 y_o[:, :, i] = y[:, :]
                 i += 1
             return y_o

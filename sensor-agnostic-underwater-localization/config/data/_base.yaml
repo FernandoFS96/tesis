@@ -26,12 +26,25 @@ context:
   # Supported for model=cnp / spatial_cnp only (deterministic split);
   per_sample: true
 
+  # CALIBRATION regime (false = ORIGINAL behaviour, context from the sample's OWN
+  # trajectory). true -> context points are drawn from a DIFFERENT trajectory of
+  # the SAME (geometry, theta): a separate "calibration transit", the way a
+  # GPS-tracked vessel would supply labelled fixes before you localize something
+  # else. Targets become ALL points of the sample's own trajectory.
+  # WHY: with same-trajectory context the model can score well by extrapolating
+  # the revealed prefix of the target's OWN path and ignoring the acoustics --
+  # measured, that shortcut accounts for most of a position-free model's score.
+  # Cross-trajectory context removes it, so the context can only help by
+  # carrying TASK identity (the array geometry). Applies to train AND validation.
+  # Supported for model=cnp / spatial_cnp only (needs the padded context mask).
+  calibration: false
+
 # Translation augmentation (TRAIN only; 0 disables).
 # Max |offset| in METRES for a per-sample rigid 2-D shift of the whole scene: 
 # sensor_pos AND y move together, acoustics X stay untouched, exactly valid because the simulated channel depends only on relative source-sensor geometry. 
 # Synthesises unlimited displaced layouts along precisely the layout-OOD axis (the extrap penalty lives outside the training hull of array centres). 
 # Requires model=spatial_* (errors otherwise). 300 is ~1.5-2x the generation displacement scale so the test hull is over-covered.
-trans_aug_m: 50
+trans_aug_m: 150
 
 # Streaming granularity for the online model (model=online_ranp); offline ignore.
 chunk_size: 8

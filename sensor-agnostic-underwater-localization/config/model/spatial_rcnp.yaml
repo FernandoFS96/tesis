@@ -1,0 +1,11 @@
+# Spatial RCNP: recurrent (deterministic) CNP + sensor-position-aware front end.
+# Deterministic counterpart of spatial_ranp (no latent / KL). Inherits the RNN
+# hyperparameters from rcnp and the spatial block from _spatial, then enables it.
+defaults:
+  - rcnp
+  - _spatial
+  - _self_
+
+name: spatial_rcnp
+spatial:
+  enabled: true

@@ -8,3 +8,17 @@ arch: anp           # architecture: what build_model instantiates (cnp|anp|ranp|
 name: anp           # display name: unique per config file; used in exp/run/dir naming
 num_hidden: 128
 dropout: 0.2        # dropout prob for attention + decoder-MLP LayerNorm/dropout
+
+# Correlated (x, y) output covariance. false = the original AXIS-ALIGNED
+# diagonal Gaussian (bit-identical, and adds no parameters, so old
+# checkpoints still load). true adds ONE extra output, the x-y correlation.
+# z stays independent: it is constant in this data (y_std[2] ~ 1e-6), so a
+# full 3x3 covariance would be singular.
+full_cov: false
+
+# Feed-forward sublayer inside each attention block (x + FFN(LayerNorm(x)), 4x
+# inner, GELU). false = the original block, which has NO feed-forward stage at
+# all -- measured to cost ~74% of the gap to a real transformer backbone at
+# matched parameters on the 8000-layout layout-OOD task. Off by default: no
+# parameters are created and existing checkpoints load unchanged.
+attn_ffn: false

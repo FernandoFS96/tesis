@@ -1,0 +1,30 @@
+# PFN: masked single-stack transformer over [context, target] -> pfn.PFNModel.
+# Flat baseline: spatial front end DISABLED here (see model=spatial_pfn).
+#
+# Differs from cnp/anp in the BACKBONE only -- the head is still a diagonal
+# Gaussian, so a comparison against them isolates the architecture. The block is
+# a standard MHA + FFN(4x) pre-LN transformer; anp.Attention has no FFN at all.
+defaults:
+  - _spatial        # shared spatial block (disabled here)
+  - _self_
+
+arch: pfn
+name: pfn
+num_hidden: 128
+dropout: 0.1
+n_layers: 6         # TabPFN uses 12; 6 is a reasonable starting depth
+n_heads: 8
+ffn_mult: 4         # FFN hidden = 4 * num_hidden, the standard ratio
+
+# How the target reads the context.
+#   joint -- TabPFN: one stack over [context, target], targets attend to context
+#            only. Faithful to the paper, but the label is added INTO the context
+#            token, so query-key matching happens in a mixed (acoustics+position)
+#            space. Fine with millions of prior datasets; on a small pool it
+#            generalises badly (topology task: train 28 / val 71 vs CNP 23 / 9).
+#   cross -- deep stack still ENCODES the context, but the readout is CNP-style
+#            cross-attention with queries and keys from the ACOUSTICS ALONE and
+#            values carrying the (x+y) encoding, so retrieval is by
+#            acoustics-to-acoustics similarity and the label is only read out.
+readout: joint
+n_cross_layers: 2   # cross-attention layers, readout=cross only

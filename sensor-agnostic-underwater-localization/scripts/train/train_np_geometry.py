@@ -87,6 +87,7 @@ OmegaConf.register_resolver("repo_root", lambda: _PROJECT_ROOT, replace=True)
 import src.models.anp as anp_mod  # type: ignore  # noqa: E402
 import src.models.r_anp as ranp_mod  # type: ignore  # noqa: E402
 import src.models.online_r_anp as online_mod  # type: ignore  # noqa: E402
+import src.models.pfn as pfn_mod  # type: ignore  # noqa: E402
 
 import viz  # type: ignore  # noqa: E402  # periodic W&B training visualizations
 
@@ -96,25 +97,39 @@ import viz  # type: ignore  # noqa: E402  # periodic W&B training visualizations
 # --------------------------------------------------------------------------- #
 def build_model(name, num_hidden, input_dim, output_dim,
                 rnn_type="lstm", rnn_layers=1, rnn_dropout=0.0, dropout=0.1,
-                max_context=128, spatial_cfg=None):
+                max_context=128, spatial_cfg=None,
+                n_layers=6, n_heads=8, ffn_mult=4,
+                readout="joint", n_cross_layers=2, full_cov=False,
+                attn_ffn=False):
     name = name.lower()
-    if spatial_cfg and name not in ("cnp", "anp"):
-        raise ValueError(f"spatial encoder is only wired for cnp/anp, not '{name}'")
+    if spatial_cfg and name == "online_ranp":
+        raise ValueError("spatial encoder is not wired for online_ranp")
+    if name == "pfn":  # masked single-stack transformer (spatial_cfg -> spatial_pfn)
+        return pfn_mod.PFNModel(num_hidden, input_dim, output_dim, dropout=dropout,
+                                spatial_cfg=spatial_cfg, n_layers=n_layers,
+                                n_heads=n_heads, ffn_mult=ffn_mult,
+                                readout=readout, n_cross_layers=n_cross_layers), "split"
     if name == "cnp":
         return anp_mod.DeterministicModel(num_hidden, input_dim, output_dim,
-                                          dropout=dropout, spatial_cfg=spatial_cfg), "split"
+                                          dropout=dropout, spatial_cfg=spatial_cfg,
+                                          full_cov=full_cov, attn_ffn=attn_ffn), "split"
     if name == "anp":
         return anp_mod.LatentModel(num_hidden, input_dim, output_dim,
-                                   dropout=dropout, spatial_cfg=spatial_cfg), "split"
-    if name == "ranp":
+                                   dropout=dropout, spatial_cfg=spatial_cfg,
+                                   full_cov=full_cov, attn_ffn=attn_ffn), "split"
+    if name == "ranp":  # spatial_cfg enables the spatial_ranp front end
         return (ranp_mod.LatentModel(num_hidden, input_dim, output_dim,
                                      rnn_type=rnn_type, rnn_layers=rnn_layers,
-                                     rnn_dropout=rnn_dropout, dropout=dropout),
+                                     rnn_dropout=rnn_dropout, dropout=dropout,
+                                     spatial_cfg=spatial_cfg, full_cov=full_cov,
+                                     attn_ffn=attn_ffn),
                 "indexed")
-    if name == "rcnp":  # bonus: recurrent CNP, same indexed convention
+    if name == "rcnp":  # recurrent CNP (spatial_cfg -> spatial_rcnp)
         return (ranp_mod.DeterministicModel(num_hidden, input_dim, output_dim,
                                             rnn_type=rnn_type, rnn_layers=rnn_layers,
-                                            rnn_dropout=rnn_dropout, dropout=dropout),
+                                            rnn_dropout=rnn_dropout, dropout=dropout,
+                                            spatial_cfg=spatial_cfg, full_cov=full_cov,
+                                     attn_ffn=attn_ffn),
                 "indexed")
     if name == "online_ranp":  # streaming / online-deployable latent RANP
         return (online_mod.OnlineLatentModel(num_hidden, input_dim, output_dim,
@@ -122,7 +137,7 @@ def build_model(name, num_hidden, input_dim, output_dim,
                                              rnn_dropout=rnn_dropout, dropout=dropout,
                                              max_context=max_context),
                 "online")
-    raise ValueError(f"unknown model '{name}' (use cnp|anp|ranp|rcnp|online_ranp)")
+    raise ValueError(f"unknown model '{name}' (use cnp|anp|pfn|ranp|rcnp|online_ranp)")
 
 
 def is_latent(name):
@@ -214,7 +229,8 @@ def _worker_rng(base_seed):
 
 
 def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None, ctx_sample_mode="random",
-                 exclude_ctx_from_target=True, per_sample=False, aug_m=0.0):
+                 exclude_ctx_from_target=True, per_sample=False, aug_m=0.0,
+                 calibration=False, dataset=None):
     """Builds a batch carrying BOTH calling conventions:
        - context_x/context_y/target_x/target_y  (for cnp/anp)
        - x_seq + context_indices/target_indices (for ranp)
@@ -235,8 +251,39 @@ def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None, ctx_sample_mode="r
        This decouples context-size variability from batch size, so a large GPU
        batch still carries many context sizes. SPLIT convention only (cnp/anp/
        spatial_*); it emits no context_indices, so ranp/rcnp/online can't use it.
-       Ignored when fixed_ctx is set (validation keeps one fixed size for all)."""
+       Ignored when fixed_ctx is set (validation keeps one fixed size for all).
+
+       calibration (the CALIBRATION regime): if True the context points come
+       from a DIFFERENT trajectory of the SAME (geometry, theta) as the
+       targets -- a separate 'calibration transit' -- and the targets become ALL
+       points of the sample's own trajectory. This is the operationally faithful
+       setting (the calibration track is never the track you want to localize)
+       and it removes the trajectory-continuation shortcut that same-trajectory
+       context makes available: with a prefix of the target's OWN path revealed,
+       a model can score well by extrapolating that path and ignoring the
+       acoustics entirely. Needs `dataset` (donor lookup) and the SPLIT
+       convention. `exclude_ctx_from_target` is moot here -- context and targets
+       are disjoint by construction."""
     _rng = {"g": None}   # created lazily, once per DataLoader worker
+
+    # Donor pools for the CALIBRATION regime: dataset indices grouped by
+    # (geometry_id, theta), so a sample's context is drawn from another
+    # trajectory of the SAME deployment (same array layout, same channel).
+    _donors = None
+    if calibration:
+        if dataset is None:
+            raise ValueError("calibration=True needs `dataset` for donor lookup")
+        _groups = {}
+        for _i, _s in enumerate(dataset.samples):
+            _groups.setdefault((int(_s.get("geometry_id", -1)),
+                                round(float(_s.get("theta", -1.0)), 6)), []).append(_i)
+        _thin = {k: len(v) for k, v in _groups.items() if len(v) < 2}
+        if _thin:
+            raise ValueError(
+                "calibration context needs >=2 trajectories per (geometry, theta) "
+                f"to draw a separate transit; {len(_thin)} group(s) have fewer "
+                f"(e.g. {list(_thin.items())[:3]}).")
+        _donors = {k: np.asarray(v) for k, v in _groups.items()}
 
     def collate(batch):
         if _rng["g"] is None:                        # first call in this worker
@@ -250,6 +297,59 @@ def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None, ctx_sample_mode="r
         sensor_pos = (t.stack(sps, dim=0)            # (B, n_sensors, 3)
                       if all(sp.numel() > 0 for sp in sps) else None)
         B, ppt, _ = Xs.shape
+
+        # ---- CALIBRATION regime: context from a SEPARATE trajectory ----------
+        # Built BEFORE augmentation so the donor's labels can take the same
+        # rigid shift below (one physical scene => one coordinate frame).
+        _cal = None
+        if calibration:
+            if per_sample and fixed_ctx is None:
+                ncs = rng.integers(ctx_min, ctx_max + 1, size=B).clip(1, ppt)
+            else:   # validation (fixed_ctx) or batch-shared size
+                nf = (int(fixed_ctx) if fixed_ctx is not None
+                      else int(rng.integers(ctx_min, ctx_max + 1)))
+                ncs = np.full(B, max(1, min(nf, ppt)), dtype=int)
+            max_ctx = int(ncs.max())
+            cx = t.zeros(B, max_ctx, Xs.size(-1), dtype=Xs.dtype)
+            cy = t.zeros(B, max_ctx, ys.size(-1), dtype=ys.dtype)
+            cmask = t.zeros(B, max_ctx, dtype=t.bool)
+            for b in range(B):
+                pool = _donors[(int(gids[b]), round(float(ths[b]), 6))]
+                own = ys[b].numpy()
+                dX = dy = None
+                for _ in range(8):   # the donor must never be the target's own path
+                    j = int(pool[rng.integers(len(pool))])
+                    cand = np.asarray(dataset.samples[j]["y"], dtype=np.float32)
+                    if not np.array_equal(cand, own):
+                        dy = cand
+                        dX = np.asarray(dataset.samples[j]["X"], dtype=np.float32)
+                        break
+                if dy is None:
+                    # Deterministic fallback. With few trajectories per (geometry,
+                    # theta) -- e.g. 10 in the layout-heavy prior -- the random
+                    # draw hits the target's own path with probability 1/k each
+                    # time, so pure rejection sampling eventually exhausts its
+                    # retries and would kill a multi-hour run. Scan the pool
+                    # instead; this succeeds whenever the group holds >= 2
+                    # distinct trajectories, which the collate factory asserts.
+                    for j in pool.tolist():
+                        cand = np.asarray(dataset.samples[int(j)]["y"], dtype=np.float32)
+                        if not np.array_equal(cand, own):
+                            dy = cand
+                            dX = np.asarray(dataset.samples[int(j)]["X"], dtype=np.float32)
+                            break
+                if dy is None:
+                    raise RuntimeError(
+                        "every trajectory in this (geometry, theta) group is identical "
+                        f"to the target, so no calibration donor exists (geometry "
+                        f"{int(gids[b])}, theta {float(ths[b]):g})")
+                k = int(ncs[b])
+                sel = (np.arange(k) if ctx_sample_mode == "first"
+                       else np.sort(rng.permutation(dX.shape[0])[:k]))
+                cx[b, :k] = t.as_tensor(dX[sel])
+                cy[b, :k] = t.as_tensor(dy[sel])
+                cmask[b, :k] = True
+            _cal = {"x": cx, "y": cy, "mask": cmask}
 
         # ---- translation augmentation (train-only; aug_m == 0 disables) -------
         # Per-sample rigid 2-D shift of the WHOLE scene (sensor_pos AND y
@@ -268,6 +368,28 @@ def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None, ctx_sample_mode="r
             ys = ys.clone(); ys[..., :2] = ys[..., :2] + delta
             sensor_pos = sensor_pos.clone()
             sensor_pos[..., :2] = sensor_pos[..., :2] + delta
+            if _cal is not None:
+                # The calibration transit belongs to the SAME scene, so it takes
+                # the SAME rigid shift -- otherwise the context labels and the
+                # target labels would sit in different frames.
+                _cal["y"] = _cal["y"].clone()
+                _cal["y"][..., :2] = _cal["y"][..., :2] + delta
+
+        # ---- CALIBRATION return: context is a different trajectory ------------
+        # Targets are ALL points of this sample's own trajectory; context and
+        # targets are disjoint by construction, so nothing needs excluding.
+        # No x_seq/context_indices are emitted: cross-trajectory context cannot
+        # be expressed as indices into one trajectory, so an indexed (ranp/rcnp/
+        # online) model fails loudly here rather than silently using the wrong
+        # points. main() also blocks those archs up front.
+        if _cal is not None:
+            return {
+                "context_x": _cal["x"], "context_y": _cal["y"],
+                "context_mask": _cal["mask"],
+                "target_x": Xs, "target_y": ys,
+                "target_mask": t.ones(B, ppt, dtype=t.bool),
+                "gids": gids, "thetas": ths, "sensor_pos": sensor_pos,
+            }
 
         # ---- Option C: per-sample context sizes (padded + masked) -------------
         if per_sample and fixed_ctx is None:
@@ -377,17 +499,24 @@ def model_forward(model, conv, batch, device, beta, with_target_y=True,
         cx = batch["context_x"].to(device)
         tx = batch["target_x"].to(device)
         # Per-sample context-batching (Option C) supplies these; None otherwise.
+        # Pass them ONLY when present: the latent split model (anp/spatial_anp)
+        # does not accept context_mask/target_mask, so passing them (even as None)
+        # would TypeError. per_sample is guarded to cnp/spatial_cnp anyway.
+        kw = {}
         cmask = batch.get("context_mask")
-        cmask = cmask.to(device) if cmask is not None else None
+        if cmask is not None:
+            kw["context_mask"] = cmask.to(device)
         tmask = batch.get("target_mask")
-        tmask = tmask.to(device) if tmask is not None else None
+        if tmask is not None:
+            kw["target_mask"] = tmask.to(device)
         return model(cx, cy, tx, ty, beta, predict_with_prior=predict_with_prior,
-                     sensor_pos=sp, context_mask=cmask, target_mask=tmask)
-    else:  # indexed (ranp), spatial encoder not wired for recurrent models
+                     sensor_pos=sp, **kw)
+    else:  # indexed (ranp / rcnp; sensor_pos used only by spatial_r* front ends)
         x_seq = batch["x_seq"].to(device)
         ci = batch["context_indices"].to(device)
         ti = batch["target_indices"].to(device)
-        return model(x_seq, ci, cy, ti, ty, beta, predict_with_prior=predict_with_prior)
+        return model(x_seq, ci, cy, ti, ty, beta, predict_with_prior=predict_with_prior,
+                     sensor_pos=sp)
 
 
 # --------------------------------------------------------------------------- #
@@ -493,6 +622,14 @@ def flat_ckpt_config(cfg, device):
         "val_ctx": ctx.eval,
         "ctx_sample_mode": ctx.sample_mode,
         "exclude_ctx_from_target": ctx.get("exclude_from_target", True),
+        "calibration": bool(ctx.get("calibration", False)),
+        "n_layers": m.get("n_layers", 6),             # pfn-only
+        "n_heads": m.get("n_heads", 8),               # pfn-only
+        "ffn_mult": m.get("ffn_mult", 4),             # pfn-only
+        "full_cov": m.get("full_cov", False),
+        "attn_ffn": m.get("attn_ffn", False),   # feed-forward sublayer in Attention
+        "readout": m.get("readout", "joint"),         # pfn-only
+        "n_cross_layers": m.get("n_cross_layers", 2), # pfn-only
         "max_context": m.get("max_context", 128),     # online-only
         "chunk_size": cfg.data.get("chunk_size", 8),   # online-only (streaming granularity)
         "epochs": cfg.training.epochs,
@@ -611,11 +748,21 @@ def main(cfg: DictConfig):
     # from batch size so a large GPU batch stays diverse. Only the deterministic
     # split model handles the padding/target masks; block it elsewhere loudly.
     per_sample = bool(ctx.get("per_sample", False))
-    if per_sample and arch != "cnp":
+    if per_sample and arch not in ("cnp", "pfn"):
         raise SystemExit(
             f"data.context.per_sample=true is only supported for the deterministic "
-            f"split model (model=cnp / spatial_cnp), not '{model_name}' (arch={arch}). "
+            f"split model (model=cnp / spatial_cnp / pfn), not '{model_name}' (arch={arch}). "
             f"Set data.context.per_sample=false for this model.")
+    # CALIBRATION regime: context drawn from a DIFFERENT trajectory of the same
+    # (geometry, theta). Needs the padded context mask, so same restriction as
+    # per_sample; indexed/online conventions cannot express cross-trajectory
+    # context at all. Block anything else loudly.
+    calibration = bool(ctx.get("calibration", False))
+    if calibration and arch not in ("cnp", "pfn"):
+        raise SystemExit(
+            f"data.context.calibration=true is only supported for the deterministic "
+            f"split model (model=cnp / spatial_cnp), not '{model_name}' (arch={arch}). "
+            f"Set data.context.calibration=false for this model.")
     # Translation augmentation (train only): rigid per-sample 2-D shift of the
     # scene. Only meaningful when the model actually SEES sensor_pos; for a flat
     # model shifting the labels alone would just inject label noise.
@@ -643,18 +790,27 @@ def main(cfg: DictConfig):
             print(f"[{model_name}] per-sample context batching ON (Option C): "
                   f"per-sample context sizes + padding mask (train only; "
                   f"validation keeps the fixed ctx={ctx.eval}).")
+        if calibration:
+            print(f"[{model_name}] CALIBRATION context ON: context points come "
+                  f"from a DIFFERENT trajectory of the same (geometry, theta); "
+                  f"targets = all {ppt} points of the sample's own trajectory. "
+                  f"Validation uses the same regime (fixed ctx={ctx.eval}), so "
+                  f"best.pt is selected on the calibration metric.")
         train_collate = make_collate(
             ctx.min, ctx.max, seed=seed,
             ctx_sample_mode=ctx.sample_mode,
             exclude_ctx_from_target=excl_ctx, per_sample=per_sample,
-            aug_m=aug_m)
+            aug_m=aug_m, calibration=calibration, dataset=train_ds)
         # Validation stays standard fixed-ctx (comparable across configs); the
-        # fixed_ctx path ignores per_sample by construction.
+        # fixed_ctx path ignores per_sample by construction. Under CALIBRATION it
+        # also draws its context cross-trajectory (donors from the VAL pool), so
+        # the selection metric matches the regime we actually care about.
         val_collate = make_collate(
             ctx.min, ctx.max,
             fixed_ctx=ctx.eval, seed=seed + 1,
             ctx_sample_mode=ctx.sample_mode,
-            exclude_ctx_from_target=excl_ctx)
+            exclude_ctx_from_target=excl_ctx,
+            calibration=calibration, dataset=val_ds)
 
     # pin_memory speeds host->device copies on CUDA (harmless/off on CPU).
     # persistent_workers avoids re-forking workers every epoch when num_workers>0
@@ -697,7 +853,14 @@ def main(cfg: DictConfig):
         rnn_dropout=cfg.model.get("rnn_dropout", 0.0),
         dropout=cfg.model.get("dropout", 0.1),
         max_context=cfg.model.get("max_context", 128),
-        spatial_cfg=spatial_cfg)
+        spatial_cfg=spatial_cfg,
+        n_layers=int(cfg.model.get("n_layers", 6)),
+        n_heads=int(cfg.model.get("n_heads", 8)),
+        ffn_mult=int(cfg.model.get("ffn_mult", 4)),
+        readout=str(cfg.model.get("readout", "joint")),
+        n_cross_layers=int(cfg.model.get("n_cross_layers", 2)),
+        full_cov=bool(cfg.model.get("full_cov", False)),
+        attn_ffn=bool(cfg.model.get("attn_ffn", False)))
     model = model.to(device)
     # For the spatial encoder's 'standardize' acoustic mode, set the global
     # acoustic mean/std from the train data (preserves cross-sensor amplitude

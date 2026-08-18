@@ -1,0 +1,14 @@
+# Spatial RANP: recurrent attentive latent NP + sensor-position-aware front end.
+# The spatial encoder maps each point's acoustics -> a displacement-robust
+# embedding BEFORE the LSTM, so the model gets BOTH genuine acoustic localization
+# (spatial) AND causal temporal integration (recurrent) -- the fusion ceiling.
+# Inherits the RNN hyperparameters from ranp and the (disabled) spatial block
+# from _spatial, then turns it on. Ablate via model.spatial.* like spatial_cnp.
+defaults:
+  - ranp
+  - _spatial
+  - _self_
+
+name: spatial_ranp
+spatial:
+  enabled: true

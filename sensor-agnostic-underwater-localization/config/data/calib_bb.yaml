@@ -1,0 +1,44 @@
+# CALIBRATION regime on the BROADBAND dataset, with DELAY features.
+#
+# Separate file (rather than editing _base) so every existing experiment keeps
+# its current contract. Three things differ from layout_ood, each for a measured
+# reason:
+#
+# 1. CONTEXT SIZE. Recovering array geometry from a calibration transit needs
+#    enough well-conditioned points. Solved classically on this data:
+#        ctx=10 -> 2029 m     ctx=20 -> 72 m     ctx=40 -> 30 m
+#    The old contract (min 2, max 40, eval 10) put the ENTIRE selection metric,
+#    and most training batches, in a regime where the answer is not determined
+#    even in principle. That alone can explain a model sitting at chance.
+#
+# 2. sample_mode: random. Under CALIBRATION the context comes from a DIFFERENT
+#    trajectory, so the causality argument for 'first' does not apply -- the
+#    whole calibration transit happens before deployment. And spreading the
+#    context points over the donor track is much better conditioned than taking
+#    a contiguous prefix (a short, near-collinear segment): 30 well-spread points
+#    give 3.3 m geometry, 40 points along one prefix give 10.7 m.
+#
+# 3. trans_aug_m: 0. Shifting (sensor_pos, y) is only learnable by a model that
+#    consumes sensor_pos; for the position-free arm it is pure label noise.
+defaults:
+  - _base
+  - _self_
+
+data_dir: data/random_task_bb/hermite_distinct/processed_delay/geometry_split
+
+context:
+  min: 20            # below ~20 the geometry is under-determined (see above)
+  max: 48            # ppt = 50 caps this
+  eval: 40           # selection metric now sits in the solvable regime
+  sample_mode: random
+  exclude_from_target: true
+  per_sample: true
+  calibration: true  # context from a DIFFERENT trajectory of the same (geometry, theta)
+
+trans_aug_m: 0
+
+# The broadband set has 70 train / 14 val / 15 test layouts and 100 trajectories
+# per (geometry, theta); null = use everything.
+max_train_geometries: null
+max_train_trajectories: null
+max_val_trajectories: null

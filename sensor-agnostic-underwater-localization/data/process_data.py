@@ -321,8 +321,61 @@ def assign_geometry_split(set_dirs, thetas, n_train, n_val, n_test, seed=0):
     }
 
 
-def build_geometry_samples(set_dirs_by_id, ids, thetas):
-    """Assemble enriched sample dicts for a list of geometry ids."""
+DELAY_FEATURE_NAMES = ("range_first_km", "range_peak_km", "log10_peak_over10",
+                       "delay_spread_km")
+
+
+def delay_features(filtered, m_per_tap, roll=50, thresh=0.30):
+    """(tau, ppt, n_traj, n_sensors) -> (n_traj, ppt, 4*n_sensors) float32.
+
+    WHY THIS EXISTS. A pulse-compressed record is a SPARSE SPIKE TRAIN: ~1% of
+    taps are active, the amplitude spans 4 orders of magnitude, and the cue is
+    the spike's INDEX (the echo delay), not its value. ``SpatialEncoder`` feeds
+    the whole tau-vector through ``Linear(tau -> hidden)``, which treats taps as
+    UNORDERED categories -- it cannot know tap 100 and 101 are adjacent, so the
+    metric structure of delay is destroyed at the first layer. Measured
+    consequence: a trained ORACLE with TRUE sensor positions sat at chance
+    (484 m vs 481 m) on features that closed-form trilateration solves at 14 m.
+
+    Reading the delay off explicitly is not a shortcut, it is the standard sonar
+    receiver chain (pulse compression -> peak detection); the raw record is only
+    an intermediate. Four physically meaningful numbers per sensor, scaled to
+    O(1) with FIXED constants (no dataset statistics, so nothing leaks):
+
+      range_first_km      first arrival above `thresh` x record peak -> the
+                          direct path, i.e. the range estimate            [km]
+      range_peak_km       strongest arrival (can be a surface/bottom bounce) [km]
+      log10_peak_over10   log amplitude / 10 -- a weak, multipath-corrupted
+                          range cue, kept because it is complementary
+      delay_spread_km     energy-weighted RMS delay spread: multipath richness,
+                          which varies with range and depth                [km]
+
+    Layout is tau-major / sensor-minor (flat[k] = feature(k // n_sensors,
+    sensor = k % n_sensors)) -- IDENTICAL to the raw convention, so
+    ``SpatialEncoder`` consumes it unchanged with tau = 4.
+    """
+    W = np.abs(np.asarray(filtered)).transpose(2, 1, 3, 0)     # (ntr,ppt,ns,tau)
+    peak = W.max(axis=-1)                                      # (ntr,ppt,ns)
+    first = np.argmax(W >= thresh * peak[..., None], axis=-1).astype(np.float32)
+    pk_tap = W.argmax(axis=-1).astype(np.float32)
+    e = W ** 2
+    tot = e.sum(-1) + 1e-30
+    taps = np.arange(W.shape[-1], dtype=np.float32)
+    mean_t = (e * taps).sum(-1) / tot
+    spread = np.sqrt(np.maximum((e * (taps - mean_t[..., None]) ** 2).sum(-1) / tot, 0.0))
+    f = np.stack([(first - roll) * m_per_tap / 1000.0,
+                  (pk_tap - roll) * m_per_tap / 1000.0,
+                  np.log10(peak + 1e-12) / 10.0,
+                  spread * m_per_tap / 1000.0], axis=2)        # (ntr,ppt,4,ns)
+    ntr, ppt, nf, ns = f.shape
+    return f.reshape(ntr, ppt, nf * ns).astype(np.float32)
+
+
+def build_geometry_samples(set_dirs_by_id, ids, thetas, delay_cfg=None):
+    """Assemble enriched sample dicts for a list of geometry ids.
+
+    delay_cfg: None -> store the raw tau*n_sensors record (original behaviour).
+    A dict {df, c, roll, thresh} -> store the compact delay features instead."""
     samples = []
     geom_ids, theta_list, regions = [], [], []
     tau_seen, ns_seen = set(), set()
@@ -336,7 +389,13 @@ def build_geometry_samples(set_dirs_by_id, ids, thetas):
             filtered = np.load(p["filtered"])      # (tau, ppt, n_traj, n_sensors)
             tau, ppt, n_traj, n_sensors = filtered.shape
             tau_seen.add(tau); ns_seen.add(n_sensors)
-            X = reshape_input_data(filtered).astype(np.float32)   # (n_traj, ppt, tau*ns)
+            if delay_cfg is not None:
+                # metres per delay tap = c / (Lf * df); the ifft spans 1/df.
+                mpt = float(delay_cfg["c"]) / (tau * float(delay_cfg["df"]))
+                X = delay_features(filtered, mpt, roll=int(delay_cfg["roll"]),
+                                   thresh=float(delay_cfg["thresh"]))
+            else:
+                X = reshape_input_data(filtered).astype(np.float32)   # (n_traj, ppt, tau*ns)
             y = reshape_output_data(np.load(p["traj"])).astype(np.float32)  # (n_traj, ppt, 3)
             pos = np.load(p["pos"]).T.astype(np.float32)          # (n_sensors, 3)
             for j in range(X.shape[0]):
@@ -351,7 +410,8 @@ def build_geometry_samples(set_dirs_by_id, ids, thetas):
 
 
 def run_geometry(data_root, set_dirs, thetas, save_base,
-                 n_train, n_val, n_test, splits_file=None, shuffle_seed=42):
+                 n_train, n_val, n_test, splits_file=None, shuffle_seed=42,
+                 delay_cfg=None):
     set_dirs_by_id = {set_index(sd): sd for sd in set_dirs}
 
     if splits_file and os.path.exists(splits_file):
@@ -375,7 +435,7 @@ def run_geometry(data_root, set_dirs, thetas, save_base,
     meta = {"thetas": thetas, "split": split}
     for pool in ("train", "val", "test"):
         samples, gids, ths, tau, ns = build_geometry_samples(
-            set_dirs_by_id, split[pool], thetas)
+            set_dirs_by_id, split[pool], thetas, delay_cfg=delay_cfg)
         if pool == "train":
             rng = np.random.default_rng(shuffle_seed)
             perm = rng.permutation(len(samples))
@@ -385,10 +445,23 @@ def run_geometry(data_root, set_dirs, thetas, save_base,
             pickle.dump(samples, f)
         meta[f"{pool}_geometry_ids"] = gids
         meta[f"{pool}_thetas"] = ths
-        meta["tau"] = int(tau); meta["n_sensors"] = int(ns)
-        meta["feat_dim"] = int(tau * ns)
+        meta["n_sensors"] = int(ns)
+        meta["raw_tau"] = int(tau)
+        # feat_dim/tau describe what is actually STORED (delay features shrink it
+        # from tau*ns to 4*ns), so the trainer's reshape stays correct.
+        feat_dim = int(np.asarray(samples[0]["X"]).shape[-1]) if samples else int(tau * ns)
+        meta["feat_dim"] = feat_dim
+        meta["tau"] = feat_dim // int(ns)
+        if delay_cfg is not None:
+            meta["features"] = "delay"
+            meta["delay_cfg"] = dict(delay_cfg)
+            meta["feature_names"] = list(DELAY_FEATURE_NAMES)
+            meta["m_per_tap"] = float(delay_cfg["c"]) / (int(tau) * float(delay_cfg["df"]))
+        else:
+            meta["features"] = "raw" 
         print(f"  {pool:5s}: {len(samples)} samples "
-              f"(X=(ppt,{tau*ns}), sensor_pos=({ns},3))")
+              f"(X=(ppt,{np.asarray(samples[0]['X']).shape[-1] if samples else tau*ns}), "
+              f"sensor_pos=({ns},3))")
 
     with open(os.path.join(save_dir, "metadata.pkl"), "wb") as f:
         pickle.dump(meta, f)
@@ -581,6 +654,18 @@ def main():
     ap.add_argument("--train-geoms", type=int, default=None)
     ap.add_argument("--val-geoms", type=int, default=None)
     ap.add_argument("--test-geoms", type=int, default=None)
+    ap.add_argument("--delay-features", action="store_true",
+                    help="store compact per-sensor DELAY features (4*n_sensors) "
+                         "instead of the raw tau*n_sensors record. Requires "
+                         "--delay-df. Geometry mode only.")
+    ap.add_argument("--delay-df", type=float, default=None,
+                    help="channel.df [Hz] used at GENERATION (sets metres/tap = "
+                         "c/(tau*df)). Required with --delay-features.")
+    ap.add_argument("--delay-c", type=float, default=1500.0, help="sound speed [m/s]")
+    ap.add_argument("--delay-roll", type=int, default=50,
+                    help="tap offset from channel.filter()'s np.roll(h, 50)")
+    ap.add_argument("--delay-thresh", type=float, default=0.30,
+                    help="first-arrival threshold, fraction of the record peak")
     ap.add_argument("--splits-file", default=None,
                     help="Reuse a frozen splits.json instead of recomputing.")
     args = ap.parse_args()
@@ -622,8 +707,22 @@ def main():
     n_va_g = args.val_geoms if args.val_geoms is not None else int(geom_sp.get("n_val", 4))
     n_te_g = args.test_geoms if args.test_geoms is not None else int(geom_sp.get("n_test", 4))
 
+    delay_cfg = None
+    if args.delay_features:
+        if mode not in ("geometry", "all"):
+            raise SystemExit("--delay-features is implemented for --mode geometry")
+        if args.delay_df is None:
+            raise SystemExit("--delay-features requires --delay-df (the channel.df "
+                             "used at generation; metres/tap = c/(tau*df))")
+        delay_cfg = {"df": args.delay_df, "c": args.delay_c,
+                     "roll": args.delay_roll, "thresh": args.delay_thresh}
+
     print("=" * 64)
     print(f"Preprocessing  mode={mode}")
+    if delay_cfg:
+        print(f"  features  : DELAY ({len(DELAY_FEATURE_NAMES)} per sensor) "
+              f"df={delay_cfg['df']} c={delay_cfg['c']} roll={delay_cfg['roll']} "
+              f"thresh={delay_cfg['thresh']}")
     print(f"  data-root : {data_root}")
     print(f"  save-base : {save_base}")
     print("=" * 64)
@@ -654,7 +753,8 @@ def main():
     if mode in ("geometry", "all"):
         print("\n--- GEOMETRY (held-out layouts, interp/extrap) ---")
         run_geometry(data_root, set_dirs, thetas, save_base,
-                     n_tr_g, n_va_g, n_te_g, splits_file=args.splits_file)
+                     n_tr_g, n_va_g, n_te_g, splits_file=args.splits_file,
+                     delay_cfg=delay_cfg)
 
     print("\nDone.")
 
