@@ -46,18 +46,34 @@ csic/models/
 !/sensor-agnostic-underwater-localization/
 sensor-agnostic-underwater-localization/data/topology_task/
 sensor-agnostic-underwater-localization/data/random_task/
+sensor-agnostic-underwater-localization/data/pilot_broadband/
+sensor-agnostic-underwater-localization/data/pilot_legacy/
+sensor-agnostic-underwater-localization/data/random_task_bb
+sensor-agnostic-underwater-localization/data/pilot_final/
 sensor-agnostic-underwater-localization/data/validation/
+sensor-agnostic-underwater-localization/data/random_task_2k/
 sensor-agnostic-underwater-localization/data/data_random_positions/
+sensor-agnostic-underwater-localization/data/_p1/
+sensor-agnostic-underwater-localization/data/pfn10kd/
+sensor-agnostic-underwater-localization/data/calib_10k/
+sensor-agnostic-underwater-localization/data/layout_ood_capped/
+sensor-agnostic-underwater-localization/data/pfn10k/
+sensor-agnostic-underwater-localization/data/pathD/
 sensor-agnostic-underwater-localization/output/
 sensor-agnostic-underwater-localization/PEACH.pdf
 sensor-agnostic-underwater-localization/run_2.log
 sensor-agnostic-underwater-localization/nohup.out
 sensor-agnostic-underwater-localization/pfn_reframe_spec.md
 sensor-agnostic-underwater-localization/pfn_feasibility_questions.md
+sensor-agnostic-underwater-localization/PFN_report_short.md
+sensor-agnostic-underwater-localization/PFN_exploration_report.md
+sensor-agnostic-underwater-localization/pfn_mango_compatibility.md
 sensor-agnostic-underwater-localization/scratch/
+sensor-agnostic-underwater-localization/pfn_lab/
 # wandb raw run logs are large binaries — never commit them (GitHub 100MB limit)
 *.wandb
 
 # Python bytecode / caches — generated, never commit (any subproject, any depth)
 __pycache__/
 *.py[cod]
+*.sh

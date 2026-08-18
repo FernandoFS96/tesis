@@ -185,7 +185,10 @@ class OnlineLatentModel(nn.Module):
 
         z = z.unsqueeze(1).repeat(1, num_targets, 1)
         r = self.deterministic_encoder(ctx_h, ctx_y, target_h)
-        mean, var = self.decoder(r, z, target_h)
+        # r_anp.Decoder returns (mean, var, rho); the online model keeps the
+        # diagonal likelihood, so rho is unused here (it is None unless
+        # full_cov is enabled, which this model does not expose).
+        mean, var, _rho = self.decoder(r, z, target_h)
 
         nll = kl = None
         if target_y is not None:

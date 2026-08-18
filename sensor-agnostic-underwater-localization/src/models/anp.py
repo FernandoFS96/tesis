@@ -16,11 +16,45 @@ class Linear(nn.Module):
     def forward(self, x):
         return self.linear_layer(x)
 
+def gaussian_nll(mean, var, rho, y):
+    """Per-element Gaussian NLL, shape (..., D).
+
+    rho is None -> exactly the independent diagonal Gaussian these models have
+    always used (bit-identical, not merely equivalent).
+
+    rho given -> the FIRST TWO output dims (x, y) form a CORRELATED 2x2 block and
+    any remaining dims stay independent. z is deliberately excluded: it is
+    constant in this data (y_std[2] ~ 1e-6), so a full 3x3 covariance would be
+    singular. Measured motivation: the true posterior on a random array has
+    |corr| ~ 0.71, and the best possible AXIS-ALIGNED Gaussian is 0.74 nats from
+    it while a correlated one is 0.15 -- a gap no amount of training can close
+    with a diagonal head.
+
+    The joint (x, y) term is split evenly across the two slots so the returned
+    shape, and therefore every existing .mean() / target-mask reduction
+    downstream, is unchanged. Only the SUM has meaning, and it is correct.
+    """
+    d = y - mean
+    if rho is None:
+        return 0.5 * t.log(2 * t.pi * var) + 0.5 * (d ** 2) / var
+    out = 0.5 * t.log(2 * t.pi * var) + 0.5 * (d ** 2) / var
+    r = rho[..., 0] if rho.shape[-1] == 1 else rho
+    vx, vy = var[..., 0], var[..., 1]
+    dx, dy = d[..., 0], d[..., 1]
+    om = (1.0 - r * r).clamp(min=1e-6)
+    q = (dx * dx / vx - 2 * r * dx * dy / t.sqrt(vx * vy) + dy * dy / vy) / om
+    nll_xy = 0.5 * (q + t.log(om) + t.log(vx) + t.log(vy)) + t.log(t.tensor(2 * t.pi))
+    out = out.clone()
+    out[..., 0] = 0.5 * nll_xy
+    out[..., 1] = 0.5 * nll_xy
+    return out
+
+
 class LatentEncoder(nn.Module):
-    def __init__(self, num_hidden, num_latent, input_dim, output_dim, dropout=0.1):
+    def __init__(self, num_hidden, num_latent, input_dim, output_dim, dropout=0.1, attn_ffn=False):
         super(LatentEncoder, self).__init__()
         self.input_projection = Linear(input_dim + output_dim, num_hidden)
-        self.self_attentions = nn.ModuleList([Attention(num_hidden, dropout=dropout) for _ in range(2)])
+        self.self_attentions = nn.ModuleList([Attention(num_hidden, dropout=dropout, ffn=attn_ffn) for _ in range(2)])
         self.penultimate_layer = Linear(num_hidden, num_hidden, w_init='relu')
         self.mu = Linear(num_hidden, num_latent)
         self.log_var = Linear(num_hidden, num_latent)
@@ -44,10 +78,10 @@ class LatentEncoder(nn.Module):
         return mu, log_var, z
 
 class DeterministicEncoder(nn.Module):
-    def __init__(self, num_hidden, num_latent, input_dim, output_dim, dropout=0.1):
+    def __init__(self, num_hidden, num_latent, input_dim, output_dim, dropout=0.1, attn_ffn=False):
         super(DeterministicEncoder, self).__init__()
-        self.self_attentions = nn.ModuleList([Attention(num_hidden, dropout=dropout) for _ in range(2)])
-        self.cross_attentions = nn.ModuleList([Attention(num_hidden, dropout=dropout) for _ in range(2)])
+        self.self_attentions = nn.ModuleList([Attention(num_hidden, dropout=dropout, ffn=attn_ffn) for _ in range(2)])
+        self.cross_attentions = nn.ModuleList([Attention(num_hidden, dropout=dropout, ffn=attn_ffn) for _ in range(2)])
         self.input_projection = Linear(input_dim + output_dim, num_hidden)
         self.context_projection = Linear(input_dim, num_hidden)
         self.target_projection = Linear(input_dim, num_hidden)
@@ -72,7 +106,8 @@ class DeterministicEncoder(nn.Module):
         return query
 
 class Decoder(nn.Module):
-    def __init__(self, num_hidden, input_dim, output_dim, dropout=0.1):
+    def __init__(self, num_hidden, input_dim, output_dim, dropout=0.1,
+                 full_cov=False):
         super(Decoder, self).__init__()
         self.target_projection = Linear(input_dim, num_hidden)
         self.linears = nn.ModuleList([Linear(num_hidden * 3, num_hidden * 3, w_init='relu') for _ in range(3)])
@@ -83,6 +118,9 @@ class Decoder(nn.Module):
         self.dropout = nn.Dropout(p=dropout)
         self.mean_projection = Linear(num_hidden*3, output_dim)
         self.log_var_projection = Linear(num_hidden*3, output_dim)
+        # x-y correlation; absent entirely when full_cov=False, so the
+        # state_dict is unchanged and old checkpoints still load.
+        self.rho_projection = Linear(num_hidden*3, 1) if full_cov else None
 
 
     def forward(self, r, z, target_x):
@@ -95,7 +133,9 @@ class Decoder(nn.Module):
             hidden = self.dropout(hidden)
         mean = self.mean_projection(hidden)
         var = 1e-3 + F.softplus(self.log_var_projection(hidden))
-        return mean, var
+        rho = (0.99 * t.tanh(self.rho_projection(hidden))
+               if self.rho_projection is not None else None)
+        return mean, var, rho
 
 class MultiheadAttention(nn.Module):
     def __init__(self, num_hidden_k, dropout=0.1):
@@ -126,7 +166,28 @@ class MultiheadAttention(nn.Module):
 
 
 class Attention(nn.Module):
-    def __init__(self, num_hidden, h=4, dropout=0.1):
+    """Attention sublayer, optionally followed by a feed-forward sublayer.
+
+    ``ffn=False`` (default) is the ORIGINAL block, bit-identical: attention,
+    concat-with-residual, linear, residual add, LayerNorm -- and no feed-forward
+    stage at all. That omission is measurable: on the 8000-layout layout-OOD task
+    this block reaches val 12.47 / train 21.88 where a standard pre-LN transformer
+    block of the same width reaches 8.28 / 11.02, and a capacity-matched
+    comparison attributed ~74% of that gap to architecture rather than size. The
+    missing piece is the per-token nonlinearity below.
+
+    ``ffn=True`` appends the standard sublayer -- ``x + FFN(LayerNorm(x))`` with a
+    4x inner expansion and GELU -- leaving the attention path untouched. It is
+    added AFTER the existing LayerNorm as a residual branch, so with the new
+    weights at their initialisation the block still computes very nearly the
+    original function and training starts from a comparable point.
+
+    Gated off by default so every existing config, checkpoint and result is
+    unaffected: when ``ffn=False`` no parameters are created and the state_dict
+    keys are unchanged.
+    """
+
+    def __init__(self, num_hidden, h=4, dropout=0.1, ffn=False, ffn_mult=4):
         super(Attention, self).__init__()
         self.num_hidden = num_hidden
         self.num_hidden_per_attn = num_hidden // h
@@ -138,6 +199,17 @@ class Attention(nn.Module):
         self.residual_dropout = nn.Dropout(p=dropout)
         self.final_linear = Linear(num_hidden * 2, num_hidden)
         self.layer_norm = nn.LayerNorm(num_hidden)
+        if ffn:
+            self.ffn_norm = nn.LayerNorm(num_hidden)
+            self.ffn = nn.Sequential(
+                Linear(num_hidden, ffn_mult * num_hidden, w_init='relu'),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                Linear(ffn_mult * num_hidden, num_hidden),
+            )
+        else:
+            self.ffn_norm = None
+            self.ffn = None
 
     def forward(self, key, value, query, key_padding_mask=None):
         # key_padding_mask: optional bool (batch_size, seq_k), True = valid key.
@@ -172,6 +244,8 @@ class Attention(nn.Module):
         result = self.residual_dropout(result)
         result = result + residual
         result = self.layer_norm(result)
+        if self.ffn is not None:
+            result = result + self.ffn(self.ffn_norm(result))
         return result, attns
 
 
@@ -231,7 +305,8 @@ class SpatialEncoder(nn.Module):
     def __init__(self, feat_dim, n_sensors, num_hidden, *, tokenize=True,
                  use_position=True, use_attention=True, n_attn_layers=1,
                  pooling="attention", n_fourier_bands=8, min_wavelength=10.0,
-                 max_wavelength=1000.0, pos_dim=2, dropout=0.1, norm_acoustic="layernorm"):
+                 max_wavelength=1000.0, pos_dim=2, dropout=0.1, norm_acoustic="layernorm",
+                 sensor_id_embed=False):
         super().__init__()
         assert feat_dim % n_sensors == 0, \
             f"feat_dim {feat_dim} not divisible by n_sensors {n_sensors}"
@@ -270,6 +345,19 @@ class SpatialEncoder(nn.Module):
             self.register_buffer("x_mean", t.zeros(1))
             self.register_buffer("x_scale", t.ones(1))
 
+        # Learned per-SENSOR-SLOT embedding. The shared token_proj + permutation-
+        # invariant pool make the sensors exchangeable, which is the right bias
+        # when each token already carries its POSITION. With use_position=False
+        # it is fatal: the point embedding becomes an unordered multiset of the
+        # per-sensor measurements, so nothing links "sensor 3" across context
+        # points -- and multilaterating a layout from a calibration set requires
+        # exactly that correspondence. Sensor slot IS a stable label within a
+        # deployment, so tagging it restores the correspondence while keeping
+        # the cross-sensor attention. Default False = original behaviour.
+        self.sensor_id_embed = bool(sensor_id_embed) and tokenize
+        if self.sensor_id_embed:
+            self.sensor_emb = nn.Parameter(t.randn(1, n_sensors, num_hidden) * 0.02)
+
         if tokenize:
             # per-sensor token = (tau acoustic) [+ position embedding], shared proj
             self.token_proj = Linear(self.tau + pos_out, num_hidden, w_init='relu')
@@ -298,13 +386,20 @@ class SpatialEncoder(nn.Module):
             return (a - self.x_mean) / self.x_scale
         return a
 
-    def forward(self, x, sensor_pos):
+    def forward(self, x, sensor_pos, sensor_mask=None):
         # x: (B, N, feat_dim);  sensor_pos: (B, n_sensors, 3), constant over the
         # N points of a trajectory (same geometry). Returns (B, N, num_hidden).
+        # sensor_mask: optional bool (B, n_sensors), True = present sensor. A
+        # False sensor is dropped from the cross-sensor attention and the pool,
+        # so the point embedding is built only from surviving sensors -> lets us
+        # evaluate graceful degradation as sensors fail (tokenized path only).
         B, N, F = x.shape
         pos = sensor_pos[..., :self.pos_dim] if self.use_position else None  # (B,S,pd)
 
         if not self.tokenize:
+            if sensor_mask is not None:
+                raise ValueError("sensor_mask is only supported for the tokenized "
+                                 "SpatialEncoder (tokenize=True), not the flat control")
             xa = self._norm_acoustic(x)
             if self.use_position:
                 pe = self.pos_enc(pos).reshape(B, -1)          # (B, S*pos_out)
@@ -321,14 +416,22 @@ class SpatialEncoder(nn.Module):
             tok = t.cat([tok, pe], dim=-1)                     # (B, N, S, tau+pos_out)
         tok = self.token_proj(tok)                            # (B, N, S, H)
 
+        if self.sensor_id_embed:
+            tok = tok + self.sensor_emb[:, None, :, :]      # (1,1,S,H) broadcast
         tok = tok.reshape(B * N, self.n_sensors, self.num_hidden)
+        # (B*N, S) key-padding mask shared across the N points of each trajectory.
+        smask = (sensor_mask[:, None, :].expand(B, N, self.n_sensors).reshape(B * N, self.n_sensors)
+                 if sensor_mask is not None else None)
         if self.use_attention:
             for attn in self.attn_layers:
-                tok, _ = attn(tok, tok, tok)                   # self-attn over sensors
+                tok, _ = attn(tok, tok, tok, key_padding_mask=smask)   # self-attn over sensors
         if self.pooling == "attention":
             q = self.pool_query.expand(B * N, -1, -1)          # (B*N, 1, H)
-            pooled, _ = self.pool_attn(tok, tok, q)            # query attends sensors
+            pooled, _ = self.pool_attn(tok, tok, q, key_padding_mask=smask)  # query attends sensors
             pooled = pooled.squeeze(1)
+        elif smask is not None:
+            m = smask[..., None].to(tok.dtype)                 # masked Deep-Sets mean
+            pooled = (tok * m).sum(dim=1) / m.sum(dim=1).clamp(min=1.0)
         else:
             pooled = tok.mean(dim=1)                           # Deep-Sets mean pool
         return pooled.view(B, N, self.num_hidden)
@@ -354,14 +457,15 @@ def build_spatial_encoder(spatial_cfg, feat_dim, num_hidden, dropout):
         min_wavelength=float(get("min_wavelength", 10.0)),
         max_wavelength=float(get("max_wavelength", 1000.0)),
         pos_dim=int(get("pos_dim", 2)),
-        norm_acoustic=get("norm_acoustic", "layernorm"), dropout=dropout)
+        norm_acoustic=get("norm_acoustic", "layernorm"), dropout=dropout,
+        sensor_id_embed=bool(get("sensor_id_embed", False)))
     return enc, num_hidden
 
 
 # LatentModel:
 
 class LatentModel(nn.Module):
-    def __init__(self, num_hidden, input_dim, output_dim, dropout=0.1, spatial_cfg=None):
+    def __init__(self, num_hidden, input_dim, output_dim, dropout=0.1, spatial_cfg=None, full_cov=False, attn_ffn=False):
         super(LatentModel, self).__init__()
         # Optional sensor-position-aware front end. When enabled it maps the raw
         # (B, N, feat_dim) acoustics to (B, N, num_hidden), so the NP encoders see
@@ -371,19 +475,23 @@ class LatentModel(nn.Module):
         self.latent_encoder = LatentEncoder(num_hidden, num_latent=num_hidden,
                                             input_dim=enc_input_dim,
                                             output_dim=output_dim,
-                                            dropout=dropout)
+                                            dropout=dropout,
+                                            attn_ffn=attn_ffn)
         self.deterministic_encoder = DeterministicEncoder(num_hidden,
                                                           num_latent=num_hidden,
                                                           input_dim=enc_input_dim,
                                                           output_dim=output_dim,
-                                                          dropout=dropout)
+                                                          dropout=dropout,
+                                                          attn_ffn=attn_ffn)
         self.decoder = Decoder(num_hidden,
                                input_dim=enc_input_dim,
                                output_dim=output_dim,
-                               dropout=dropout)
+                               dropout=dropout, full_cov=full_cov)
 
     def forward(self, context_x, context_y, target_x, target_y=None, beta: float = 1.0,
-                predict_with_prior: bool = False, sensor_pos=None):
+                predict_with_prior: bool = False, sensor_pos=None, sensor_mask=None):
+        # sensor_mask: optional bool (B, n_sensors), True = present; drops failed
+        # sensors from the spatial front end (eval-time robustness study).
         # predict_with_prior: if True the DECODER is driven by the PRIOR latent
         # (context only) even when target_y is supplied, the deployment-faithful
         # path (at inference the latent cannot peek at target labels). The
@@ -392,8 +500,8 @@ class LatentModel(nn.Module):
         # prediction changes. Use False for training (posterior teacher forcing).
         if self.spatial_encoder is not None:
             # sensor_pos is per-trajectory (same geometry for context & targets).
-            context_x = self.spatial_encoder(context_x, sensor_pos)
-            target_x = self.spatial_encoder(target_x, sensor_pos)
+            context_x = self.spatial_encoder(context_x, sensor_pos, sensor_mask=sensor_mask)
+            target_x = self.spatial_encoder(target_x, sensor_pos, sensor_mask=sensor_mask)
         num_targets = target_x.size(1)
         prior_mu, prior_var, prior = self.latent_encoder(context_x, context_y)
 
@@ -421,10 +529,10 @@ class LatentModel(nn.Module):
         z = z.unsqueeze(1).repeat(1, num_targets, 1)
         r = self.deterministic_encoder(context_x, context_y, target_x)
 
-        y_pred_mean, y_pred_var = self.decoder(r, z, target_x)
+        y_pred_mean, y_pred_var, y_pred_rho = self.decoder(r, z, target_x)
 
         if target_y is not None:
-            nll = 0.5 * t.log(2 * t.pi * y_pred_var) + 0.5 * ((target_y - y_pred_mean) ** 2) / y_pred_var
+            nll = gaussian_nll(y_pred_mean, y_pred_var, y_pred_rho, target_y)
             nll = nll.mean()
             # NLL is a MEAN over batch x targets x output dims while kl_div SUMS
             # over the latent dims, so an unnormalized `nll + beta*kl` weighs the
@@ -451,7 +559,8 @@ class LatentModel(nn.Module):
 
 class DeterministicDecoder(nn.Module):
     """Decoder for CNP: takes only the deterministic representation r (no latent z)."""
-    def __init__(self, num_hidden, input_dim, output_dim, dropout=0.1):
+    def __init__(self, num_hidden, input_dim, output_dim, dropout=0.1,
+                 full_cov=False):
         super(DeterministicDecoder, self).__init__()
         self.target_projection = Linear(input_dim, num_hidden)
         self.linears = nn.ModuleList([Linear(num_hidden * 2, num_hidden * 2, w_init='relu') for _ in range(3)])
@@ -460,6 +569,7 @@ class DeterministicDecoder(nn.Module):
         self.dropout = nn.Dropout(p=dropout)
         self.mean_projection = Linear(num_hidden * 2, output_dim)
         self.log_var_projection = Linear(num_hidden * 2, output_dim)
+        self.rho_projection = Linear(num_hidden * 2, 1) if full_cov else None
 
     def forward(self, r, target_x):
         target_x = self.target_projection(target_x)
@@ -470,12 +580,14 @@ class DeterministicDecoder(nn.Module):
             hidden = self.dropout(hidden)
         mean = self.mean_projection(hidden)
         var = 1e-3 + F.softplus(self.log_var_projection(hidden))
-        return mean, var
+        rho = (0.99 * t.tanh(self.rho_projection(hidden))
+               if self.rho_projection is not None else None)
+        return mean, var, rho
 
 
 class DeterministicModel(nn.Module):
     """CNP: attentive deterministic encoder + decoder, no latent variable."""
-    def __init__(self, num_hidden, input_dim, output_dim, dropout=0.1, spatial_cfg=None):
+    def __init__(self, num_hidden, input_dim, output_dim, dropout=0.1, spatial_cfg=None, full_cov=False, attn_ffn=False):
         super(DeterministicModel, self).__init__()
         self.spatial_encoder, enc_input_dim = build_spatial_encoder(
             spatial_cfg, input_dim, num_hidden, dropout)
@@ -483,15 +595,16 @@ class DeterministicModel(nn.Module):
                                                           num_latent=num_hidden,
                                                           input_dim=enc_input_dim,
                                                           output_dim=output_dim,
-                                                          dropout=dropout)
+                                                          dropout=dropout,
+                                                          attn_ffn=attn_ffn)
         self.decoder = DeterministicDecoder(num_hidden,
                                             input_dim=enc_input_dim,
                                             output_dim=output_dim,
-                                            dropout=dropout)
+                                            dropout=dropout, full_cov=full_cov)
 
     def forward(self, context_x, context_y, target_x, target_y=None, beta: float = 1.0,
                 predict_with_prior: bool = False, sensor_pos=None, context_mask=None,
-                target_mask=None):
+                target_mask=None, sensor_mask=None):
         # predict_with_prior is accepted for a uniform interface with the latent
         # models but has no effect: a deterministic CNP never uses target labels
         # to predict, so there is no posterior to peek at.
@@ -500,14 +613,15 @@ class DeterministicModel(nn.Module):
         # target_mask: optional bool (B, T) marking which target points to SCORE
         # (per-sample; e.g. exclude each sample's own context points). Both come
         # from the per-sample context-batching path (data.context.per_sample).
+        # sensor_mask: optional bool (B, n_sensors), True = present (sensor-drop study).
         if self.spatial_encoder is not None:
-            context_x = self.spatial_encoder(context_x, sensor_pos)
-            target_x = self.spatial_encoder(target_x, sensor_pos)
+            context_x = self.spatial_encoder(context_x, sensor_pos, sensor_mask=sensor_mask)
+            target_x = self.spatial_encoder(target_x, sensor_pos, sensor_mask=sensor_mask)
         r = self.deterministic_encoder(context_x, context_y, target_x, context_mask=context_mask)
-        y_pred_mean, y_pred_var = self.decoder(r, target_x)
+        y_pred_mean, y_pred_var, y_pred_rho = self.decoder(r, target_x)
 
         if target_y is not None:
-            nll = 0.5 * t.log(2 * t.pi * y_pred_var) + 0.5 * ((target_y - y_pred_mean) ** 2) / y_pred_var
+            nll = gaussian_nll(y_pred_mean, y_pred_var, y_pred_rho, target_y)
             if target_mask is not None:
                 m = target_mask.unsqueeze(-1)                       # (B, T, 1)
                 denom = m.sum().clamp(min=1) * y_pred_mean.size(-1)

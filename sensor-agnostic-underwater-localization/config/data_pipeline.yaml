@@ -42,6 +42,49 @@ channel:
   master_seed: 11    # global seed (trajectories + reproducibility)
   nop: -1            # joblib processes (-1 == all cores)
 
+  # ---------------------------------------------------------------------------
+  # BROADBAND / TIMING options. All three default to the ORIGINAL physics, so
+  # every existing dataset and protocol reproduces bit-for-bit when they are left
+  # alone. Turn them on together to make array geometry identifiable.
+  #
+  # WHY THEY EXIST (measured, 2026-07-31):
+  #   * signal_type=sinusoid probes the channel at ONE frequency, so each
+  #     sensor's record has effective rank 2 (amplitude, phase): 90.8% of its
+  #     energy sits in a single FFT bin. Phase at 10-20 kHz aliases every ~10 cm,
+  #     so the only range cue left is amplitude -- which correlates with true
+  #     range at r = -0.08 because multipath destroys the spreading law.
+  #   * The channel stores delays RELATIVE to each sensor's own direct arrival
+  #     (acoustic_data_generator.py: tau = dell - dell[0]), which zeroes every
+  #     sensor's time origin independently and so deletes the inter-sensor TDOA
+  #     that array geometry is encoded in.
+  #   Consequence: geometry is NOT inferable from the features, confirmed by a
+  #   position-free model that could not even fit its training set (193 m MAE
+  #   vs 238 m chance). Restoring timing + bandwidth is what makes it inferable.
+  #
+  # SAMPLING CONSTRAINT (this is the part that is easy to get wrong):
+  #   delays are unambiguous only while max delay < 1/df, i.e. range < c/df,
+  #   and range resolution is ~ c/(2B). With the legacy df=50 Hz the unambiguous
+  #   range is just 30 m, so absolute_delay would alias and be useless. Pick df
+  #   from the longest range you need (sources reach ~855 m, arrays span ~500 m)
+  #   and B from the resolution you need -- then keep Lf = B/df + 1 affordable,
+  #   since feature dim = Lf * n_sensors.
+  #     e.g. B=300, df=1.0 -> Lf=301, feat=3010, unambiguous 1500 m, res 2.5 m
+  #          B=10000, df=50 -> Lf=201, feat=2010, unambiguous 30 m  (LEGACY)
+  # ---------------------------------------------------------------------------
+  signal_type: sinusoid   # sinusoid (legacy, single tone) | chirp (broadband LFM) | sinusoid_cav
+  absolute_delay: false   # true -> keep absolute time-of-flight, so TDOA survives
+  matched_filter: false   # true -> receiver pulse-compresses (correlate with the probe)
+                          #   and windows at the delay origin. REQUIRED for chirp:
+                          #   without it the raw record hides the delay entirely
+                          #   (measured corr with range: -0.01 raw vs +0.99 compressed).
+  save_channel_h: true    # false -> skip writing channel_h_*.npy (a diagnostic
+                          #   artefact, not a training input; it is half the bytes)
+  signal_n: 1024          # probe length [samples]; MUST be >= 2*Lf (= 2*(B/df+1)).
+                          #   The fine df needed for unambiguous delay makes the
+                          #   legacy 1024 too short: Lf=601 needs >= 1202.
+  B: null                 # bandwidth [Hz]; null -> leave the physics default (10000)
+  chirp_band: null        # [f0, f1] normalised probe frequencies; null -> [0.02, 0.45]
+
 # -----------------------------------------------------------------------------
 # Parameters for the "spiral" method (the original outward-spiral trajectories).
 # -----------------------------------------------------------------------------
@@ -70,6 +113,18 @@ hermite:
   tension: 0.8        # scales knot tangent magnitude (curve tightness) higher -> tighter
   start_radius_min: 30.0 # min starting radius [m] higher -> more erratic
   start_radius_max: 80.0 # max starting radius [m] lower -> more erratic
+  # SPEED CONTROL (null/null = LEGACY: speed is whatever the segment lengths
+  # imply -- measured mean 1.71 m/s, only 31% of steps inside 2-5 m/s).
+  # Set both to hold a physically coherent vessel speed: each trajectory draws
+  # v ~ U(speed_min, speed_max) [m/s] and is re-parameterised BY ARC LENGTH so it
+  # travels at exactly that speed. Shape sampling is unchanged; only the scale is.
+  # The step time is channel.T_tot (6 s), the same quantity the channel uses for
+  # the vehicular Doppler term, so realistic speed => realistic Doppler.
+  # NOTE: faster vessels cover more ground (path = v * T_tot * ppt), so the field
+  # and the max source-sensor range grow -- keep channel.df below c/max_range or
+  # the restored absolute delay will alias (see the channel block above).
+  speed_min: null   # e.g. 2.0
+  speed_max: null   # e.g. 5.0
 
 # =============================================================================
 # PROBLEM 1 -- TOPOLOGY task  (data/acoustic_data_generator.py)
@@ -95,6 +150,13 @@ random_task:
   # Per-set trajectory seed = master_seed + traj_seed_offset + set_idx (kept in a separate numeric band from layout seeds master_seed + 1000 + p).
   traj_seed_offset: 2000
   out_dir: ./data/random_task
+  # Optional SHARD range over position-sets, for running disjoint slices of one
+  # dataset as parallel processes. null/null = the whole [0, n_position_sets)
+  # range, i.e. exactly the previous behaviour. Layout and trajectory seeds are
+  # both derived from the GLOBAL set index p (layout_seed_for / traj_seed_for),
+  # so a sharded run reproduces a serial one set-for-set.
+  start_set: null
+  end_set: null
   # -----------------------------------------------------------------------------
   # Sensor-layout distribution (the 'random' topology, sensor-displacement study).
   # Each position-set places a COMPACT sensor array whose CENTRE is translated by a per-set random offset -> layouts genuinely differ by DISPLACEMENT (not a re-jitter of one fixed box). 
@@ -106,6 +168,35 @@ random_task:
     offset_frac: 0.3     # max array-centre translation, +/- fraction of field extent
     scale_jitter: 0.0    # optional +/- per-set aperture jitter (0 = fixed aperture)
     min_span: 20.0       # floor on array span [m] for tiny fields
+    # Pin ONE array geometry across every position-set (null = per-set layout,
+    # the sensor-displacement study). Set an int for the environments-only
+    # split, where the environment must be the only axis that varies.
+    fixed_seed: null
+  # ---------------------------------------------------------------------------
+  # PATH D: the ENVIRONMENT as a per-layout latent to be inferred from context.
+  #
+  # theta (channel_options) is NOT an environment -- it is one scalar that scales
+  # the small-scale variability. The parameters below are the ones the multipath
+  # model actually consumes, and they are fixed in every dataset generated so far.
+  # Each is a [lo, hi] range sampled per position-set from
+  # env_seed_for(master_seed, p); lo == hi pins the value.
+  #
+  # enabled: false reproduces every existing dataset byte for byte.
+  #
+  # c2 is deliberately NOT sampled directly: reflcoeff() evaluates
+  # sqrt(1 - (c2/c)^2 cos^2(theta)), which goes NaN as soon as c2 > c. It is
+  # always c2_frac * c with c2_frac < 1 (a slower, softer bottom).
+  # ---------------------------------------------------------------------------
+  environment:
+    enabled: false
+    env_seed_offset: 3000   # third seed band (layout=1000, trajectory=2000)
+    h0:      [30.0, 120.0]  # water depth [m]                (shipped value 50)
+    ht_frac: [1.0, 1.0]     # transmitter height as a fraction of depth
+                            # (1.0 = source at the surface, the shipped setup)
+    hr0:     [1.0, 5.0]     # receiver height above the bottom [m]  (shipped 1)
+    c:       [1470.0, 1540.0]  # sound speed in water [m/s]      (shipped 1500)
+    c2_frac: [0.70, 0.95]   # bottom speed as a fraction of c (shipped 0.8)
+    k:       [1.4, 2.0]     # spreading factor                    (shipped 1.7)
 
 # =============================================================================
 # Preprocessing (data/data_process_random_positions.py). CLI flags override.

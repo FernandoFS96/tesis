@@ -137,6 +137,90 @@ def layout_seed_for(master_seed: int, position_set_idx: int) -> int:
     return int(master_seed) + 1000 + int(position_set_idx)
 
 
+def env_seed_for(master_seed: int, position_set_idx: int, offset: int = 3000) -> int:
+    """Deterministic RNG seed for a position-set's ENVIRONMENT draw.
+
+    Third numeric band, alongside layout (``master_seed + 1000 + p``) and
+    trajectory (``master_seed + traj_seed_offset + p``), so the three streams
+    never collide and an environment is reproducible from (master_seed, p)
+    alone -- which is what lets a sharded run reproduce a serial one."""
+    return int(master_seed) + int(offset) + int(position_set_idx)
+
+
+# --------------------------------------------------------------------------- #
+# Environment sampling (Path D: the environment as an inferable latent)
+# --------------------------------------------------------------------------- #
+# WHY THIS EXISTS. `theta` (channel_options) is NOT an environment: it is a
+# single scalar `aux` that scales sig2s / sig2b / mu_p / nu_p / Sp and the
+# height-and-range bounds together, i.e. one "how choppy" dimension. Everything
+# that physically defines the channel -- depth, sound speeds, spreading -- is
+# hard-coded in generate_params and identical in every dataset. Measured on
+# pfn10kd, theta=0.1 vs 0.2 differ LESS than two trajectories within one theta
+# (separability ratio 0.28), so theta cannot carry an environment-inference task.
+#
+# These are the parameters mpgeometry() actually consumes:
+#   h0   water depth [m]                 -> surface/bottom bounce geometry
+#   ht0  transmitter height [m]          -> kept equal to h0 by default, which
+#        reproduces the current source-at-surface setup (h - ht = 0)
+#   hr0  receiver height above bottom [m]-> also sets sensor z in the layout
+#   c    sound speed in water [m/s]
+#   c2   sound speed in bottom [m/s]     -> sampled as a FRACTION of c
+#   k    spreading factor                -> path-loss exponent
+#
+# HARD CONSTRAINT: reflcoeff() evaluates sqrt(1 - (c2/c1)^2 cos^2(theta)), which
+# goes negative -> NaN whenever c2 > c. c2 is therefore always drawn as
+# c2_frac * c with c2_frac < 1 (a slower, "soft" bottom), never sampled freely.
+ENV_KEYS = ("h0", "ht0", "hr0", "c", "c2", "k")
+
+
+def sample_environment(seed: int, env_cfg) -> dict:
+    """Draw one environment. Ranges are [lo, hi] pairs; lo == hi pins a value.
+
+    Returns a dict of channel_info overrides. Deterministic in `seed`, so the
+    same position-set index yields the same environment in any run."""
+    rng = np.random.default_rng(int(seed))
+
+    def u(key, default):
+        r = None if env_cfg is None else env_cfg.get(key, None)
+        if r is None:
+            return float(default)
+        lo, hi = float(r[0]), float(r[1])
+        return lo if hi <= lo else float(rng.uniform(lo, hi))
+
+    h0 = u("h0", 50.0)
+    c = u("c", 1500.0)
+    c2_frac = u("c2_frac", 0.8)
+    # Clamp defensively: a bottom at or above the water speed makes the
+    # reflection coefficient complex and the whole channel NaN.
+    c2_frac = float(min(max(c2_frac, 0.30), 0.98))
+    env = {
+        "h0": h0,
+        # Source stays at the surface (h - ht = 0), matching the shipped setup,
+        # unless ht_frac is given as a fraction of depth.
+        "ht0": h0 * u("ht_frac", 1.0),
+        "hr0": u("hr0", 1.0),
+        "c": c,
+        "c2": c * c2_frac,
+        "k": u("k", 1.7),
+    }
+    return env
+
+
+def apply_environment(params: dict, env) -> dict:
+    """Overlay an environment onto a params dict from generate_params().
+
+    Applied AFTER the theta scaling so the two axes compose: theta still sets
+    the small-scale variability, the environment sets the propagation geometry.
+    ``env=None`` leaves params untouched, byte for byte."""
+    if not env:
+        return params
+    ci = params['ci']
+    for k in ENV_KEYS:
+        if k in env:
+            ci[k] = float(env[k])
+    return params
+
+
 def traj_seed_for(master_seed: int, position_set_idx: int, offset: int) -> int:
     """Deterministic RNG seed for a position-set's OWN trajectory ensemble
     (distinct-trajectories mode only). Lives in a separate numeric band from the
@@ -232,7 +316,8 @@ def random_sensor_positions(traj, n_sensors, hr0, layout_seed,
 # --------------------------------------------------------------------------- #
 def generate_one(option, position_set_idx, trajectories, layout_seed,
                  out_dir, snr, rep, nop, signal_n=1024, traj_config=None,
-                 layout_params=None):
+                 layout_params=None, signal_type='sinusoid',
+                 save_channel_h=True, env=None, fixed_positions=None):
     """
     Simulate the channel + filtered features for ONE channel option (theta) and
     ONE sensor layout (position-set), writing the result in the
@@ -262,15 +347,29 @@ def generate_one(option, position_set_idx, trajectories, layout_seed,
     # Fresh params for this theta. df / n_traj / ppt were already injected into
     # the base.generate_params defaults via override_base_params() in main().
     params = base.generate_params(options=option)
+    # Per-set ENVIRONMENT (depth / sound speeds / spreading), applied after the
+    # theta scaling. env=None -> untouched, so every existing dataset is
+    # reproduced exactly.
+    params = apply_environment(params, env)
 
     # 1) Our per-set random layout (varies across position-sets, reproducible).
-    r_posicion = random_sensor_positions(
-        traj=trajectories,
-        n_sensors=params['n_sensors'],
-        hr0=params['ci']['hr0'],
-        layout_seed=layout_seed,
-        **(layout_params or {}),
-    )
+    # fixed_positions pins the array across sets. It cannot be reproduced by
+    # simply reusing layout_seed: random_sensor_positions fits the array to THIS
+    # set's trajectory field extent, so with distinct trajectories the same seed
+    # still yields different positions. The caller therefore draws it once and
+    # passes it in. Sensor z is re-set from hr0 so depth still tracks the
+    # environment while x/y stay fixed.
+    if fixed_positions is not None:
+        r_posicion = np.array(fixed_positions, dtype=float, copy=True)
+        r_posicion[2, :] = float(params['ci']['hr0'])
+    else:
+        r_posicion = random_sensor_positions(
+            traj=trajectories,
+            n_sensors=params['n_sensors'],
+            hr0=params['ci']['hr0'],
+            layout_seed=layout_seed,
+            **(layout_params or {}),
+        )
 
     # 2) Patch placement on the CLASS so the constructor's single obtain_h()
     #    call uses our layout. The patched function accepts and ignores the
@@ -322,7 +421,7 @@ def generate_one(option, position_set_idx, trajectories, layout_seed,
     n_traj = c.params['n_traj'] #type: ignore
     canonical = list(range(n_traj))
     data, trjs = c.filter(
-        signal_n, snr=snr, nt=n_traj, signal_type='sinusoid', rep=rep,
+        signal_n, snr=snr, nt=n_traj, signal_type=signal_type, rep=rep,
         specific=canonical,
     )
 
@@ -348,7 +447,10 @@ def generate_one(option, position_set_idx, trajectories, layout_seed,
         )
     np.save(os.path.join(topology_dir, 'trajectory', 'trajectories.npy'), trjs)
     np.save(os.path.join(topology_dir, 'filtered_data', 'filtered_data.npy'), data)
-    np.save(os.path.join(info_dir, f'channel_h_{option}.npy'), c.h) #type: ignore
+    # The raw impulse response is a diagnostic artefact, not a training input,
+    # and it doubles the on-disk size. Skipped when save_channel_h=False.
+    if save_channel_h:
+        np.save(os.path.join(info_dir, f'channel_h_{option}.npy'), c.h) #type: ignore
     np.save(os.path.join(info_dir, f'trajs_{option}.npy'), c.traj) #type: ignore
     np.save(os.path.join(info_dir, f'sensor_positions_{option}.npy'), r_posicion)
 
@@ -358,21 +460,32 @@ def generate_one(option, position_set_idx, trajectories, layout_seed,
 # --------------------------------------------------------------------------- #
 # Base-params override (df / n_traj / ppt) applied to the imported module
 # --------------------------------------------------------------------------- #
-def override_base_params(df, n_traj, ppt):
+def override_base_params(df, n_traj, ppt, B=None, absolute_delay=False,
+                         chirp_band=None, matched_filter=False):
     """
     The physics lives in ``base.generate_params``. We wrap it so every call made
     inside this script (and inside the base ``channel``) picks up the
     collaboration spec (df=100, n_traj=100, ppt=50) without editing the original
     file. This keeps the original module pristine and importable.
+
+    ``B`` (bandwidth, Hz), ``absolute_delay`` and ``chirp_band`` are opt-in; the
+    defaults (B untouched, absolute_delay False) reproduce the original physics
+    exactly. See config/data_pipeline.yaml for what they are for.
     """
     _orig_generate_params = base.generate_params
 
     def _patched(options=None):
         params = _orig_generate_params(options=options)
+        if B is not None:
+            params['ci']['B'] = float(B)
         params['ci']['df'] = float(df)
         params['ci']['fmax'] = params['ci']['fmin'] + params['ci']['B']
         params['n_traj'] = int(n_traj)
         params['ppt'] = int(ppt)
+        params['absolute_delay'] = bool(absolute_delay)
+        params['matched_filter'] = bool(matched_filter)
+        if chirp_band is not None:
+            params['chirp_band'] = (float(chirp_band[0]), float(chirp_band[1]))
         return params
 
     base.generate_params = _patched  # type: ignore
@@ -414,7 +527,9 @@ def make_trajectories(option, nop, physics_seed, traj_config=None):
 def run(channel_options, n_position_sets, out_dir, snr, rep, nop,
         master_seed, start_set, end_set, signal_n=1024,
         distinct_trajectories=False, traj_seed_offset=2000, traj_config=None,
-        traj_method=None, variant_tag=None, layout_params=None):
+        traj_method=None, variant_tag=None, layout_params=None,
+        signal_type='sinusoid', save_channel_h=True,
+        env_cfg=None, env_seed_offset=3000, layout_fixed_seed=None):
     os.makedirs(out_dir, exist_ok=True)
 
     manifest = {
@@ -428,9 +543,13 @@ def run(channel_options, n_position_sets, out_dir, snr, rep, nop,
         'traj_method': traj_method,
         'variant_tag': variant_tag,
         'layout_params': dict(layout_params or {}),  # sensor-layout distribution
+        'signal_type': signal_type,
         'positions': {},  # (position_set_idx, theta) -> (3, n_sensors)
         'layout_seeds': {},
         'traj_seeds': {},  # only populated in distinct mode
+        'layout_fixed_seed': layout_fixed_seed,
+        'env_cfg': dict(env_cfg or {}),   # the sampling ranges actually used
+        'environments': {},               # position_set_idx -> drawn environment
     }
 
     # In SHARED mode, generate the trajectories ONCE per theta (fixed seed ==
@@ -449,10 +568,25 @@ def run(channel_options, n_position_sets, out_dir, snr, rep, nop,
 
     # For each position-set, draw a layout (and, in distinct mode, its own
     # trajectories) and simulate every theta.
+    # A pinned layout is drawn ONCE, from the first set's trajectory ensemble,
+    # and reused verbatim by every set (see generate_one).
+    _fixed_pos = None
     set_range = range(start_set, end_set)
     for p in tqdm(set_range, desc="Position sets"):
-        l_seed = layout_seed_for(master_seed, p)
+        # layout_fixed_seed pins ONE array geometry across every position-set, so
+        # the ENVIRONMENT becomes the only thing that varies between tasks. Needed
+        # for the environments-only split: otherwise a held-out set differs in
+        # both layout and environment and the two axes cannot be separated.
+        # (Sensor z still follows hr0, which is part of the environment.)
+        l_seed = (int(layout_fixed_seed) if layout_fixed_seed is not None
+                  else layout_seed_for(master_seed, p))
         manifest['layout_seeds'][p] = l_seed
+        # One environment per position-set, seeded from the GLOBAL set index so
+        # shards reproduce a serial run set-for-set.
+        env_p = (sample_environment(env_seed_for(master_seed, p, env_seed_offset),
+                                    env_cfg) if env_cfg else None)
+        if env_p is not None:
+            manifest['environments'][p] = dict(env_p)
         if distinct_trajectories:
             manifest['traj_seeds'][p] = traj_seed_for(master_seed, p, traj_seed_offset)
         for option in channel_options:
@@ -464,6 +598,29 @@ def run(channel_options, n_position_sets, out_dir, snr, rep, nop,
                 )
             else:
                 trajectories = shared_traj[option]
+            if layout_fixed_seed is not None and _fixed_pos is None:
+                # Derive the pinned array from the trajectories of a FIXED
+                # REFERENCE set (index 0), never from whichever set this process
+                # happens to reach first. Sharded runs otherwise each pin a
+                # different array -- measured: 4 shards produced 4 distinct
+                # layouts, switching exactly at the shard boundaries -- because
+                # random_sensor_positions fits the array to the trajectory field
+                # extent it is handed. Set 0's ensemble is reproducible from
+                # (master_seed, 0) in every process, so all shards now agree.
+                _ref_traj = trajectories
+                if distinct_trajectories:
+                    _ref_traj = make_trajectories(
+                        option, nop=nop,
+                        physics_seed=traj_seed_for(master_seed, 0, traj_seed_offset),
+                        traj_config=traj_config)
+                _p0 = apply_environment(
+                    base.generate_params(options=option),
+                    sample_environment(env_seed_for(master_seed, 0, env_seed_offset),
+                                       env_cfg) if env_cfg else None)
+                _fixed_pos = random_sensor_positions(
+                    traj=_ref_traj, n_sensors=_p0['n_sensors'],
+                    hr0=_p0['ci']['hr0'], layout_seed=int(layout_fixed_seed),
+                    **(layout_params or {}))
             r_pos = generate_one(
                 option=option,
                 position_set_idx=p,
@@ -476,14 +633,24 @@ def run(channel_options, n_position_sets, out_dir, snr, rep, nop,
                 signal_n=signal_n,
                 traj_config=traj_config,
                 layout_params=layout_params,
+                signal_type=signal_type,
+                save_channel_h=save_channel_h,
+                env=env_p,
+                fixed_positions=_fixed_pos,
             )
             manifest['positions'][(p, option)] = r_pos
 
-    # Manifest for bookkeeping / reproducibility.
-    with open(os.path.join(out_dir, '_manifest.pkl'), 'wb') as f:
+    # Manifest for bookkeeping / reproducibility. Parallel shards write disjoint
+    # set ranges into ONE out_dir, so a shard must not clobber its siblings'
+    # bookkeeping with its own partial view; it gets a range-tagged file instead.
+    # A whole-range run is unaffected and still writes plain _manifest.pkl.
+    sharded = (start_set, end_set) != (0, n_position_sets)
+    m_name = (f'_manifest_{start_set:06d}_{end_set:06d}.pkl' if sharded
+              else '_manifest.pkl')
+    with open(os.path.join(out_dir, m_name), 'wb') as f:
         pickle.dump(manifest, f)
     print(f"\nDone. Wrote position-sets [{start_set}, {end_set}) to: {out_dir}")
-    print(f"Manifest: {os.path.join(out_dir, '_manifest.pkl')}")
+    print(f"Manifest: {os.path.join(out_dir, m_name)}")
 
 
 def parse_float_list(s):
@@ -491,6 +658,41 @@ def parse_float_list(s):
         return None
     parts = [p for p in s.replace(',', ' ').split() if p != '']
     return [float(p) for p in parts]
+
+
+def _env_cfg(rt):
+    """The random_task.environment block as a plain dict, or None when absent or
+    disabled. None means every dataset generated so far is reproduced exactly."""
+    try:
+        env = rt['environment']
+    except Exception:
+        return None
+    if env is None or not bool(env.get('enabled', False)):
+        return None
+    out = {}
+    for k in ('h0', 'c', 'c2_frac', 'k', 'hr0', 'ht_frac'):
+        try:
+            v = env[k]
+        except Exception:
+            continue
+        if v is not None:
+            out[k] = [float(v[0]), float(v[1])]
+    return out or None
+
+
+def _opt(block, key, default):
+    """Read an OPTIONAL knob that older configs are not required to declare.
+
+    Configs written before a knob existed simply lack the key, and OmegaConf in
+    struct mode raises on a missing attribute rather than returning None -- so
+    the lookup is guarded and an absent or explicitly-null key both fall back to
+    the previous behaviour.
+    """
+    try:
+        v = block[key]
+    except Exception:
+        return default
+    return default if v is None else int(v)
 
 
 def run_random_task(cfg):
@@ -507,6 +709,18 @@ def run_random_task(cfg):
     n_traj = int(ch['n_traj']); ppt = int(ch['ppt']); df = float(ch['df'])
     snr = float(ch['snr']); rep = int(ch['rep'])
     master_seed = int(ch.get('master_seed', 11)); nop = int(ch.get('nop', -1))
+    # --- broadband / timing options (all default to the ORIGINAL physics) ---
+    signal_type = str(ch.get('signal_type', 'sinusoid'))
+    absolute_delay = bool(ch.get('absolute_delay', False))
+    matched_filter = bool(ch.get('matched_filter', False))
+    save_channel_h = bool(ch.get('save_channel_h', True))
+    # Probe length. channel.filter() requires signal_n >= 2*Lf, and Lf grows as
+    # B/df -- the fine df needed for unambiguous delay makes the legacy 1024
+    # too short (Lf=601 needs >=1202). Default keeps the legacy value.
+    signal_n = int(ch.get('signal_n', 1024))
+    B = ch.get('B', None)
+    cb = ch.get('chirp_band', None)
+    chirp_band = (float(cb[0]), float(cb[1])) if cb else None
 
     n_position_sets = int(rt['n_position_sets'])
     distinct_trajectories = bool(rt.get('distinct_trajectories', False))
@@ -524,21 +738,44 @@ def run_random_task(cfg):
 
     # Inject df / n_traj / ppt into the imported physics, and suppress the
     # hardcoded ./data side-effect write in channel.__init__.
-    override_base_params(df=df, n_traj=n_traj, ppt=ppt)
+    override_base_params(df=df, n_traj=n_traj, ppt=ppt, B=B,
+                         absolute_delay=absolute_delay, chirp_band=chirp_band,
+                         matched_filter=matched_filter)
     base.channel.save_channel_info = lambda self, name: None  # type: ignore
 
     # Variant tag keeps each (method, mode) dataset in its own folder.
     variant_tag = f"{method}_{'distinct' if distinct_trajectories else 'shared'}"
     out_dir = os.path.join(str(rt['out_dir']), variant_tag)
 
-    Lf = len(base.range_m(10000.0, 20000.0, df))
+    _fmin = 10000.0
+    _B = float(B) if B is not None else 10000.0
+    Lf = len(base.range_m(_fmin, _fmin + _B, df))
+    _c = 1500.0
+    # channel.filter() rejects a probe shorter than 2*Lf. Lf grows as B/df, and
+    # the fine df needed for unambiguous delay makes the legacy 1024 too short
+    # (Lf=601 needs >=1202) -- fail here with a fix, not deep inside joblib.
+    _need = 2 * Lf
+    if signal_n < _need:
+        raise SystemExit(
+            f"channel.signal_n={signal_n} is too short for Lf={Lf}: "
+            f"channel.filter() requires signal_n >= 2*Lf = {_need}. "
+            f"Set channel.signal_n={1 << (_need - 1).bit_length()} or larger.")
     print("=" * 64)
     print("RANDOM task -- dataset generation")
     print("=" * 64)
     print(f"  thetas             : {channel_options}")
     print(f"  position sets      : {n_position_sets}")
     print(f"  n_traj / ppt       : {n_traj} / {ppt}")
-    print(f"  df                 : {df} Hz  ->  Lf={Lf} time-points")
+    print(f"  band / df          : {_fmin/1e3:.1f}-{(_fmin+_B)/1e3:.1f} kHz (B={_B:.0f} Hz)"
+          f" / df={df} Hz  ->  Lf={Lf} time-points")
+    print(f"  signal_type        : {signal_type}"
+          f"{f' (band {chirp_band})' if chirp_band else ''}")
+    print(f"  matched_filter     : {matched_filter}")
+    print(f"  save channel_h     : {save_channel_h}")
+    print(f"  probe length       : {signal_n} samples (needs >= 2*Lf = {2*Lf})")
+    print(f"  absolute_delay     : {absolute_delay}"
+          f"   [unambiguous range < c/df = {_c/df:.0f} m;"
+          f" range resolution ~ c/2B = {_c/(2*_B):.2f} m]")
     print(f"  feature dim / point: Lf*n_sensors = {Lf}*10 = {Lf*10}")
     print(f"  snr / rep          : {snr} / {rep}")
     print(f"  master seed        : {master_seed}")
@@ -559,14 +796,20 @@ def run_random_task(cfg):
         rep=rep,
         nop=nop,
         master_seed=master_seed,
-        start_set=0,
-        end_set=n_position_sets,
+        start_set=_opt(rt, 'start_set', 0),
+        end_set=_opt(rt, 'end_set', n_position_sets),
+        env_cfg=_env_cfg(rt),
+        env_seed_offset=_opt(rt, 'env_seed_offset', 3000),
+        layout_fixed_seed=_opt(rt.get('layout', {}), 'fixed_seed', None),
         distinct_trajectories=distinct_trajectories,
         traj_seed_offset=traj_seed_offset,
         traj_config=cfg,
         traj_method=method,
         variant_tag=variant_tag,
         layout_params=layout_params,
+        signal_type=signal_type,
+        save_channel_h=save_channel_h,
+        signal_n=signal_n,
     )
 
 
