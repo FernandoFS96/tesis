@@ -1,0 +1,18 @@
+# Only the code is tracked. Datasets, trained models, results, plots and logs
+# stay local.
+/*
+!/.gitignore
+!/README.md
+!/requirements.txt
+!/data/
+!/src/
+
+/data/*
+!/data/*.py
+
+/src/training/results/
+/src/evaluation/results/
+nohup*
+*.log
+*.db
+*.png

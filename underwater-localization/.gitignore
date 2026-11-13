@@ -1,0 +1,4 @@
+# The code and the raw simulated data in data/<variance>/ are tracked;
+# processed data and run outputs are not.
+/results/
+/data/*/data_processed/

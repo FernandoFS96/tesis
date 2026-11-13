@@ -1,0 +1,6 @@
+# The code, the task data in data/tasks/ and the experiment results are tracked;
+# generated data, training runs and the paper PDF are not.
+/data/simulated_data/
+/data/trajectories/
+/training/np_magnetic_runs/
+*.pdf
