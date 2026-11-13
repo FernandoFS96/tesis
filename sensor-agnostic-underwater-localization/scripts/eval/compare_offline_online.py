@@ -36,24 +36,15 @@ import matplotlib.pyplot as plt
 # Reuse the eval building blocks (build_model, dataset, scorers) verbatim so the
 # context-draw logic is byte-for-byte identical between the two models.
 sys.path.insert(0, os.path.dirname(__file__))
-from eval_np_geometry import (build_model, TrajectoryDataset,  # type: ignore
+from eval_np_geometry import (model_from_checkpoint, TrajectoryDataset,  # type: ignore
                               per_geometry_mae, per_geometry_mae_online)
 
 
 def load_model(ckpt_path, device):
     ck = t.load(ckpt_path, map_location=device)
     name = ck.get("model_name", "cnp")
-    conv = ck.get("convention", "split")
-    feat = ck.get("feat_dim"); out = ck.get("out_dim", 3)
     cfg = ck.get("config", {})
-    model, conv2 = build_model(name, cfg.get("num_hidden", 128), feat, out,
-                               rnn_type=cfg.get("rnn_type", "lstm"),
-                               rnn_layers=cfg.get("rnn_layers", 1),
-                               rnn_dropout=cfg.get("rnn_dropout", 0.0),
-                               dropout=cfg.get("dropout", 0.1),
-                               max_context=cfg.get("max_context", 128))
-    conv = conv or conv2
-    model = model.to(device); model.load_state_dict(ck["model"]); model.eval()
+    model, conv = model_from_checkpoint(ck, device)
     return {"model": model, "conv": conv, "name": name, "cfg": cfg,
             "y_mean": ck.get("y_mean"), "y_std": ck.get("y_std"),
             "chunk_size": int(cfg.get("chunk_size", 8))}

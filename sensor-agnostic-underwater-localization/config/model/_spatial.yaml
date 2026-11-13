@@ -18,8 +18,22 @@
 #  4. tokens + pos, no attn    model=spatial_cnp model.spatial.use_attention=false (Deep-Sets; is attention needed?)
 #  5. full                     model=spatial_cnp (or spatial_anp)
 # ---------------------------------------------------------------------------
+# Label frame. absolute = labels in the data frame (the paper models). centroid =
+# labels relative to the sensor centroid inside the model (src/models/frame.py);
+# pair it with encoder=set, whose input is array-centered.
+frame: absolute
 spatial:
   enabled: false
+  # Front end. legacy = SpatialEncoder below (the paper models). set =
+  # SensorSetEncoder: array-centered plain coordinates, MLP tokens, transformer
+  # over sensors; the set_* keys apply to it only, the legacy keys do not.
+  encoder: legacy
+  set_d_model: 256
+  set_layers: 6
+  set_heads: 8
+  set_pos_scale: 100.0   # meters per input unit of the centered sensor coordinates
+  set_dropout: 0.0
+  set_bf16: true         # bfloat16 autocast for the encoder on CUDA
   tokenize: true         # per-sensor tokens (invariant). false -> flat+position control
   use_position: true     # add Fourier position features per sensor
   use_attention: true    # cross-sensor self-attention (else Deep-Sets pool only)

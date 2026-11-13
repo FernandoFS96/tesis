@@ -49,55 +49,10 @@ from tqdm import tqdm
 
 # Add the repo root (parent of src/) so that `from src.models.anp import ...` works.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-import src.models.anp as anp_mod  # type: ignore
-import src.models.r_anp as ranp_mod  # type: ignore
-import src.models.online_r_anp as online_mod  # type: ignore
-import src.models.pfn as pfn_mod  # type: ignore
-
-
-def build_model(name, num_hidden, input_dim, output_dim,
-                rnn_type="lstm", rnn_layers=1, rnn_dropout=0.0, dropout=0.1,
-                max_context=128, spatial_cfg=None, **kw):
-    name = name.lower()
-    if name == "pfn":  # masked single-stack transformer (spatial_cfg -> spatial_pfn)
-        return pfn_mod.PFNModel(num_hidden, input_dim, output_dim, dropout=dropout,
-                                spatial_cfg=spatial_cfg,
-                                n_layers=kw.get("n_layers", 6),
-                                n_heads=kw.get("n_heads", 8),
-                                ffn_mult=kw.get("ffn_mult", 4),
-                                # readout/n_cross_layers were NOT forwarded here:
-                                # a cross-readout checkpoint was silently rebuilt
-                                # as joint, then failed the strict load.
-                                readout=kw.get("readout", "joint"),
-                                n_cross_layers=kw.get("n_cross_layers", 2)), "split"
-    if name == "cnp":
-        return anp_mod.DeterministicModel(num_hidden, input_dim, output_dim,
-                                          dropout=dropout, spatial_cfg=spatial_cfg,
-                                          full_cov=kw.get("full_cov", False),
-                                          attn_ffn=kw.get("attn_ffn", False)), "split"
-    if name == "anp":
-        return anp_mod.LatentModel(num_hidden, input_dim, output_dim,
-                                   dropout=dropout, spatial_cfg=spatial_cfg,
-                                          full_cov=kw.get("full_cov", False),
-                                          attn_ffn=kw.get("attn_ffn", False)), "split"
-    if name == "ranp":  # spatial_cfg enables the spatial_ranp front end
-        return ranp_mod.LatentModel(num_hidden, input_dim, output_dim,
-                                    rnn_type=rnn_type, rnn_layers=rnn_layers,
-                                    rnn_dropout=rnn_dropout, dropout=dropout,
-                                    spatial_cfg=spatial_cfg,
-                                    attn_ffn=kw.get("attn_ffn", False)), "indexed"
-    if name == "rcnp":  # spatial_cfg -> spatial_rcnp
-        return ranp_mod.DeterministicModel(num_hidden, input_dim, output_dim,
-                                           rnn_type=rnn_type, rnn_layers=rnn_layers,
-                                           rnn_dropout=rnn_dropout, dropout=dropout,
-                                           spatial_cfg=spatial_cfg,
-                                           attn_ffn=kw.get("attn_ffn", False)), "indexed"
-    if name == "online_ranp":
-        return online_mod.OnlineLatentModel(num_hidden, input_dim, output_dim,
-                                            rnn_type=rnn_type, rnn_layers=rnn_layers,
-                                            rnn_dropout=rnn_dropout, dropout=dropout,
-                                            max_context=max_context), "online"
-    raise ValueError(f"unknown model '{name}'")
+# Model factory + checkpoint loader, shared with the trainer (one copy, so the
+# eval side can no longer rebuild a checkpoint differently from how it was
+# trained). build_model is re-exported for eval_suite / compare_offline_online.
+from src.models.registry import build_model, model_from_checkpoint  # type: ignore  # noqa: F401
 
 
 class TrajectoryDataset:
@@ -353,26 +308,12 @@ def main():
         print(f"[eval] no splits.json under {data_dir}; region labels default to 'train'.")
 
     name = ck.get("model_name", "cnp")
-    conv = ck.get("convention", "split")
     feat_dim = ck.get("feat_dim"); out_dim = ck.get("out_dim", 3)
     cfg = ck.get("config", {})
-    nh = cfg.get("num_hidden", 128)
     spatial_cfg = cfg.get("spatial", None)  # resolved dict (with n_sensors) or None
-    model, conv2 = build_model(name, nh, feat_dim, out_dim,
-                               rnn_type=cfg.get("rnn_type", "lstm"),
-                               rnn_layers=cfg.get("rnn_layers", 1),
-                               rnn_dropout=cfg.get("rnn_dropout", 0.0),
-                               dropout=cfg.get("dropout", 0.1),
-                               max_context=cfg.get("max_context", 128),
-                               spatial_cfg=spatial_cfg,
-                               full_cov=cfg.get("full_cov", False),
-                               n_layers=cfg.get("n_layers", 6),
-                               n_heads=cfg.get("n_heads", 8),
-                               ffn_mult=cfg.get("ffn_mult", 4))
-    conv = conv or conv2
+    model, conv = model_from_checkpoint(ck, device)
     if spatial_cfg:
         print(f"[eval] spatial encoder ON (n_sensors={spatial_cfg.get('n_sensors')})")
-    model = model.to(device); model.load_state_dict(ck["model"])
 
     # online streaming granularity: CLI overrides checkpoint config
     chunk_size = args.chunk_size if args.chunk_size is not None \

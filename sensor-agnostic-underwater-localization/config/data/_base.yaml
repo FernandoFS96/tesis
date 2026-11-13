@@ -46,6 +46,20 @@ context:
 # Requires model=spatial_* (errors otherwise). 300 is ~1.5-2x the generation displacement scale so the test hull is over-covered.
 trans_aug_m: 150
 
+# Rotation augmentation (TRAIN only): per-sample random rotation and reflection of the whole scene about the array centroid; valid for the same reason as the translation.
+# Requires model=spatial_*. Needed by the array-centered front end (model.spatial.encoder=set).
+rot_aug: false
+
+# Sensor dropout (TRAIN only), as in the RANP topologies work: each sample gets its own random set of failed sensors, the same for its context and target points (a failed sensor is missing for the whole deployment). Validation keeps every sensor.
+# mode: none | bernoulli (each sensor fails with probability p) | k_uniform (number of present sensors uniform in [min_keep, n_sensors]). Requires model=spatial_* (tokenized).
+sensor_drop:
+  mode: none
+  p: 0.3
+  min_keep: 3
+
+# Sensor-position error (TRAIN only; 0 disables): each sample draws an sd from U(0, sensor_pos_err_m) metres and adds N(0, sd^2) per sensor and axis to the horizontal positions the model is GIVEN; the labels stay true. One draw per sample, so its context and target points share it (a mis-surveyed array is wrong for the whole deployment), and the context is the only way to see the error. Validation keeps the true positions. Requires model=spatial_*.
+sensor_pos_err_m: 0.0
+
 # Streaming granularity for the online model (model=online_ranp); offline ignore.
 chunk_size: 8
 
@@ -60,3 +74,8 @@ max_train_trajectories: 350
 # Cap the VALIDATION trajectories (null = use all). Set equal to max_train_trajectories to train and validate on the SAME source paths (pure layout-generalization). 
 # Removes the train/val path mismatch that inflates the late-epoch overfitting overshoot. Held-out val geometries are untouched; only their trajectories are subsampled.
 max_val_trajectories: 350
+
+# Path to a JSON list of geometry ids; restricts TRAINING to those deployments
+# only (val/test untouched). null = use everything. Used by the depth-stratified
+# study of B2, where the arms differ only in which deployments are trained on.
+train_geometry_ids: null

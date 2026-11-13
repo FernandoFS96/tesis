@@ -26,7 +26,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from eval_np_geometry import build_model, TrajectoryDataset
+from eval_np_geometry import model_from_checkpoint, TrajectoryDataset
 
 # Current EVALUATION seed (not a model seed). The driver sets this per slot and
 # also calls torch.manual_seed(EVAL_SEED); every evaluator derives its numpy RNG
@@ -43,27 +43,10 @@ def load_model(path, device):
     ck = t.load(path, map_location=device, weights_only=False)
     cfg = ck.get("config", {})
     spatial_cfg = cfg.get("spatial", None)
-    # attn_ffn was added to the checkpoint config only after some runs were
-    # trained, so INFER it from the weights when absent: the retrofit is the only
-    # thing that creates parameters named '*.ffn.*' in an anp/r_anp model.
-    # Rebuilding without it would silently drop the sublayer and then fail the
-    # strict load, so infer rather than default.
-    sd = ck["model"]
-    attn_ffn = cfg.get("attn_ffn", None)
-    if attn_ffn is None:
-        attn_ffn = any((".ffn." in k or k.endswith(".ffn_norm.weight"))
-                       for k in sd.keys()) and ck["model_name"] != "pfn"
-    model, conv = build_model(
-        ck["model_name"], cfg.get("num_hidden", 128), ck["feat_dim"], ck.get("out_dim", 3),
-        rnn_type=cfg.get("rnn_type", "lstm"), rnn_layers=cfg.get("rnn_layers", 1),
-        rnn_dropout=cfg.get("rnn_dropout", 0.0), dropout=cfg.get("dropout", 0.1),
-        max_context=cfg.get("max_context", 128), spatial_cfg=spatial_cfg,
-        n_layers=cfg.get("n_layers", 6), n_heads=cfg.get("n_heads", 8),
-        ffn_mult=cfg.get("ffn_mult", 4), readout=cfg.get("readout", "joint"),
-        n_cross_layers=cfg.get("n_cross_layers", 2),
-        full_cov=cfg.get("full_cov", False), attn_ffn=bool(attn_ffn))
-    model.to(device).load_state_dict(sd)
-    model.eval()
+    # Rebuilds with every option the checkpoint was trained with (attn_ffn is
+    # inferred from the weights for checkpoints that predate storing it), loads
+    # strictly and switches to eval mode.
+    model, conv = model_from_checkpoint(ck, device)
     if conv == "online":
         raise SystemExit(f"{path}: online_ranp is not covered by eval_suite "
                          "(use scripts/eval/compare_offline_online.py).")
@@ -87,8 +70,15 @@ def load_data(data_dir, device, load_cap=20):
     # trajectories per geometry. Per eval seed the driver subsamples cap_traj of
     # these, so different seeds evaluate different test trajectories -> test-set
     # sampling variance shows up as metric error bars.
+    # EVAL_POOLS selects the held-out halves. The default pools val and test, as
+    # every result up to 2026-11 did; EVAL_POOLS=test scores only deployments that
+    # took no part in checkpoint selection. An env var rather than a flag so that
+    # latent_gap.py and trivial_baselines.py, which call load_data directly,
+    # follow the same switch.
+    pools = tuple(p.strip() for p in os.environ.get("EVAL_POOLS", "val,test").split(",") if p.strip())
+    print(f"[eval_suite] held-out pools: {pools}")
     by_gid = defaultdict(list)
-    for pool in ("val", "test"):
+    for pool in pools:
         p = os.path.join(data_dir, f"{pool}_data.pkl")
         if not os.path.exists(p):
             continue
@@ -255,10 +245,17 @@ def ev_region_mae(models, data, args):
         allm = float(np.mean([e for _, e in per])) if per else float("nan")
         rows += [{"model": lbl, "test": "region_mae", "metric": "overall", "x": "", "value": allm},
                  {"model": lbl, "test": "region_mae", "metric": "train", "x": "", "value": tr}]
-        for reg in ("interp", "extrap"):
-            if buck.get(reg):
-                rows.append({"model": lbl, "test": "region_mae", "metric": reg, "x": "",
-                             "value": float(np.mean(buck[reg]))})
+        # Emit EVERY label bucket, not just interp/extrap. pathD labels its
+        # held-out geometries 'deep'/'shallow' instead: it pins the layout and
+        # varies the environment, so the meaningful region axis is water depth,
+        # not displacement from the training hull. Hard-coding the two geometric
+        # names silently dropped that breakdown even though the labels were
+        # sitting in splits.json. '?' is the no-label case and stays out.
+        for reg in sorted(buck):
+            if reg == "?":
+                continue
+            rows.append({"model": lbl, "test": "region_mae", "metric": reg, "x": "",
+                         "value": float(np.mean(buck[reg]))})
     return rows, None
 
 

@@ -61,7 +61,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 # Reuse the existing, already-debugged building blocks.
-from .r_anp import LatentEncoder, DeterministicEncoder, Decoder
+from .anp import LatentEncoder, DeterministicEncoder, Decoder, gaussian_nll, gaussian_kl
 
 
 # --------------------------------------------------------------------------- #
@@ -130,9 +130,10 @@ class OnlineLatentModel(nn.Module):
         self.temporal_encoder = StreamingTemporalEncoder(
             input_dim=input_dim, hidden_dim=num_hidden, num_layers=rnn_layers,
             dropout=rnn_dropout, rnn_type=rnn_type, layer_norm=True)
+        # Attention pooling, as in the offline RANP (r_anp.py) this model streams.
         self.latent_encoder = LatentEncoder(
             num_hidden, num_latent=num_hidden, input_dim=num_hidden,
-            output_dim=output_dim, dropout=dropout)
+            output_dim=output_dim, dropout=dropout, pooling="attention")
         self.deterministic_encoder = DeterministicEncoder(
             num_hidden, num_latent=num_hidden, input_dim=num_hidden,
             output_dim=output_dim, dropout=dropout)
@@ -185,15 +186,14 @@ class OnlineLatentModel(nn.Module):
 
         z = z.unsqueeze(1).repeat(1, num_targets, 1)
         r = self.deterministic_encoder(ctx_h, ctx_y, target_h)
-        # r_anp.Decoder returns (mean, var, rho); the online model keeps the
+        # anp.Decoder returns (mean, var, rho); the online model keeps the
         # diagonal likelihood, so rho is unused here (it is None unless
         # full_cov is enabled, which this model does not expose).
         mean, var, _rho = self.decoder(r, z, target_h)
 
         nll = kl = None
         if target_y is not None:
-            nll = (0.5 * t.log(2 * t.pi * var)
-                   + 0.5 * ((target_y - mean) ** 2) / var).mean()
+            nll = gaussian_nll(mean, var, None, target_y).mean()
             # KL normalized to per-target-point, per-dim units to match the meaned
             # NLL (see anp.py LatentModel.forward for the full rationale); beta=1
             # then reads as the standard per-point ELBO.
@@ -203,9 +203,7 @@ class OnlineLatentModel(nn.Module):
 
     @staticmethod
     def _kl(prior_mu, prior_var, post_mu, post_var):  # var = log-variance
-        kl = (t.exp(post_var) + (post_mu - prior_mu) ** 2) / t.exp(prior_var) \
-             - 1.0 + (prior_var - post_var)
-        return (0.5 * kl.sum(dim=-1)).mean()
+        return gaussian_kl(prior_mu, prior_var, post_mu, post_var).mean()
 
     # ====================================================================== #
     # DEPLOYMENT API

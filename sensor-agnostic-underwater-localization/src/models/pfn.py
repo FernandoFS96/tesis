@@ -45,7 +45,7 @@ import torch as t
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .anp import Linear, build_spatial_encoder
+from .anp import Linear, build_spatial_encoder, gaussian_nll, reduce_nll, DEFAULT_VAR_FLOOR
 
 
 class TransformerBlock(nn.Module):
@@ -179,6 +179,8 @@ class PFNModel(nn.Module):
         self.head = nn.Sequential(
             Linear(head_in, num_hidden, w_init='relu'), nn.GELU(),
             Linear(num_hidden, 2 * output_dim))
+        # Predictive-variance floor (see anp.set_var_floor); not in the state_dict.
+        self.register_buffer("var_floor", t.tensor(DEFAULT_VAR_FLOOR), persistent=False)
 
     def forward(self, context_x, context_y, target_x, target_y=None,
                 beta: float = 1.0, predict_with_prior: bool = False,
@@ -226,17 +228,10 @@ class PFNModel(nn.Module):
                 seq = blk(seq, key_mask=key_mask)
             feat = self.ln_f(seq[:, n:])
         mean, raw = self.head(feat).chunk(2, dim=-1)
-        var = 1e-3 + F.softplus(raw)
+        var = self.var_floor + F.softplus(raw)
 
         if target_y is not None:
-            nll = (0.5 * t.log(2 * t.pi * var)
-                   + 0.5 * ((target_y - mean) ** 2) / var)
-            if target_mask is not None:
-                mm = target_mask.unsqueeze(-1)               # (B, T, 1)
-                denom = mm.sum().clamp(min=1) * mean.size(-1)
-                nll = (nll * mm).sum() / denom
-            else:
-                nll = nll.mean()
+            nll = reduce_nll(gaussian_nll(mean, var, None, target_y), target_mask)
             loss = nll
         else:
             nll = None

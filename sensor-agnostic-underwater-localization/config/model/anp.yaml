@@ -22,3 +22,9 @@ full_cov: false
 # matched parameters on the 8000-layout layout-OOD task. Off by default: no
 # parameters are created and existing checkpoints load unchanged.
 attn_ffn: false
+
+# How the latent encoder pools its points into q(z): mean | attention.
+# mean = the ANP's original uniform mean. The RANP uses attention (see
+# ranp.yaml), so set this to attention to compare ANP vs RANP with the RNN as
+# the only difference.
+latent_pooling: mean
