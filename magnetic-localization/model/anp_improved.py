@@ -103,6 +103,12 @@ class ANPConfig:
     enc_layers: int = 2
     dec_layers: int = 3
     sensor_mask: bool = False  # o False para run sin apagado
+    # The collate marks PADDING with True, but LatentEncoder.masked_mean averages
+    # the True positions, so the latent path only ever sees zero-padded rows and
+    # z carries no information about the data. True passes the real-point mask
+    # instead. False (default) keeps the published (JMSE 2025) behaviour so its
+    # checkpoints and numbers stay reproducible.
+    fix_latent_mask: bool = False
 
 
 class ANP(nn.Module):
@@ -144,6 +150,8 @@ class ANP(nn.Module):
     #    mu, log_v = self.latent_enc(x, y)
     #    return mu, self._pos_std(log_v)
     def _latent(self, x, y, mask):
+        if self.cfg.fix_latent_mask:   # see ANPConfig.fix_latent_mask
+            mask = ~mask
         mu, log_v = self.latent_enc(x, y, mask)
         return mu, self._pos_std(log_v)
 

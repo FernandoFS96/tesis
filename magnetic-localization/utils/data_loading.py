@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import List, Tuple, Optional
 import sys
 sys.path.append(str(Path(__file__).resolve().parent.parent))  # ANP root
-import pandas as pd
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
@@ -61,6 +60,10 @@ class MagneticTrajectoryDataset(Dataset):
         verbose: bool = True,
         cache: bool = True,
     ):
+        # pandas is imported here, not at module level, so the collate below can
+        # be imported in environments without pandas.
+        import pandas as pd
+
         self.samples: List[Tuple[torch.Tensor, torch.Tensor]] = []
         self.use_meta = use_meta
         self.verbose = verbose

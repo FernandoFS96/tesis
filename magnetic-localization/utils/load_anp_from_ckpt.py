@@ -78,13 +78,15 @@ def load_anp(
     ds = MagneticTrajectoryDataset(data_root, use_meta=use_meta, verbose=False, cache=False)
     x_dim = ds.x_dim
 
-    # 2. Construir la misma configuración
+    # 2. Construir la misma configuración. fix_latent_mask is stored by
+    # training/train_np_magnetic.py; checkpoints without it are the published model.
+    ckpt = torch.load(ckpt_path, map_location=device)
     cfg = ANPConfig(x_dim=x_dim, y_dim=2, hidden_dim=hidden_dim,
-                    latent_dim=latent_dim, n_heads=n_heads)
+                    latent_dim=latent_dim, n_heads=n_heads,
+                    fix_latent_mask=bool(ckpt.get("fix_latent_mask", False)))
 
     # 3. Instanciar y cargar pesos
     model = ANP(cfg)
-    ckpt = torch.load(ckpt_path, map_location=device)
     model.load_state_dict(ckpt["model_state"])
     model.to(device)
     model.eval()
