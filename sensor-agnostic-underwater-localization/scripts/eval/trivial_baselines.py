@@ -1,24 +1,19 @@
-"""
-trivial_baselines.py
-====================
+"""Non-learned reference predictors, scored with the protocol of eval_suite.py
+(same held-out pool and transits; context = first 10 points, targets = the
+remaining 40).
 
-Non-learned reference baselines on the protocol of eval_suite.py: the same held-out
-pool, the same transits per eval seed, context = the first 10 points of the
-transit, targets = the remaining 40, and the same error (Euclidean over every
-coordinate of y, averaged per transit, then over transits).
-
-    python scripts/eval/trivial_baselines.py \
-        --data-dir data/pfn10kd/hermite_distinct/processed/geometry_split \
+    python scripts/eval/trivial_baselines.py \\
+        --data-dir data/pfn10kd/hermite_distinct/processed/geometry_split \\
         --out-dir output/eval_paper/baselines/b1
 
-Trajectory only (no acoustics):
-  ctx_centroid    the mean of the 10 context positions
-  last_fix        the last context position
-  const_velocity  the last context position moved on at the last context step's velocity
-  linear_fit      the least-squares line through the 10 context positions, extrapolated
-Acoustics against the context, no learning:
-  nn_record       the position of the context point nearest in raw feature space
-  nn_rms          the same on each sensor's RMS level (one number per sensor)
+From the context positions only:
+  ctx_centroid    mean of the context positions
+  last_fix        last context position
+  const_velocity  last context position moved on at the last context velocity
+  linear_fit      least-squares line through the context positions
+From the acoustics, matched against the context:
+  nn_record       position of the nearest context point in feature space
+  nn_rms          the same on each sensor's RMS level
 """
 import argparse, os, csv, sys
 from collections import defaultdict

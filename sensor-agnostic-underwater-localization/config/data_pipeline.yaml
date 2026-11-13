@@ -1,235 +1,127 @@
-# =============================================================================
-# Data-generation + preprocessing config (plain OmegaConf; no Hydra).
+# Data generation and preprocessing (plain OmegaConf, read by data/generate.py
+# and data/process_data.py).
 #
-# Single entry point (select the dataset IDENTITY by name, same names the training config composes, so generation and training never disagree):
+#   python data/generate.py dataset=random_hermite_distinct
 #   python data/generate.py dataset=topology_spiral
-#   python data/generate.py dataset=random_spiral_shared
-# Any other field can be overridden dotlist style, e.g.:
 #   python data/generate.py dataset=random_hermite_shared channel.df=100 \
-#       random_task.n_position_sets=5 channel.channel_options=[0.1,0.2]
+#       random_task.n_position_sets=5
 #
-# There are TWO problems, each with its own block below (they SHARE `method`, the `channel:` knobs, and the spiral/hermite parameter blocks):
-#
-#   1. TOPOLOGY task (topology_task), three sensor topologies (ellipsoidal / random / aligned) 
-#      that all share the SAME trajectories and the SAME acoustic-channel levels; only the sensor arrangement changes.
-#
-#   2. RANDOM task (random_task), X randomly-placed sensor sets. The sets may SHARE one trajectory ensemble (distinct_trajectories: false; geometry is
-#      the only varying factor) or get their OWN trajectories per set (distinct_trajectories: true) depending on the subtask.
-# =============================================================================
+# Two tasks share the trajectory method, the channel settings and the
+# trajectory parameters:
+#   topology  three array topologies (ellipsoidal / random / aligned) with the
+#             same trajectories and channels
+#   random    many random sensor layouts; the trajectories are shared by all
+#             layouts or drawn separately for each (distinct_trajectories)
 
-# Which problem to generate: topology | random. Override on the CLI.
-task: random 
+task: random            # topology | random
 
-# -----------------------------------------------------------------------------
-# Trajectory shape, shared by BOTH tasks ('spiral', 'hermite', ...).
-# Dispatched by channel.generate_trajectories -> _generate_<method>_trajectories. 
-# To add a method: add a parameter block below AND the matching submethod in data/acoustic_data_generator.py.
-# -----------------------------------------------------------------------------
-method: hermite # spiral | hermite
+# Trajectory shape: spiral | hermite (see _generate_<method>_trajectories in
+# data/acoustic_data_generator.py).
+method: hermite
 
-# -----------------------------------------------------------------------------
-# Shared acoustic-channel knobs (BOTH tasks read these).
-# -----------------------------------------------------------------------------
 channel:
-  channel_options: [0.1, 0.2]  # theta values (channel variability; low band 0.1-0.3)
-  n_traj: 400        # trajectories per (theta[, topology / position-set]).
-                     # Random task: kept small on purpose, geometry DIVERSITY (n_position_sets), not trajectory count, is the axis that matters for the sensor-displacement study. 
-                     # Topology task can be raised for a denser single-geometry fit (regenerate that task separately).
+  channel_options: [0.1, 0.2]  # theta values (small-scale channel variability)
+  n_traj: 400        # trajectories per theta (and per position set or topology)
   ppt: 50            # points per trajectory
   df: 50.0           # frequency resolution [Hz]; feature dim = (B/df + 1) * n_sensors
-  snr: 10.0          # SNR [dB] for the filtered features
+  snr: 10.0          # SNR [dB] of the filtered features
   rep: 1             # filtering repetitions
-  master_seed: 11    # global seed (trajectories + reproducibility)
-  nop: -1            # joblib processes (-1 == all cores)
+  master_seed: 11
+  nop: -1            # joblib processes (-1: all cores)
 
-  # ---------------------------------------------------------------------------
-  # BROADBAND / TIMING options. All three default to the ORIGINAL physics, so
-  # every existing dataset and protocol reproduces bit-for-bit when they are left
-  # alone. Turn them on together to make array geometry identifiable.
-  #
-  # WHY THEY EXIST (measured, 2026-07-31):
-  #   * signal_type=sinusoid probes the channel at ONE frequency, so each
-  #     sensor's record has effective rank 2 (amplitude, phase): 90.8% of its
-  #     energy sits in a single FFT bin. Phase at 10-20 kHz aliases every ~10 cm,
-  #     so the only range cue left is amplitude -- which correlates with true
-  #     range at r = -0.08 because multipath destroys the spreading law.
-  #   * The channel stores delays RELATIVE to each sensor's own direct arrival
-  #     (acoustic_data_generator.py: tau = dell - dell[0]), which zeroes every
-  #     sensor's time origin independently and so deletes the inter-sensor TDOA
-  #     that array geometry is encoded in.
-  #   Consequence: geometry is NOT inferable from the features, confirmed by a
-  #   position-free model that could not even fit its training set (193 m MAE
-  #   vs 238 m chance). Restoring timing + bandwidth is what makes it inferable.
-  #
-  # SAMPLING CONSTRAINT (this is the part that is easy to get wrong):
-  #   delays are unambiguous only while max delay < 1/df, i.e. range < c/df,
-  #   and range resolution is ~ c/(2B). With the legacy df=50 Hz the unambiguous
-  #   range is just 30 m, so absolute_delay would alias and be useless. Pick df
-  #   from the longest range you need (sources reach ~855 m, arrays span ~500 m)
-  #   and B from the resolution you need -- then keep Lf = B/df + 1 affordable,
-  #   since feature dim = Lf * n_sensors.
-  #     e.g. B=300, df=1.0 -> Lf=301, feat=3010, unambiguous 1500 m, res 2.5 m
-  #          B=10000, df=50 -> Lf=201, feat=2010, unambiguous 30 m  (LEGACY)
-  # ---------------------------------------------------------------------------
-  signal_type: sinusoid   # sinusoid (legacy, single tone) | chirp (broadband LFM) | sinusoid_cav
-  absolute_delay: false   # true -> keep absolute time-of-flight, so TDOA survives
-  matched_filter: false   # true -> receiver pulse-compresses (correlate with the probe)
-                          #   and windows at the delay origin. REQUIRED for chirp:
-                          #   without it the raw record hides the delay entirely
-                          #   (measured corr with range: -0.01 raw vs +0.99 compressed).
-  save_channel_h: true    # false -> skip writing channel_h_*.npy (a diagnostic
-                          #   artefact, not a training input; it is half the bytes)
-  signal_n: 1024          # probe length [samples]; MUST be >= 2*Lf (= 2*(B/df+1)).
-                          #   The fine df needed for unambiguous delay makes the
-                          #   legacy 1024 too short: Lf=601 needs >= 1202.
-  B: null                 # bandwidth [Hz]; null -> leave the physics default (10000)
-  chirp_band: null        # [f0, f1] normalised probe frequencies; null -> [0.02, 0.45]
+  # Signal model. The defaults give the single-tone records used in the paper.
+  # With absolute_delay the arrival-time differences between sensors are kept;
+  # delays are then unambiguous only for ranges below c/df.
+  signal_type: sinusoid   # sinusoid | chirp | sinusoid_cav
+  absolute_delay: false   # keep the absolute time of flight
+  matched_filter: false   # correlate the record with the transmitted probe
+  save_channel_h: true    # also save the raw channel responses (channel_h_*.npy)
+  signal_n: 1024          # probe length [samples], at least 2 * (B/df + 1)
+  B: null                 # bandwidth [Hz]; null keeps 10000
+  chirp_band: null        # [f0, f1] in normalized frequency; null uses [0.02, 0.45]
 
-# -----------------------------------------------------------------------------
-# Parameters for the "spiral" method (the original outward-spiral trajectories).
-# -----------------------------------------------------------------------------
 spiral:
-  radio_min: 250.0    # min spiral radius scale [m]
-  radio_max: 350.0    # max spiral radius scale [m]
-  omega_min: 0.8      # min angular speed
-  omega_max: 2.5      # max angular speed
-  # Radial growth profile across a trajectory, expressed as multiples of ppt.
-  angle_span: 1.4     # aux_1 spans [0, angle_span * ppt]
-  radius_start: 0.2   # aux_2 spans [radius_start * ppt, radius_end * ppt]
+  radio_min: 250.0    # radius scale [m]
+  radio_max: 350.0
+  omega_min: 0.8      # angular speed
+  omega_max: 2.5
+  angle_span: 1.4     # angle spans [0, angle_span * ppt]
+  radius_start: 0.2   # radius spans [radius_start * ppt, radius_end * ppt]
   radius_end: 1.4
 
-# -----------------------------------------------------------------------------
-# Parameters for the "hermite" method (free-tangent piecewise-cubic Hermite).
-#
-# Each trajectory is n_segments cubic Hermite pieces joined with C1 continuity (matched position and tangent at every knot). 
-# Knot tangent directions form a slowly-turning sequence: the first is uniform over all directions, each later one turns by at most `max_turn` radians. 
-# Segment length controls speed.
-# -----------------------------------------------------------------------------
+# Piecewise cubic Hermite trajectories: n_segments segments joined with C1
+# continuity; each knot direction turns at most max_turn from the previous one.
 hermite:
-  n_segments: 3       # number of Hermite segments (-> n_segments + 1 knots)
-  seg_len_min: 80.0  # min segment chord length [m]
-  seg_len_max: 250.0  # max segment chord length [m]
-  max_turn: 1.2       # max heading change between consecutive knots [rad] higher -> more erratic
-  tension: 0.8        # scales knot tangent magnitude (curve tightness) higher -> tighter
-  start_radius_min: 30.0 # min starting radius [m] higher -> more erratic
-  start_radius_max: 80.0 # max starting radius [m] lower -> more erratic
-  # SPEED CONTROL (null/null = LEGACY: speed is whatever the segment lengths
-  # imply -- measured mean 1.71 m/s, only 31% of steps inside 2-5 m/s).
-  # Set both to hold a physically coherent vessel speed: each trajectory draws
-  # v ~ U(speed_min, speed_max) [m/s] and is re-parameterised BY ARC LENGTH so it
-  # travels at exactly that speed. Shape sampling is unchanged; only the scale is.
-  # The step time is channel.T_tot (6 s), the same quantity the channel uses for
-  # the vehicular Doppler term, so realistic speed => realistic Doppler.
-  # NOTE: faster vessels cover more ground (path = v * T_tot * ppt), so the field
-  # and the max source-sensor range grow -- keep channel.df below c/max_range or
-  # the restored absolute delay will alias (see the channel block above).
-  speed_min: null   # e.g. 2.0
-  speed_max: null   # e.g. 5.0
+  n_segments: 3
+  seg_len_min: 80.0   # segment chord length [m]
+  seg_len_max: 250.0
+  max_turn: 1.2       # [rad]
+  tension: 0.8        # scale of the knot tangents
+  start_radius_min: 30.0  # distance of the start point from the origin [m]
+  start_radius_max: 80.0
+  # Optional constant speed [m/s] per trajectory, drawn from U(speed_min,
+  # speed_max); the trajectory is re-parameterized by arc length. null keeps the
+  # speed implied by the segment lengths.
+  speed_min: null
+  speed_max: null
 
-# =============================================================================
-# PROBLEM 1 -- TOPOLOGY task  (data/acoustic_data_generator.py)
-# Emits one dataset per topology; all topologies share the same trajectories and channels (per theta). Output:
-#   <out_dir>/<method>/<topology>/channel_option_<theta>/{trajectory,filtered_data,channel_info}/
-# =============================================================================
+# Topology task (data/acoustic_data_generator.py). Output:
+#   <out_dir>/<method>/<topology>/channel_option_<theta>/...
 topology_task:
-  topologies: [ellipsoidal, random, aligned]  # which sensor arrangements to emit
+  topologies: [ellipsoidal, random, aligned]
   out_dir: ./data/topology_task
 
-# =============================================================================
-# PROBLEM 2 -- RANDOM task  (data/random_position_generator.py)
-# Emits n_position_sets datasets of the 'random' topology, each a distinct seeded sensor layout. Output:
-#   <out_dir>/<method>_<mode>/position_set_XX/channel_option_<theta>/random/{...}/
-#   (<mode> = shared | distinct, from distinct_trajectories below)
-# =============================================================================
+# Random-layout task (data/random_position_generator.py). Output:
+#   <out_dir>/<method>_<mode>/position_set_<p>/channel_option_<theta>/random/...
 random_task:
-  n_position_sets: 200    # distinct sensor layouts (the meta-learning "tasks").
-                          # Diversity here, not n_traj, is what an OOD-to-unseen-layout model needs.
-  # false -> ONE shared trajectory ensemble reused by all sets (geometry is the only varying factor). 
-  # true  -> each set gets its OWN trajectories.
-  distinct_trajectories: true
-  # Per-set trajectory seed = master_seed + traj_seed_offset + set_idx (kept in a separate numeric band from layout seeds master_seed + 1000 + p).
-  traj_seed_offset: 2000
+  n_position_sets: 200          # number of deployments
+  distinct_trajectories: true   # false: one trajectory ensemble for all deployments
+  traj_seed_offset: 2000        # trajectory seed = master_seed + offset + p
   out_dir: ./data/random_task
-  # Optional SHARD range over position-sets, for running disjoint slices of one
-  # dataset as parallel processes. null/null = the whole [0, n_position_sets)
-  # range, i.e. exactly the previous behaviour. Layout and trajectory seeds are
-  # both derived from the GLOBAL set index p (layout_seed_for / traj_seed_for),
-  # so a sharded run reproduces a serial one set-for-set.
+  # Optional range of deployments to generate, to split a run into parallel
+  # shards; null generates all of them.
   start_set: null
   end_set: null
-  # -----------------------------------------------------------------------------
-  # Sensor-layout distribution (the 'random' topology, sensor-displacement study).
-  # Each position-set places a COMPACT sensor array whose CENTRE is translated by a per-set random offset -> layouts genuinely differ by DISPLACEMENT (not a re-jitter of one fixed box). 
-  # All fractions are of the trajectory field's per-axis extent, so the same knobs work for any trajectory method. 
-  # offset_frac is the controlled OOD axis; aperture_frac sets the (roughly fixed) array size so the localization difficulty floor stays comparable to the single-geometry task.
-  # -----------------------------------------------------------------------------
+  # Each deployment places a compact array whose center is shifted by a random
+  # offset. Sizes are fractions of the trajectory field's extent.
   layout:
-    aperture_frac: 0.5   # array span as a fraction of field extent (compactness)
-    offset_frac: 0.3     # max array-centre translation, +/- fraction of field extent
-    scale_jitter: 0.0    # optional +/- per-set aperture jitter (0 = fixed aperture)
-    min_span: 20.0       # floor on array span [m] for tiny fields
-    # Pin ONE array geometry across every position-set (null = per-set layout,
-    # the sensor-displacement study). Set an int for the environments-only
-    # split, where the environment must be the only axis that varies.
-    fixed_seed: null
-  # ---------------------------------------------------------------------------
-  # PATH D: the ENVIRONMENT as a per-layout latent to be inferred from context.
-  #
-  # theta (channel_options) is NOT an environment -- it is one scalar that scales
-  # the small-scale variability. The parameters below are the ones the multipath
-  # model actually consumes, and they are fixed in every dataset generated so far.
-  # Each is a [lo, hi] range sampled per position-set from
-  # env_seed_for(master_seed, p); lo == hi pins the value.
-  #
-  # enabled: false reproduces every existing dataset byte for byte.
-  #
-  # c2 is deliberately NOT sampled directly: reflcoeff() evaluates
-  # sqrt(1 - (c2/c)^2 cos^2(theta)), which goes NaN as soon as c2 > c. It is
-  # always c2_frac * c with c2_frac < 1 (a slower, softer bottom).
-  # ---------------------------------------------------------------------------
+    aperture_frac: 0.5   # array span
+    offset_frac: 0.3     # maximum shift of the array center
+    scale_jitter: 0.0    # relative jitter of the aperture
+    min_span: 20.0       # minimum array span [m]
+    fixed_seed: null     # an int pins one array for every deployment
+  # Optional propagation environment drawn per deployment; each value is a
+  # [lo, hi] range (lo == hi fixes it). Disabled, the channel defaults are used.
   environment:
     enabled: false
-    env_seed_offset: 3000   # third seed band (layout=1000, trajectory=2000)
-    h0:      [30.0, 120.0]  # water depth [m]                (shipped value 50)
-    ht_frac: [1.0, 1.0]     # transmitter height as a fraction of depth
-                            # (1.0 = source at the surface, the shipped setup)
-    hr0:     [1.0, 5.0]     # receiver height above the bottom [m]  (shipped 1)
-    c:       [1470.0, 1540.0]  # sound speed in water [m/s]      (shipped 1500)
-    c2_frac: [0.70, 0.95]   # bottom speed as a fraction of c (shipped 0.8)
-    k:       [1.4, 2.0]     # spreading factor                    (shipped 1.7)
+    env_seed_offset: 3000
+    h0:      [30.0, 120.0]     # water depth [m]
+    ht_frac: [1.0, 1.0]        # transmitter height as a fraction of depth (1: surface)
+    hr0:     [1.0, 5.0]        # receiver height above the bottom [m]
+    c:       [1470.0, 1540.0]  # sound speed in water [m/s]
+    c2_frac: [0.70, 0.95]      # bottom sound speed as a fraction of c (must be < 1)
+    k:       [1.4, 2.0]        # spreading factor
 
-# =============================================================================
-# Preprocessing (data/data_process_random_positions.py). CLI flags override.
-#
-# `mode` selects the split:
-#   topology -> TOPOLOGY task: one training dataset per topology, split by TRAJECTORY INDEX (70/20/10), pooling all thetas. 
-#               Reads topology_task.out_dir (<data_root>/<method>/<topology>/...).
-#   legacy   -> RANDOM task: within-geometry 70/20/10 (all layouts seen in train).
-#   geometry -> RANDOM task: held-out sensor-layout split (interp/extrap).
-#   all      -> geometry + legacy.
-#
-# NOTE: data_root differs per mode --
-#   topology mode:      ./data/topology_task
-#   position-set modes: ./data/random_task/<method>_<mode>  (pass --data-root)
-# =============================================================================
+# Preprocessing (data/process_data.py); command line flags override these.
+#   mode: topology (topology task, split by trajectory)
+#         legacy   (random task, split within each layout)
+#         geometry (random task, held-out layouts)
+#         all      (geometry and legacy)
 preprocess:
   mode: geometry
   method: ${method}
   data_root: ./data/random_task/hermite_distinct
-  # null -> topology mode: <data_root>/<method>/processed (method-separated); position-set modes: <data_root>/processed.
-  save_dir: null
-  thetas: null              # null -> all found; or e.g. [0.1, 0.2, 0.3]
+  save_dir: null            # null: <data_root>/processed
+  thetas: null              # null: all; or e.g. [0.1, 0.2]
 
-  # topology mode, trajectory-index split (counts out of n_traj).
+  # Topology mode: trajectory split (ratios, rescaled to n_traj).
   topology_split:
     n_train: 70
     n_val: 20
     n_test: 10
     seed: 0
 
-  # position-set (geometry) mode, how many sensor-layout geometries per pool.
-  # Must sum to n_position_sets (100). 60/20/20 keeps the 60:20:20 proportion:
-  # 60 meta-training layouts, 20+20 held out for a stable interp/extrap curve.
+  # Geometry mode: number of layouts per pool (summing to n_position_sets).
   geometry_split:
     n_train: 140
     n_val: 40

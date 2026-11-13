@@ -1,5 +1,4 @@
-# Spatial ANP: the anp baseline + sensor-position-aware front end ENABLED.
-# Everything else is inherited from anp.yaml; ablate via model.spatial.* flags (ablation ladder documented in _spatial.yaml).
+# Attentive latent NP with the spatial front end.
 defaults:
   - anp
   - _self_

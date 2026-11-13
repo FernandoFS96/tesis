@@ -1,50 +1,41 @@
-# =============================================================================
-# Main training config for the neural-process geometry baselines.
+# Main training config.
 #
-# Pick WHAT to train by name; everything else has sensible defaults:
-#   python scripts/train/train_np_geometry.py                      # defaults (cnp)
-#   python scripts/train/train_np_geometry.py model=spatial_cnp    # spatial variant
-#   python scripts/train/train_np_geometry.py model=anp
-#   python scripts/train/train_np_geometry.py experiment=topology model=anp
+#   python scripts/train/train_np_geometry.py                      # spatial_cnp on the default dataset
+#   python scripts/train/train_np_geometry.py model=pfn
 #   python scripts/train/train_np_geometry.py model=ranp training.epochs=500
-#   python scripts/train/train_np_geometry.py wandb.enabled=false
-# Models: cnp | anp | spatial_cnp | spatial_anp | ranp | rcnp | online_ranp
+#   python scripts/train/train_np_geometry.py experiment=topology model=anp
+#
+# Models: cnp | anp | pfn | rcnp | ranp | online_ranp, and spatial_* variants
 # Splits (data=): layout_ood | layout_seen | topology
-# =============================================================================
 defaults:
   - _self_
-  - dataset: random_hermite_shared   # which generated dataset (identity: task/method/mode)
-  - data: layout_ood           # split view: layout_ood | layout_seen | topology
-  - model: spatial_cnp                 # cnp | anp | spatial_cnp | spatial_anp | ranp | rcnp | online_ranp
+  - dataset: random_hermite_shared   # generated dataset (task / method / mode)
+  - data: layout_ood                 # split: layout_ood | layout_seen | topology
+  - model: spatial_cnp
   - wandb: default
-  - experiment: null           # opt-in bundles: `experiment=<name>` (see config/experiment/)
+  - experiment: null                 # optional bundle, see config/experiment/
 
-# Experiment identity, used as the wandb group name and to organise outputs.
-# AUTO-DERIVED from what is composed (e.g. "spatial_cnp_random_spiral_shared_layout_ood"), so it is always truthful; override `exp_name=...` only for special runs.
+# Run name, built from the composed choices; override with exp_name=... if needed.
 exp_name: ${model.name}_${hydra:runtime.choices.dataset}_${hydra:runtime.choices.data}_${model.num_hidden}_${training.batch_size}_${training.lr}_aug_m${data.trans_aug_m}
 seed: 0
-device: auto  # 'auto' -> cuda if available else cpu; or set 'cuda' / 'cpu'
+device: auto  # cuda if available, else cpu
 
-# -----------------------------------------------------------------------------
-# Optimisation / training-loop hyperparameters (canonical here; experiments should only override values that are genuinely task-specific).
-# -----------------------------------------------------------------------------
 training:
   epochs: 1000
   batch_size: 128
   lr: 5.0e-5
   weight_decay: 1.0e-4
-  # Base KL weight (latent models only: anp / spatial_anp / ranp / online_ranp).
-  # The KL is normalized to per-target-point, per-dim ELBO units inside the models (divided by num_targets * output_dim, matching the meaned NLL), so beta=1.0 is the standard ELBO.
+  # KL weight for the latent models. The KL is normalized to per-point units,
+  # so beta=1 is the standard ELBO.
   beta: 1.0
-  # Linearly warm the KL weight 0 -> beta over this many epochs (latent models only); 0 disables (constant beta). 
-  # With the normalized KL the pressure at beta=1 is ~120x weaker than before, so a long warmup is likely unnecessary; kept as a safety net against early collapse.
+  # Linear KL warmup from 0 to beta over this many epochs (0 disables it).
   kl_warmup_epochs: 100
 
   num_workers: 4
-  # Early stopping on validation MAE: stop after this many epochs with no improvement (> early_stop_min_delta). 0/null disables (train the full epochs).
+  # Stop after this many epochs without a validation MAE improvement larger
+  # than early_stop_min_delta (0 or null disables early stopping).
   early_stop_patience: 100
   early_stop_min_delta: 0.3
-
 
 
 hydra:

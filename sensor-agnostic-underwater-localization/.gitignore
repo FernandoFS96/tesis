@@ -1,20 +1,11 @@
-# Public code release for "A Competitive Mean Absolute Error Does Not Demonstrate
-# Localization" (Applied Ocean Research).
-#
-# WHITELIST: everything in this folder is ignored except the code, the
-# configurations and the scripts that rebuild the paper's tables and figures.
-# Datasets are regenerated from config/ and the seeds; trained checkpoints and
-# evaluation results are too large for GitHub and are archived separately.
-# This file works both inside the thesis repository and as the .gitignore of a
-# standalone repository made from this folder.
+# Only code and configuration are tracked. Datasets are regenerated with
+# data/generate.py and data/process_data.py; training runs and evaluation
+# results go to output/.
 
-# 1. Ignore everything at this level ...
 /*
-
-# 2. ... except the release
 !/.gitignore
 !/README.md
-!/Usage.md
+!/splits/
 !/requirements.txt
 !/config/
 !/src/
@@ -22,25 +13,14 @@
 !/data/
 !/paper/
 
-# 3. data/: the generation and processing code only, never the datasets
+# data/: generation and processing code only
 /data/*
 !/data/*.py
-!/data/utils/
 
-# 4. paper/: the table and figure generators only, not the manuscript
+# paper/: table and figure scripts only
 /paper/*
 !/paper/scripts/
 
-# 5. Reserved for the follow-up paper (new front end, signal model, B3, MFP).
-#    Delete these lines to publish them.
-/config/model/spatial_cnp_set.yaml
-/config/model/spatial_pfn_set.yaml
-/scripts/eval/acoustic_regressor.py
-/scripts/eval/b3_classical.py
-/scripts/eval/eval_calibration.py
-/scripts/eval/mfp/
-
-# 6. Never: backups, caches, logs, run outputs and binaries
 *.bak
 __pycache__/
 *.py[cod]
@@ -57,5 +37,3 @@ __pycache__/
 *.pdf
 *.png
 *.zip
-
-# Shell launchers stay ignored (root .gitignore: *.sh); they carry machine paths.

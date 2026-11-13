@@ -1,19 +1,16 @@
-"""src/models/r_anp.py -- recurrent attentive neural processes.
+"""Recurrent neural processes.
 
-``LatentModel`` (RANP) and ``DeterministicModel`` (RCNP) run a causal LSTM/GRU
-over the whole trajectory, then gather context and target points by INDEX from
-its hidden states and hand them to the same attentive encoders / decoders as
-anp.py. Every block except ``TemporalEncoder`` is imported from anp.py.
+LatentModel (RANP) and DeterministicModel (RCNP) run a causal LSTM/GRU over the
+whole trajectory, take the context and target points from its hidden states by
+index, and pass them to the attentive encoders and decoders of anp.py.
 
 Forward convention (differs from anp.py):
     forward(x_seq, context_indices, context_y, target_indices, target_y, beta)
-x_seq is the full (B, T, Dx) sequence; the model splits it internally.
+where x_seq is the full (B, T, Dx) sequence.
 
-Latent pooling: the RANP's latent encoder pools its points with LEARNED
-attention weights ('attention') rather than the ANP's uniform mean ('mean'),
-because its points are RNN states that already summarise the past, not
-independent samples. Keep this in mind when comparing ANP and RANP: they differ
-in this pooling as well as in the RNN. ``latent_pooling`` makes it switchable.
+The RANP latent encoder pools with learned attention weights by default (the
+ANP uses a plain mean), since its inputs are RNN states rather than independent
+samples. latent_pooling switches it.
 """
 
 import torch as t
@@ -76,29 +73,24 @@ class TemporalEncoder(nn.Module):
 
 
 class LatentModel(nn.Module):
-    """RANP: RNN temporal encoder + attentive latent and deterministic paths.
-
-    The TemporalEncoder lives INSIDE the model (not in the training script), so
-    importing this class gives the full recurrent model, train()/eval() reach the
-    RNN, and gradient clipping covers its parameters.
-    """
+    """RANP: recurrent encoder followed by attentive latent and deterministic
+    paths."""
     def __init__(
         self,
         num_hidden: int,
-        input_dim: int,        # dimension of x_seq BEFORE the RNN
+        input_dim: int,        # dimension of x_seq before the RNN
         output_dim: int,
         rnn_type: str = "lstm",
         rnn_layers: int = 1,
         rnn_dropout: float = 0.0,
         dropout: float = 0.1,  # dropout for attention + decoder MLP
-        spatial_cfg=None,      # sensor-position-aware front end (spatial_ranp)
+        spatial_cfg=None,      # optional spatial front end
         full_cov: bool = False,  # correlated (x, y) output covariance
         attn_ffn: bool = False,  # feed-forward sublayer in the attention blocks
         latent_pooling: str = "attention",  # see the module docstring
         ):
         super(LatentModel, self).__init__()
-        # Optional spatial front end BEFORE the RNN: maps raw (B,T,feat) acoustics
-        # to (B,T,num_hidden). When enabled the RNN input_dim becomes num_hidden.
+        # Optional spatial front end before the RNN: (B, T, feat) -> (B, T, num_hidden).
         self.spatial_encoder, temporal_in = build_spatial_encoder(
             spatial_cfg, input_dim, num_hidden, dropout)
         # RNN: temporal_in -> num_hidden
@@ -144,15 +136,11 @@ class LatentModel(nn.Module):
         target_y: t.Tensor = None,  #type: ignore[assignment] # (B, Nt, output_dim); None at inference
         beta: float = 1.0,
         predict_with_prior: bool = False,
-        sensor_pos=None,           # (B, n_sensors, 3); required iff spatial front end on
-        sensor_mask=None,          # (B, n_sensors) bool; drops failed sensors (spatial only)
+        sensor_pos=None,           # (B, n_sensors, 3); needed by the spatial front end
+        sensor_mask=None,          # (B, n_sensors) bool, True for present sensors
         ):
-        # predict_with_prior: if True the DECODER is driven by the PRIOR latent
-        # (context only) even when target_y is supplied, deployment-faithful
-        # inference. Posterior + KL/NLL are still computed for logging; only the z
-        # driving the prediction changes. False = training (teacher forcing).
-        # Spatial front end (if any) maps raw acoustics to per-point embeddings
-        # BEFORE the RNN; the LSTM then integrates them causally over time.
+        # predict_with_prior: decode from the prior latent (context only) even
+        # when target_y is given; the posterior and the KL are still computed.
         if self.spatial_encoder is not None:
             x_seq = self.spatial_encoder(x_seq, sensor_pos, sensor_mask=sensor_mask)
         # The RNN runs over the whole sequence, inside the model.
@@ -168,15 +156,13 @@ class LatentModel(nn.Module):
 
         posterior_mu = posterior_var = None
         if target_y is not None:
-            # Posterior conditions on context UNION targets (standard ANP; see
-            # anp.py LatentModel.forward for the rationale). Training-only.
+            # The posterior conditions on context and targets (training only).
             posterior_mu, posterior_var, posterior = self.latent_encoder(
                 t.cat([context_x, target_x], dim=1),
                 t.cat([context_y, target_y], dim=1))
 
         use_posterior = (target_y is not None) and (not predict_with_prior)
-        # train(): decode a SAMPLE of z; eval(): decode the distribution MEAN
-        # (deterministic point prediction; see anp.py for the rationale).
+        # Sample z in training; use the mean of the distribution in eval mode.
         if use_posterior:
             z = posterior if self.training else posterior_mu
         else:
@@ -192,9 +178,7 @@ class LatentModel(nn.Module):
         if target_y is not None:
             nll = gaussian_nll(y_pred_mean, y_pred_var, y_pred_rho, target_y)
             nll = nll.mean()
-            # KL normalized to per-target-point, per-dim units to match the meaned
-            # NLL (see anp.py LatentModel.forward for the full rationale); beta=1
-            # then reads as the standard ELBO instead of ~num_targets*output_dim.
+            # KL normalized to per-point units, as in anp.LatentModel.
             kl = gaussian_kl(prior_mu, prior_var, posterior_mu, posterior_var).mean()
             kl = kl / (num_targets * target_y.size(-1))
             loss = nll + beta * kl
@@ -209,7 +193,7 @@ class LatentModel(nn.Module):
 
 
 class DeterministicModel(nn.Module):
-    """RCNP: RNN temporal encoder + attentive deterministic encoder + decoder, no latent variable."""
+    """RCNP: recurrent encoder followed by an attentive deterministic encoder and decoder."""
     def __init__(
         self,
         num_hidden: int,
@@ -219,7 +203,7 @@ class DeterministicModel(nn.Module):
         rnn_layers: int = 1,
         rnn_dropout: float = 0.0,
         dropout: float = 0.1,  # dropout for attention + decoder MLP
-        spatial_cfg=None,      # sensor-position-aware front end (spatial_rcnp)
+        spatial_cfg=None,      # optional spatial front end
         full_cov: bool = False,  # correlated (x, y) output covariance
         attn_ffn: bool = False,  # feed-forward sublayer in the attention blocks
     ):
@@ -258,11 +242,10 @@ class DeterministicModel(nn.Module):
         target_y: t.Tensor = None, #type: ignore[assignment]
         beta: float = 1.0,
         predict_with_prior: bool = False,
-        sensor_pos=None,           # (B, n_sensors, 3); required iff spatial front end on
-        sensor_mask=None,          # (B, n_sensors) bool; drops failed sensors (spatial only)
+        sensor_pos=None,           # (B, n_sensors, 3); needed by the spatial front end
+        sensor_mask=None,          # (B, n_sensors) bool, True for present sensors
     ):
-        # predict_with_prior accepted for interface parity with the latent RANP;
-        # a deterministic RCNP never peeks at target labels, so it has no effect.
+        # predict_with_prior keeps the interface of the RANP and has no effect.
         if self.spatial_encoder is not None:
             x_seq = self.spatial_encoder(x_seq, sensor_pos, sensor_mask=sensor_mask)
         h_seq = self.temporal_encoder(x_seq)

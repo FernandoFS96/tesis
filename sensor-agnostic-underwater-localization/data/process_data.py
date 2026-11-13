@@ -1,110 +1,30 @@
-"""
-data_process_random_positions.py
-================================
+"""Turn the raw simulator output into training-ready datasets.
 
-Preprocessing for BOTH studies. Defaults come from the ``preprocess`` block of
-``config/data_pipeline.yaml``; any CLI flag overrides the config.
+Defaults come from the `preprocess` block of config/data_pipeline.yaml; command
+line flags override them.
 
-MODES (preprocess.mode, or --mode)
-----------------------------------
-* ``topology`` -- THREE-TOPOLOGY study (acoustic_data_generator.py). Reads the
-  ``<data_root>/<method>/<topology>/channel_option_<theta>/`` tree and produces
-  ONE training-ready dataset PER topology (ellipsoidal / random / aligned). All
-  channel options (thetas) of a topology are POOLED, and the train/val/test
-  split is by TRAJECTORY INDEX (default ratio 70/20/10, rescaled to whatever
-  n_traj the data actually contains), the same trajectory indices for every
-  theta, so no trajectory leaks across splits.
-  Output (dict schema, matching geometry mode so the trainer reads it as-is):
-      <save-dir>/topology_<name>/{train,val,test}_data.pkl
-        -> list of {"X":(ppt,feat_dim), "y":(ppt,3), "theta":float, "topology":str}
-      <save-dir>/topology_<name>/metadata.pkl
+Modes (--mode):
+  topology  one dataset per array topology (ellipsoidal / random / aligned),
+            split by trajectory index (70/20/10 by default); all channel options
+            are pooled and share the same split.
+  legacy    random-layout task, split within each geometry: every layout appears
+            in train, validation and test, with different trajectories.
+  geometry  random-layout task, split by geometry: whole layouts are held out.
+            Central held-out layouts are labelled interp and peripheral ones
+            extrap (inside or outside the convex hull of the training centroids).
 
-  The modes below operate on the POSITION-SET study (random_position_generator.py),
-  reading the ``position_set_XX/channel_option_<theta>/random/`` tree:
+Each sample is a dict {"X": (ppt, feat_dim), "y": (ppt, 3), "theta": float, ...};
+geometry mode adds "sensor_pos" (n_sensors, 3) and "geometry_id". X is tau-major
+/ sensor-minor, and metadata.pkl records tau and n_sensors.
 
-* ``legacy``  -- the ORIGINAL within-geometry split, preserved from
-  ``data_process_topology.py``: for each (theta, geometry) it splits the 100
-  trajectories 70/20/10 into train/val/test. Every geometry appears in all three
-  splits (val/test are unseen TRAJECTORIES of SEEN layouts), so a no-spatial-
-  encoder baseline can generalize, this reproduces the "normal model like
-  before". Output uses the dict schema (matching geometry/topology modes) so the
-  trainer reads it unchanged:
-      <save-dir>/within_geometry_split/{train,val,test}_data.pkl
-        -> list of {"X":(ppt,feat_dim), "y":(ppt,3), "theta":float, "topology":str}
-      <save-dir>/within_geometry_split/metadata.pkl  (*_thetas / *_topologies)
+Geometry mode writes <data-root>/processed/geometry_split/ with
+{train,val,test}_data.pkl, metadata.pkl and splits.json, the record of which
+layouts went to each split; --splits-file reuses a previous split.
 
-* ``geometry`` -- the NEW geometry-level split for measuring robustness to
-  UNSEEN sensor layouts. The position-sets (default 100) are partitioned into
-  disjoint train / val / test GEOMETRY pools (default 60/20/20, summing to the 100
-  position-sets). A geometry never crosses
-  pools, so the val/test sets genuinely measure generalization to layouts the
-  model never saw. Held-out geometries are further labelled INTERPOLATION
-  (inside the training-centroid convex hull) or EXTRAPOLATION (outside), giving
-  a built-in degradation-vs-displacement axis. Each emitted sample is enriched
-  with the sensor positions and a geometry id so the downstream spatial encoder
-  can consume them.
-
-WHY THE SPLIT AXIS CHANGED
---------------------------
-The legacy split asks "given THIS geometry, generalize to new trajectories /
-channel conditions". The new question is "generalize to geometries never seen in
-training". That can only be answered by holding out whole geometries, which is
-what ``geometry`` mode does. This mirrors the ID/OOD task-family design of the
-magnetic-localization paper, with sensor layout as the held-out factor.
-
-FEATURE FORMAT (geometry mode)
-------------------------------
-Per your choice, the acoustic part keeps the legacy sequence shape
-``(ppt, feat_dim)`` = ``(50, 1010)`` for df=100, IDENTICAL to legacy, so the same
-acoustic backbone can consume it unchanged. The geometry is supplied ALONGSIDE,
-not folded into X:
-
-    sample = {
-        "X":          float32 (ppt, feat_dim),     # acoustic, as in legacy
-        "y":          float32 (ppt, 3),            # target source coords
-        "sensor_pos": float32 (n_sensors, 3),      # this geometry's layout (x,y,z)
-        "geometry_id": int,                        # position-set index
-        "theta":       float,
-    }
-
-For the spatial-encoder model we can reshape X to ``(ppt, tau, n_sensors)`` on
-the fly (tau = feat_dim // n_sensors = 101) and attend over the n_sensors axis
-using ``sensor_pos``; the processor records ``tau`` and ``n_sensors`` in metadata
-so this reshape is unambiguous.
-
-OUTPUTS
--------
-legacy mode (within-geometry split):
-    <save-dir>/within_geometry_split/{train,val,test}_data.pkl, metadata.pkl
-
-geometry mode:
-    <save-dir>/geometry_split/
-        train_data.pkl   list of sample dicts (see above)
-        val_data.pkl
-        test_data.pkl
-        metadata.pkl     thetas, geometry_ids, interp/extrap labels, tau, n_sensors
-        splits.json      FROZEN record: which position-sets are train/val/test,
-                         each held-out set's interp/extrap label + centroid/dist.
-                         Version-control this, it is the experiment contract.
-
-USAGE
------
-Topology task (default; data_root from the preprocess block = ./data/topology_task):
-    python data_process_random_positions.py --mode topology
-
-Within-geometry (RANDOM task; point --data-root at the <method>_<mode> folder):
-    python data_process_random_positions.py \
-        --data-root ./data/random_task/spiral_shared --mode legacy
-
-Held-out geometry split (RANDOM task, auto interp/extrap, 10/6/4):
-    python data_process_random_positions.py \
-        --data-root ./data/random_task/spiral_shared --mode geometry \
-        --train-geoms 10 --val-geoms 6 --test-geoms 4
-
-Reproduce a previously frozen split:
-    python data_process_random_positions.py \
-        --data-root ./data/random_task/spiral_shared --mode geometry \
-        --splits-file ./data/random_task/spiral_shared/processed/geometry_split/splits.json
+    python data/process_data.py --mode topology
+    python data/process_data.py --data-root ./data/random_task/hermite_shared --mode geometry
+    python data/process_data.py --data-root ./data/random_task/hermite_distinct \\
+        --mode geometry --splits-file <other>/processed/geometry_split/splits.json
 """
 
 import os
@@ -133,7 +53,7 @@ def load_traj_config(path=None):
 
 
 # --------------------------------------------------------------------------- #
-# Reshapes (identical semantics to data_process_topology.py)
+# Reshapes
 # --------------------------------------------------------------------------- #
 def reshape_input_data(data):
     """(tau, ppt, n_traj, n_sensors) -> (n_traj, ppt, tau*n_sensors)."""
@@ -179,7 +99,7 @@ def paths_for(set_dir, theta):
 
 
 # =========================================================================== #
-# LEGACY MODE  (within-geometry 70/20/10, preserved from data_process_topology)
+# LEGACY MODE  (split within each geometry, 70/20/10)
 # =========================================================================== #
 def process_and_save_legacy(input_paths, output_paths, save_dir,
                             topology_labels, seed=18):
@@ -198,8 +118,7 @@ def process_and_save_legacy(input_paths, output_paths, save_dir,
         X_val, X_te, y_val, y_te = train_test_split(
             X_tmp, y_tmp, test_size=1/3, random_state=19, shuffle=True)
 
-        # Emit dict samples (same schema as geometry / topology modes) so the
-        # dict-based trainer (TrajectoryDataset) consumes them unchanged.
+        # Dict samples, with the same schema as the other modes.
         theta, topology = topology_labels[i]
         for j in range(X_tr.shape[0]):
             loaded_train.append({"X": X_tr[j], "y": y_tr[j], "theta": float(theta), "topology": topology})
@@ -231,9 +150,8 @@ def process_and_save_legacy(input_paths, output_paths, save_dir,
 
 
 def run_legacy(data_root, set_dirs, thetas, save_base):
-    """Within-geometry split pooled over ALL geometries (each geometry
-    contributes to train/val/test internally), matching the original
-    data_process_topology.py behaviour."""
+    """Within-geometry split pooled over all geometries (each geometry
+    contributes to train, val and test)."""
     input_paths, output_paths, topo_labels = [], [], []
     for sd in set_dirs:
         for th in thetas:
@@ -265,10 +183,10 @@ def geometry_descriptor(set_dir, thetas):
 
 
 def assign_geometry_split(set_dirs, thetas, n_train, n_val, n_test, seed=0):
-    """Deterministically choose train/val/test GEOMETRY pools and label held-out
-    sets interp/extrap. Strategy: central geometries (near the centroid-of-
-    centroids) become interpolation hold-outs; peripheral ones become
-    extrapolation hold-outs; the rest train. Verified against the training hull."""
+    """Deterministic choice of the train / val / test geometry pools. Central
+    geometries (near the center of all centroids) are held out as interp,
+    peripheral ones as extrap, and the rest train; the labels are checked
+    against the training hull."""
     from scipy.spatial import Delaunay
 
     ids, centroids = [], []
@@ -300,7 +218,7 @@ def assign_geometry_split(set_dirs, thetas, n_train, n_val, n_test, seed=0):
     train_ids = [int(s) for s in ids if int(s) not in held]
     train_ids = train_ids[:n_train] if n_train else train_ids
 
-    # Label held-out sets vs the TRAIN convex hull.
+    # Label the held-out sets against the convex hull of the training centroids.
     train_pts = C[[list(ids).index(s) for s in train_ids]]
     hull = Delaunay(train_pts)
     def region(sid):
@@ -328,31 +246,11 @@ DELAY_FEATURE_NAMES = ("range_first_km", "range_peak_km", "log10_peak_over10",
 def delay_features(filtered, m_per_tap, roll=50, thresh=0.30):
     """(tau, ppt, n_traj, n_sensors) -> (n_traj, ppt, 4*n_sensors) float32.
 
-    WHY THIS EXISTS. A pulse-compressed record is a SPARSE SPIKE TRAIN: ~1% of
-    taps are active, the amplitude spans 4 orders of magnitude, and the cue is
-    the spike's INDEX (the echo delay), not its value. ``SpatialEncoder`` feeds
-    the whole tau-vector through ``Linear(tau -> hidden)``, which treats taps as
-    UNORDERED categories -- it cannot know tap 100 and 101 are adjacent, so the
-    metric structure of delay is destroyed at the first layer. Measured
-    consequence: a trained ORACLE with TRUE sensor positions sat at chance
-    (484 m vs 481 m) on features that closed-form trilateration solves at 14 m.
-
-    Reading the delay off explicitly is not a shortcut, it is the standard sonar
-    receiver chain (pulse compression -> peak detection); the raw record is only
-    an intermediate. Four physically meaningful numbers per sensor, scaled to
-    O(1) with FIXED constants (no dataset statistics, so nothing leaks):
-
-      range_first_km      first arrival above `thresh` x record peak -> the
-                          direct path, i.e. the range estimate            [km]
-      range_peak_km       strongest arrival (can be a surface/bottom bounce) [km]
-      log10_peak_over10   log amplitude / 10 -- a weak, multipath-corrupted
-                          range cue, kept because it is complementary
-      delay_spread_km     energy-weighted RMS delay spread: multipath richness,
-                          which varies with range and depth                [km]
-
-    Layout is tau-major / sensor-minor (flat[k] = feature(k // n_sensors,
-    sensor = k % n_sensors)) -- IDENTICAL to the raw convention, so
-    ``SpatialEncoder`` consumes it unchanged with tau = 4.
+    Four features per sensor from a pulse-compressed record, scaled with fixed
+    constants: range of the first arrival above `thresh` times the peak [km],
+    range of the strongest arrival [km], log10 of the peak amplitude / 10, and
+    the energy-weighted RMS delay spread [km]. Same tau-major / sensor-minor
+    layout as the raw features, with tau = 4.
     """
     W = np.abs(np.asarray(filtered)).transpose(2, 1, 3, 0)     # (ntr,ppt,ns,tau)
     peak = W.max(axis=-1)                                      # (ntr,ppt,ns)
@@ -372,10 +270,8 @@ def delay_features(filtered, m_per_tap, roll=50, thresh=0.30):
 
 
 def build_geometry_samples(set_dirs_by_id, ids, thetas, delay_cfg=None):
-    """Assemble enriched sample dicts for a list of geometry ids.
-
-    delay_cfg: None -> store the raw tau*n_sensors record (original behaviour).
-    A dict {df, c, roll, thresh} -> store the compact delay features instead."""
+    """Sample dicts for a list of geometry ids. delay_cfg: None stores the raw
+    record; a dict {df, c, roll, thresh} stores the delay features instead."""
     samples = []
     geom_ids, theta_list, regions = [], [], []
     tau_seen, ns_seen = set(), set()
@@ -447,8 +343,7 @@ def run_geometry(data_root, set_dirs, thetas, save_base,
         meta[f"{pool}_thetas"] = ths
         meta["n_sensors"] = int(ns)
         meta["raw_tau"] = int(tau)
-        # feat_dim/tau describe what is actually STORED (delay features shrink it
-        # from tau*ns to 4*ns), so the trainer's reshape stays correct.
+        # feat_dim and tau describe what is stored (4 * n_sensors with delay features).
         feat_dim = int(np.asarray(samples[0]["X"]).shape[-1]) if samples else int(tau * ns)
         meta["feat_dim"] = feat_dim
         meta["tau"] = feat_dim // int(ns)
@@ -472,11 +367,11 @@ def run_geometry(data_root, set_dirs, thetas, save_base,
 
 
 # =========================================================================== #
-# TOPOLOGY MODE  (three-topology study: per-topology, split by trajectory index)
+# TOPOLOGY MODE  (one dataset per topology, split by trajectory index)
 # =========================================================================== #
 def find_topologies(data_root, method):
     """Ordered list of (name, topology_dir) for the three-topology layout.
-    Layout groups by METHOD first: <data_root>/<method>/<topology>/."""
+    Layout groups by method first: <data_root>/<method>/<topology>/."""
     mroot = os.path.join(data_root, method)
     return [(t, os.path.join(mroot, t)) for t in TOPOLOGIES
             if os.path.isdir(os.path.join(mroot, t))]
@@ -501,18 +396,10 @@ def find_topo_thetas(topo_dir):
 
 
 def trajectory_index_split(n_traj, n_train, n_val, n_test, seed=0):
-    """A FIXED, reproducible partition of the trajectory indices [0, n_traj).
-
-    (n_train, n_val, n_test) are treated as RATIOS and rescaled to the actual
-    n_traj found in the data, so the same config auto-scales to any trajectory
-    count: 70/20/10 -> 70/20/10 at n_traj=100, 140/40/20 at n_traj=200, or
-    105/30/15 at n_traj=150. ALL trajectories are used (val/test are rounded and
-    any remainder goes to train, so the three splits always sum to n_traj).
-
-    The same indices are applied to every channel option (theta), so all thetas
-    of a given physical trajectory land in the SAME split, this is what keeps
-    val/test from leaking trajectories the model trained on. Returns three
-    sorted index lists (train, val, test)."""
+    """Fixed partition of the trajectory indices [0, n_traj). (n_train, n_val,
+    n_test) are ratios rescaled to n_traj, with any remainder going to train.
+    The same indices are used for every channel option, so a trajectory never
+    appears in two splits. Returns sorted (train, val, test) index lists."""
     total = n_train + n_val + n_test
     if total <= 0:
         raise ValueError(
@@ -681,10 +568,8 @@ def main():
     data_root = args.data_root or str(pp.get("data_root", "./data/topology_task"))
     cfg_save = pp.get("save_dir", None)
     explicit_save = args.save_dir or (str(cfg_save) if cfg_save else None)
-    # Topology raw lives under <data_root>/<method>/, so its processed output
-    # defaults under that same method subfolder -> spiral and hermite never
-    # overwrite each other. Position-set modes already encode <method>_<mode> in
-    # data_root, so <data_root>/processed is already method-separated for them.
+    # Topology output defaults to <data_root>/<method>/processed, so spiral and
+    # hermite data do not overwrite each other.
     if mode == "topology":
         save_base = explicit_save or os.path.join(data_root, method, "processed")
     else:

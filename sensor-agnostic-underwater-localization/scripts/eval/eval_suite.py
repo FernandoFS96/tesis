@@ -1,21 +1,16 @@
-"""
-eval_suite.py
-=============
+"""Evaluation suite for the localization models.
 
-Paper-grade evaluation suite for the sensor-position-agnostic localization
-models. A registry of independent *evaluators* (each emits tidy rows + optional
-figure) driven over one or more checkpoints, so every table/figure regenerates
-from a single command.
+A set of evaluators (region MAE, input-side controls, robustness curves, ...)
+run over one or more checkpoints; each evaluator returns tidy result rows and,
+optionally, a figure.
 
-    python scripts/eval/eval_suite.py \
-        --models spatial_cnp=<run>/best.pt rcnp=<run>/best.pt cnp=<run>/best.pt \
-        --tiers 1,2,3,4 --out-dir output/eval_suite
+    python scripts/eval/eval_suite.py \\
+        --models spatial_cnp=<run>/best.pt rcnp=<run>/best.pt \\
+        --tiers 1,2,3,4 --out-dir output/eval_paper/<group>
 
-Multiple checkpoints may share a label (repeat `label=path`) -> treated as seeds
-and aggregated (mean +/- std). Convention: split (cnp/anp/spatial_*) and indexed
-(ranp/rcnp). online_ranp is out of scope here (streaming eval lives in
-compare_offline_online.py). All context sampling is deployment-CAUSAL: context is
-a first-prefix, targets are the future complement (see Project_Overview.md).
+Checkpoints that share a label are treated as training seeds and aggregated
+(mean +/- std). Context is the opening of each transit and the targets are the
+rest. The online model is evaluated by eval_np_geometry.py instead.
 """
 import argparse, os, json
 from collections import defaultdict
@@ -28,11 +23,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from eval_np_geometry import model_from_checkpoint, TrajectoryDataset
 
-# Current EVALUATION seed (not a model seed). The driver sets this per slot and
-# also calls torch.manual_seed(EVAL_SEED); every evaluator derives its numpy RNG
-# from it, so running with 3 eval seeds varies the test-trajectory subsample and
-# all perturbations (corruption/shuffle/dropout/permutation) -> metric error bars
-# on the SAME trained checkpoint, no retraining.
+# Current evaluation seed (not a model seed). The driver sets it for each pass
+# and every evaluator derives its RNG from it, so several evaluation seeds vary
+# the sampled transits and the perturbations on the same checkpoint.
 EVAL_SEED = 0
 
 
@@ -43,13 +36,12 @@ def load_model(path, device):
     ck = t.load(path, map_location=device, weights_only=False)
     cfg = ck.get("config", {})
     spatial_cfg = cfg.get("spatial", None)
-    # Rebuilds with every option the checkpoint was trained with (attn_ffn is
-    # inferred from the weights for checkpoints that predate storing it), loads
-    # strictly and switches to eval mode.
+    # Rebuilds the model with the options it was trained with, loads the
+    # weights and switches to eval mode.
     model, conv = model_from_checkpoint(ck, device)
     if conv == "online":
         raise SystemExit(f"{path}: online_ranp is not covered by eval_suite "
-                         "(use scripts/eval/compare_offline_online.py).")
+                         "(use scripts/eval/eval_np_geometry.py).")
     return {"model": model, "conv": conv,
             "ym": ck["y_mean"].to(device) if ck.get("y_mean") is not None else None,
             "ys": ck["y_std"].to(device) if ck.get("y_std") is not None else None,
@@ -66,15 +58,9 @@ def load_data(data_dir, device, load_cap=20):
     if os.path.exists(sp):
         labels = {int(k): v.get("region", "?") for k, v in json.load(open(sp))["labels"].items()}
 
-    # Load the held-out (interp/extrap) pool grouped by geometry, up to load_cap
-    # trajectories per geometry. Per eval seed the driver subsamples cap_traj of
-    # these, so different seeds evaluate different test trajectories -> test-set
-    # sampling variance shows up as metric error bars.
-    # EVAL_POOLS selects the held-out halves. The default pools val and test, as
-    # every result up to 2026-11 did; EVAL_POOLS=test scores only deployments that
-    # took no part in checkpoint selection. An env var rather than a flag so that
-    # latent_gap.py and trivial_baselines.py, which call load_data directly,
-    # follow the same switch.
+    # Held-out pool grouped by geometry, up to load_cap trajectories each; every
+    # evaluation seed subsamples cap_traj of them. EVAL_POOLS selects the
+    # held-out halves (default "val,test"; "test" scores only the test half).
     pools = tuple(p.strip() for p in os.environ.get("EVAL_POOLS", "val,test").split(",") if p.strip())
     print(f"[eval_suite] held-out pools: {pools}")
     by_gid = defaultdict(list)
@@ -92,9 +78,8 @@ def load_data(data_dir, device, load_cap=20):
                  sensor_pos.unsqueeze(0).to(device) if sensor_pos.numel() > 0 else None))
     by_gid = dict(by_gid)
 
-    # Training-layout centroids for the displacement axis, from the raw sensor-
-    # position files (avoids loading the ~51 GB train pkl). A training geometry is
-    # any gid NOT labelled interp/extrap.
+    # Centroids of the training layouts, for the displacement axis, read from
+    # the raw sensor-position files (a training geometry is any unlabelled one).
     import glob, re
     ds_root = os.path.dirname(os.path.dirname(data_dir))
     train_centroids = {}
@@ -219,8 +204,8 @@ def mae_of(mean, y, tgt):
 
 
 # --------------------------------------------------------------------------- #
-# Evaluators — each returns (rows, figspec_or_None). rows: list of dicts with
-# keys model,test,metric,x,value.
+# Evaluators: each returns (rows, figspec or None); rows are dicts with keys
+# model, test, metric, x, value.
 # --------------------------------------------------------------------------- #
 def _mae_over(items, b, sp_of, nctx=10, mode="first", **pred_kw):
     """Mean per-trajectory MAE over items; returns (overall, per_gid_list)."""
@@ -245,12 +230,8 @@ def ev_region_mae(models, data, args):
         allm = float(np.mean([e for _, e in per])) if per else float("nan")
         rows += [{"model": lbl, "test": "region_mae", "metric": "overall", "x": "", "value": allm},
                  {"model": lbl, "test": "region_mae", "metric": "train", "x": "", "value": tr}]
-        # Emit EVERY label bucket, not just interp/extrap. pathD labels its
-        # held-out geometries 'deep'/'shallow' instead: it pins the layout and
-        # varies the environment, so the meaningful region axis is water depth,
-        # not displacement from the training hull. Hard-coding the two geometric
-        # names silently dropped that breakdown even though the labels were
-        # sitting in splits.json. '?' is the no-label case and stays out.
+        # One row per region label (interp / extrap, or shallow / deep in B2);
+        # '?' marks unlabelled geometries and is skipped.
         for reg in sorted(buck):
             if reg == "?":
                 continue
@@ -488,8 +469,7 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
     device = t.device(args.device)
 
-    # {label: [all trained-seed checkpoints]}. Error bars fold BOTH training-seed
-    # spread (however many exist per model) and eval-seed spread together.
+    # {label: [checkpoints]}; error bars combine training and evaluation seeds.
     models = {}
     for spec in args.models:
         lbl, path = spec.split("=", 1)
@@ -504,9 +484,8 @@ def main():
 
     eval_seeds = [int(x) for x in args.eval_seeds.split(",") if x.strip()]
     tiers = [int(x) for x in args.tiers.split(",") if x.strip()]
-    # For each eval seed (fresh test subsample + perturbation seed) evaluate every
-    # available model-seed checkpoint on that SAME subsample, then aggregate over
-    # all (eval_seed x model_seed) samples -> mean +/- std with whatever seeds exist.
+    # For each evaluation seed, evaluate every checkpoint on the same subsample,
+    # then aggregate over all (evaluation seed, training seed) pairs.
     global EVAL_SEED
     per_seed_rows = []; fig_tests = []
     for es in eval_seeds:

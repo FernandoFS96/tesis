@@ -1,38 +1,20 @@
-"""
-viz.py
-======
+"""Figures logged to Weights & Biases during training.
 
-Training-time visualizations for the neural-process geometry baselines, designed
-to be logged to Weights & Biases *periodically* (e.g. every N epochs) so you can
-watch the model improve as it trains.
+Each figure is logged under the same key every few epochs, so the W&B step
+slider shows how it changes during training. Figures (each can be switched off
+in config/wandb/default.yaml):
 
-Everything in W&B is just ``wandb.log({key: media}, step=ep)``. Logging a
-``wandb.Image`` under the SAME key across epochs gives you a step slider in the
-UI, scrub it to animate how the prediction tightens onto the ground truth.
+  pred_trajectory      predicted and true trajectories for a fixed set of
+                       validation trajectories, with the context points and
+                       1-std uncertainty ellipses
+  degradation_scatter  per-geometry MAE against the distance of the array from
+                       the training arrays, by region (train / interp / extrap)
+  calibration          predicted std against realized error
+  error_histogram      distribution of per-point localization errors
+  streaming_drift      online model only: error against steps since the last fix
 
-Plots provided (each independently toggleable from config, see ``log_visualizations``):
-
-  pred_trajectory     predicted-vs-true trajectory overlay for a FIXED set of
-                      validation trajectories, with context ("fix") points and
-                      the model's predicted uncertainty drawn as ellipses.
-  degradation_scatter per-geometry MAE vs sensor-centroid distance, coloured by
-                      region (train / interp / extrap), the out-of-position
-                      generalization metric, watched over training.
-  calibration         predicted std vs realized error (binned), is the latent
-                      model's uncertainty trustworthy?
-  error_histogram     distribution of per-point localization errors (heavy tails
-                      hide behind a decent mean MAE).
-  streaming_drift     ONLINE model only: error as a function of timesteps-since-last-fix,
-                      dead-reckoning drift between position fixes.
-
-The plot builders are deliberately self-contained (their own small forward
-helpers) so this module can also be imported by the eval script.
-
-POSITION CONVENTION: y is (ppt, 3). The top-down plots use dims (0, 1) = (x, y).
-
-NORMALIZATION: when y_mean/y_std are given the model lives in normalized space;
-predictions are converted back to physical units here (mean*std+mean,
-std_phys = sqrt(var)*y_std) so every figure is in metres.
+Positions are (ppt, 3); the plots use (x, y). When y_mean / y_std are given,
+predictions are converted back to meters.
 """
 
 from __future__ import annotations
@@ -53,12 +35,8 @@ import wandb
 # Fixed-trajectory selection (called once at startup)
 # --------------------------------------------------------------------------- #
 def select_fixed_trajectories(val_ds, n, seed=0):
-    """Pick n trajectory indices from val_ds, spread across geometries so the
-    panel is representative. Returns a sorted list of dataset indices.
-
-    These indices are chosen ONCE and reused every logging epoch, so the only
-    thing changing across the step slider is the model, not which trajectory
-    you happen to be looking at."""
+    """Pick n validation trajectories spread across geometries (sorted dataset
+    indices). They are chosen once and reused at every logging epoch."""
     n = min(n, len(val_ds))
     by_geo = defaultdict(list)
     for i in range(len(val_ds)):
@@ -99,9 +77,9 @@ def _draw_ctx_idx(ppt, n_ctx, ctx_sample_mode, rng, device):
 # --------------------------------------------------------------------------- #
 @t.no_grad()
 def _predict_offline_all(model, conv, X, y_norm, ctx_idx, device, sensor_pos=None):
-    """X,y_norm: (1, ppt, .). Returns mean, var over ALL ppt points (normalized
-    space). conv in {'split', 'indexed'}. sensor_pos (1, n_sensors, 3) is passed
-    for spatial-encoder models (split only); ignored by flat / recurrent ones."""
+    """X, y_norm: (1, ppt, .). Returns mean and var for all points (normalized).
+    conv is 'split' or 'indexed'; sensor_pos (1, n_sensors, 3) is used by the
+    spatial models."""
     ppt = X.size(1)
     tgt_idx = t.arange(ppt, device=device, dtype=t.long)
     cy = y_norm[:, ctx_idx, :]
@@ -115,9 +93,8 @@ def _predict_offline_all(model, conv, X, y_norm, ctx_idx, device, sensor_pos=Non
 
 @t.no_grad()
 def _predict_online_all(model, X, y_norm, ctx_idx, chunk_size, device):
-    """Drive the real streaming deployment API over one trajectory, returning
-    the live prior predictions (mean, var) for ALL points in normalized space.
-    Mirrors eval_np_geometry.per_geometry_mae_online."""
+    """Run the streaming API over one trajectory and return the predictions
+    (mean, var) for all points, in normalized units."""
     ppt = X.size(1)
     ctx_set = set(int(j) for j in ctx_idx.tolist())
     state = model.init_state(1, device)
@@ -137,12 +114,8 @@ def _predict_online_all(model, X, y_norm, ctx_idx, chunk_size, device):
 def _gather_predictions(model, conv, ds, fixed_idx, device, *, val_ctx,
                         ctx_sample_mode, exclude_ctx_from_target, chunk_size,
                         y_mean, y_std, seed=0):
-    """Run the model on the fixed trajectories and return a list of per-trajectory
-    dicts with everything the figures need, all in PHYSICAL units:
-
-        {gid, true(ppt,Dy), pred(ppt,Dy), std(ppt,Dy), ctx_mask(ppt,),
-         tgt_mask(ppt,)}
-    """
+    """Predictions for the fixed trajectories, in meters: a list of dicts
+    {gid, true, pred, std, ctx_mask, tgt_mask}."""
     model.eval()
     ym = y_mean.to(device) if y_mean is not None else None
     ys = y_std.to(device) if y_std is not None else None
@@ -185,8 +158,8 @@ def _gather_predictions(model, conv, ds, fixed_idx, device, *, val_ctx,
 # Figure builders
 # --------------------------------------------------------------------------- #
 def build_trajectory_figure(preds, ep, plot_uncertainty=True, max_panels=12):
-    """Grid of top-down (x,y) panels: true path, predicted target points, context
-    fixes, and (optionally) per-point uncertainty ellipses (1 std)."""
+    """Top-down panels with the true path, predicted target points, context
+    points and optional 1-std ellipses."""
     preds = preds[:max_panels]
     n = len(preds)
     ncols = min(3, n); nrows = int(np.ceil(n / ncols))
@@ -226,8 +199,8 @@ def build_trajectory_figure(preds, ep, plot_uncertainty=True, max_panels=12):
 
 
 def build_calibration_figure(preds, ep, n_bins=12):
-    """Binned reliability: mean predicted std (x) vs RMS realized error (y) per
-    coordinate, pooled over target points. A well-calibrated model sits on y=x."""
+    """Mean predicted std against RMS error, per coordinate, in bins. A
+    well-calibrated model lies on y = x."""
     std = np.concatenate([p["std"][p["tgt_mask"]] for p in preds], axis=0).reshape(-1)
     err = np.concatenate(
         [np.abs(p["pred"][p["tgt_mask"]] - p["true"][p["tgt_mask"]]) for p in preds],
@@ -273,8 +246,7 @@ def build_error_histogram_figure(preds, ep):
 
 
 def build_streaming_drift_figure(preds, ep, max_gap=None):
-    """ONLINE only. Mean error as a function of timesteps-since-last-fix, showing
-    dead-reckoning drift between position fixes."""
+    """Online model only: mean error against steps since the last fix."""
     gap_err = defaultdict(list)
     for p in preds:
         ctx = np.sort(p["ctx_idx"])
@@ -310,8 +282,7 @@ def build_streaming_drift_figure(preds, ep, max_gap=None):
 @t.no_grad()
 def _per_geometry_mae(model, conv, ds, device, *, val_ctx, ctx_sample_mode,
                       exclude_ctx_from_target, chunk_size, y_mean, y_std, seed=0):
-    """Single-draw per-geometry MAE on a pool (lightweight version of the eval
-    routine, scoring target points only)."""
+    """Per-geometry MAE on a pool, from a single draw (target points only)."""
     model.eval()
     ym = y_mean.to(device) if y_mean is not None else None
     ys = y_std.to(device) if y_std is not None else None
@@ -381,10 +352,8 @@ def build_degradation_figure(model, conv, pools, labels, device, ep, *,
 def log_visualizations(model, conv, *, ep, viz_cfg, val_ds, fixed_idx, device,
                        val_ctx, ctx_sample_mode, exclude_ctx_from_target,
                        chunk_size, y_mean, y_std, deg_pools=None, deg_labels=None):
-    """Build the enabled figures and log them to W&B under stable keys (so the
-    step slider animates them across epochs). Respects viz_cfg.plots toggles.
-
-    deg_pools / deg_labels are only needed for the degradation scatter."""
+    """Build the enabled figures and log them to W&B. deg_pools and deg_labels
+    are only needed for the degradation scatter."""
     plots = viz_cfg.get("plots", {})
     logs = {}
 

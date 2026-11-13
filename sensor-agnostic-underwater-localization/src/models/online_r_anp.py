@@ -1,56 +1,20 @@
-"""
-online_r_anp.py  —  SKETCH of a streaming / online-deployable RANP
-==================================================================
+"""Streaming (online) version of the latent RANP.
 
-Why this exists
----------------
-The current `r_anp.LatentModel` takes the WHOLE trajectory as `x_seq`, runs the
-LSTM over it, and gathers context/target by *index into that sequence*. That is
-fine for offline scoring of a recorded trajectory, but it cannot be deployed
-online, where:
+r_anp.LatentModel processes a whole recorded trajectory at once. This model
+processes acoustic readings in chunks as they arrive and keeps a bounded state:
 
-  * acoustic readings arrive in small CHUNKS over time (the vessel is moving),
-  * we must predict the current chunk's position from what we've seen SO FAR
-    (no peeking at future points),
-  * we cannot re-run the encoder over the full history every step (unbounded
-    compute + memory),
-  * targets are *live readings*, not indices into a pre-filled tensor.
+  1. the RNN state, a causal summary of all past readings;
+  2. a ring buffer with the last `max_context` labelled context tokens (h, y).
 
-This sketch splits the model's "online state" into two pieces, each bounded:
-
-  1. RNN state  (h_t, c_t)        -- a compact, causal summary of ALL past
-                                     readings. An LSTM already gives us this for
-                                     free; we just stop throwing it away.
-  2. Context buffer (ring buffer) -- the last `max_context` LABELLED reference
-                                     tokens (h, y) used for NP-style adaptation.
-                                     Bounded => O(max_context) attention / step.
-
-Deployment loop (pseudo)
-------------------------
+Deployment loop:
     state = model.init_state(batch=1, device=...)
-    for x_chunk in stream:                 # (1, chunk_len, Dx) acoustic features
-        mean, var, h = model.step(x_chunk, state)   # localize the chunk NOW
-        emit(mean, var)                              # <- live position estimate
-        # if/when ground-truth fixes arrive for some of those readings:
-        if got_fix:
-            model.register_context(h[:, fix_local_idx, :],
-                                   y_fix, state)      # add to NP context buffer
+    for x_chunk in stream:                         # (1, chunk_len, Dx)
+        mean, var, h = model.step(x_chunk, state)  # localize the chunk
+        if got_fix:                                 # a position fix arrived
+            model.register_context(h[:, fix_idx, :], y_fix, state)
 
-The RNN state advances on EVERY chunk (we always have the acoustic features);
-the context buffer only grows when a labelled fix becomes available.
-
-Training alignment (the part that actually matters)
----------------------------------------------------
-Online behaviour must be TRAINED, not just supported at inference. The current
-trainer draws the context subset from anywhere in the sequence (including the
-future) — illegal online. To train this model, run the same causal loop used at
-deployment and accumulate the loss (`forward_streaming` below): for each chunk,
-predict it using ONLY past context, then register that chunk's context points.
-This is an autoregressive / causal Neural Process. See notes at the bottom for
-the trainer + collate changes required.
-
-NOTE: this is a sketch meant to be read and iterated on, not a drop-in trained
-model. Design decisions that deserve a second pass are flagged with `DESIGN:`.
+Training uses the same causal loop (forward_streaming): each chunk is predicted
+from past context only, and its context points are added afterwards.
 """
 
 from __future__ import annotations
@@ -60,14 +24,13 @@ import torch as t
 import torch.nn as nn
 import torch.nn.functional as F
 
-# Reuse the existing, already-debugged building blocks.
+# Building blocks shared with the offline models.
 from .anp import LatentEncoder, DeterministicEncoder, Decoder, gaussian_nll, gaussian_kl
 
 
 # --------------------------------------------------------------------------- #
-# Streaming temporal encoder: identical math to r_anp.TemporalEncoder, but the
-# LSTM/GRU hidden state is THREADED THROUGH instead of discarded, so it can be
-# called one chunk at a time and resumed.
+# Streaming temporal encoder: r_anp.TemporalEncoder with the RNN state passed
+# in and returned, so it can be called one chunk at a time.
 # --------------------------------------------------------------------------- #
 class StreamingTemporalEncoder(nn.Module):
     def __init__(self, input_dim, hidden_dim, num_layers=1, dropout=0.0,
@@ -84,9 +47,8 @@ class StreamingTemporalEncoder(nn.Module):
         self.input_proj = nn.Linear(input_dim, hidden_dim)
 
     def forward(self, x_chunk: t.Tensor, rnn_state=None):
-        """x_chunk: (B, L, Dx) -> h: (B, L, H), new rnn_state.
-        Feeding the full sequence with rnn_state=None reproduces the offline
-        TemporalEncoder exactly (causality guarantees chunked == full)."""
+        """x_chunk: (B, L, Dx) -> h: (B, L, H), new rnn_state. With the full
+        sequence and rnn_state=None this matches the offline encoder."""
         h, rnn_state = self.rnn(x_chunk, rnn_state)
         h = self.norm(h)
         return h + self.input_proj(x_chunk), rnn_state
@@ -94,8 +56,8 @@ class StreamingTemporalEncoder(nn.Module):
 
 # --------------------------------------------------------------------------- #
 # Bounded online state: RNN state + a ring buffer of labelled context tokens.
-# Context indices are shared across the batch (same convention as the existing
-# collate), so the buffers are dense (B, K, ·) tensors.
+# Context indices are shared across the batch, so the buffers are dense
+# (B, K, .) tensors.
 # --------------------------------------------------------------------------- #
 class OnlineState:
     def __init__(self, batch_size: int, device, max_context: int):
@@ -130,7 +92,7 @@ class OnlineLatentModel(nn.Module):
         self.temporal_encoder = StreamingTemporalEncoder(
             input_dim=input_dim, hidden_dim=num_hidden, num_layers=rnn_layers,
             dropout=rnn_dropout, rnn_type=rnn_type, layer_norm=True)
-        # Attention pooling, as in the offline RANP (r_anp.py) this model streams.
+        # Attention pooling, as in the offline RANP.
         self.latent_encoder = LatentEncoder(
             num_hidden, num_latent=num_hidden, input_dim=num_hidden,
             output_dim=output_dim, dropout=dropout, pooling="attention")
@@ -140,10 +102,8 @@ class OnlineLatentModel(nn.Module):
         self.decoder = Decoder(num_hidden, input_dim=num_hidden,
                                output_dim=output_dim, dropout=dropout)
 
-        # DESIGN: cold start. Before any fix arrives there is no context. We give
-        # the encoders a single LEARNED "empty context" token so the attention /
-        # pooling always has >=1 key, and the model learns a sensible
-        # unconditional prior for that regime.
+        # Before any fix arrives there is no context: a learned "empty context"
+        # token gives the attention and the pooling at least one key.
         self.empty_h = nn.Parameter(t.zeros(1, 1, num_hidden))
         self.empty_y = nn.Parameter(t.zeros(1, 1, output_dim))
 
@@ -158,13 +118,9 @@ class OnlineLatentModel(nn.Module):
 
     # ---- internal: the ANP head (latent + deterministic + decoder) --------- #
     def _decode(self, target_h, ctx_h, ctx_y, target_y=None, predict_with_prior=False):
-        """predict_with_prior: if True, the prediction uses the PRIOR latent z
-        (context only) even when target_y is supplied. This is the
-        deployment-faithful path: at sea the latent cannot see target labels.
-        We still compute the posterior + KL/NLL when target_y is given, so the
-        validation loss stays comparable to training — only the z that drives
-        the prediction differs. Set False for training (posterior teacher
-        forcing, lower-variance gradients)."""
+        """predict_with_prior: predict from the prior latent (context only) even
+        when target_y is given; the posterior and the KL are still computed.
+        False in training (decoding from the posterior)."""
         num_targets = target_h.size(1)
         prior_mu, prior_var, prior = self.latent_encoder(ctx_h, ctx_y)
 
@@ -176,9 +132,7 @@ class OnlineLatentModel(nn.Module):
                 t.cat([ctx_y, target_y], dim=1))
 
         use_post = (target_y is not None) and (not predict_with_prior)
-        # train(): decode a SAMPLE of z; eval(): decode the distribution MEAN
-        # (deterministic point prediction; see anp.py for the rationale). Makes
-        # deployment `step()` deterministic under model.eval().
+        # Sample z in training; use the mean of the distribution in eval mode.
         if use_post:
             z = post if self.training else post_mu #type: ignore
         else:
@@ -186,17 +140,13 @@ class OnlineLatentModel(nn.Module):
 
         z = z.unsqueeze(1).repeat(1, num_targets, 1)
         r = self.deterministic_encoder(ctx_h, ctx_y, target_h)
-        # anp.Decoder returns (mean, var, rho); the online model keeps the
-        # diagonal likelihood, so rho is unused here (it is None unless
-        # full_cov is enabled, which this model does not expose).
+        # The decoder's correlation output is not used here (diagonal likelihood).
         mean, var, _rho = self.decoder(r, z, target_h)
 
         nll = kl = None
         if target_y is not None:
             nll = gaussian_nll(mean, var, None, target_y).mean()
-            # KL normalized to per-target-point, per-dim units to match the meaned
-            # NLL (see anp.py LatentModel.forward for the full rationale); beta=1
-            # then reads as the standard per-point ELBO.
+            # KL normalized to per-point units, as in anp.LatentModel.
             kl = self._kl(prior_mu, prior_var, post_mu, post_var) \
                  / (num_targets * target_y.size(-1))
         return mean, var, kl, nll
@@ -206,16 +156,16 @@ class OnlineLatentModel(nn.Module):
         return gaussian_kl(prior_mu, prior_var, post_mu, post_var).mean()
 
     # ====================================================================== #
-    # DEPLOYMENT API
+    # Deployment API
     # ====================================================================== #
     def init_state(self, batch_size: int, device) -> OnlineState:
         return OnlineState(batch_size, device, self.max_context)
 
     @t.no_grad()
     def step(self, x_chunk: t.Tensor, state: OnlineState):
-        """Ingest one acoustic chunk, advance the RNN, and localize it using the
-        context seen so far. Returns (mean, var, h_chunk); keep h_chunk if you
-        may later register some of these readings as context."""
+        """Ingest one acoustic chunk, advance the RNN and localize the chunk from
+        the context seen so far. Returns (mean, var, h_chunk); keep h_chunk to
+        register some of these readings as context later."""
         h, state.rnn_state = self.temporal_encoder(x_chunk, state.rnn_state)
         ctx_h, ctx_y = self._context_tokens(state)
         mean, var, _, _ = self._decode(h, ctx_h, ctx_y, target_y=None)
@@ -224,36 +174,28 @@ class OnlineLatentModel(nn.Module):
     @t.no_grad()
     def register_context(self, h_tokens: t.Tensor, y_tokens: t.Tensor,
                          state: OnlineState):
-        """Add labelled reference points (e.g. an arrived position fix) to the
-        NP context buffer. `h_tokens` are the RNN outputs returned by `step` for
-        those same readings."""
+        """Add labelled reference points (e.g. a position fix) to the context
+        buffer. h_tokens are the RNN outputs returned by step for those readings."""
         state.append(h_tokens, y_tokens)
 
     # ====================================================================== #
-    # TRAINING / VALIDATION:  the causal streaming loop, with gradients.
+    # Training and validation: the causal streaming loop
     # ====================================================================== #
     def forward_streaming(self, x_seq, y_seq, ctx_idx, chunk_size, beta=1.0,
                           predict_with_prior=False, loss_after_first_ctx_only=False,
                           detach_context=True):
-        """Causal pass that mirrors deployment, used for both train and val.
+        """Causal pass that mirrors deployment, used in training and validation.
 
-        x_seq:   (B, T, Dx)   full trajectory features
-        y_seq:   (B, T, Dy)   targets
-        ctx_idx: 1-D LongTensor of timestep indices that become context once
-                 reached (shared across the batch — same convention as the
-                 offline collate). Must be causal-usable: a context point helps
-                 only LATER chunks (the loop enforces past-only automatically).
-        chunk_size: streaming granularity (timesteps revealed per step).
-        predict_with_prior: False -> posterior teacher forcing (training);
-                 True -> predict from the prior (deployment-faithful validation).
+        x_seq:   (B, T, Dx) trajectory features
+        y_seq:   (B, T, Dy) targets
+        ctx_idx: 1-D LongTensor of timesteps that become context once reached
+                 (shared across the batch)
+        chunk_size: timesteps revealed per step
+        predict_with_prior: False in training, True for validation
 
-        EFFICIENCY: the RNN is run ONCE over the full sequence (causal, so the
-        states are identical to streaming chunk-by-chunk); only the causal NP
-        aggregation is looped over chunks on the precomputed h_seq.
-
-        For each chunk: predict it from PAST context only, accumulate NLL/KL,
-        then register the chunk's context points for future chunks.
-        Returns (pred_mean, pred_var, loss, kl, nll).
+        The RNN runs once over the full sequence (it is causal, so the states
+        are the same as when streaming); only the context aggregation is looped
+        over chunks. Returns (pred_mean, pred_var, loss, kl, nll).
         """
         B, T, _ = x_seq.shape
         device = x_seq.device
@@ -282,20 +224,18 @@ class OnlineLatentModel(nn.Module):
                 predict_with_prior=predict_with_prior)
             pred_mean[:, s:e], pred_var[:, s:e] = mean, var
 
-            # DESIGN: optionally skip loss on chunks predicted with NO real
-            # context yet (pure cold-start guesses) so they don't dominate.
+            # Optionally skip the loss on chunks predicted with no context yet.
             if not (loss_after_first_ctx_only and not first_ctx_seen):
                 tot_nll = tot_nll + nll
                 tot_kl = tot_kl + kl
                 n_scored += 1
 
-            # Register this chunk's context points into the buffer (note: NOT
-            # self.register_context, which is @no_grad and would cut the graph).
+            # Add this chunk's context points to the buffer (register_context
+            # is no_grad, so it is not used here).
             local = [i for i in range(s, e) if i in ctx_set]
             if local:
                 sel = t.tensor(local, device=device, dtype=t.long)
-                # DESIGN: detach => truncated BPTT through the context buffer
-                # (cheaper / more stable). The RNN pass still carries gradient.
+                # Detached: truncated backpropagation through the buffer.
                 hk = h_seq[:, sel, :]
                 yk = y_seq[:, sel, :]
                 state.append(hk.detach() if detach_context else hk, yk)
@@ -308,16 +248,3 @@ class OnlineLatentModel(nn.Module):
         return pred_mean, pred_var, loss, kl, nll
 
 
-# --------------------------------------------------------------------------- #
-# TRAINER / COLLATE changes required to actually train this (summary)
-# --------------------------------------------------------------------------- #
-# 1. collate: instead of (context_x, context_y, target_x, target_y), emit
-#    x_seq (B,T,Dx), y_seq (B,T,Dy), ctx_idx (timesteps that become context),
-#    and a chunk_size. The temporal ORDER must be preserved (no shuffling), and
-#    ctx_idx must be drawn so context is reachable causally (any timestep can be
-#    context for a LATER target; the loop enforces "past-only" automatically).
-# 2. model_forward dispatch: a new convention "online" -> model.forward_streaming.
-# 3. eval: drive model.step / register_context over the trajectory in order and
-#    score the live predictions — this measures the REAL deployment metric.
-# 4. curricula worth trying: vary chunk_size and context density during training
-#    so the model is robust to how fast fixes actually arrive at sea.

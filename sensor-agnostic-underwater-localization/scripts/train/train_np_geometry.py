@@ -1,59 +1,37 @@
-"""
-train_np_geometry.py
-====================
+"""Train the neural-process models (Hydra entry point).
 
-Unified trainer for the neural-process baselines, selected with the Hydra
-``model`` group. Each model config carries two identity fields: ``arch`` (which
-class to build, dispatched below) and ``name`` (display name for runs/dirs).
+The model is chosen with the `model` config group. Each model config has an
+`arch` (the class to build) and a `name` (used for run names and folders).
 
-    arch=cnp   -> anp.DeterministicModel   (attentive CNP, no latent, no RNN)
-    arch=anp   -> anp.LatentModel          (attentive latent NP)
-    arch=ranp  -> r_anp.LatentModel        (recurrent attentive latent NP; LSTM)
-    arch=rcnp  -> r_anp.DeterministicModel (bonus: recurrent CNP, indexed conv.)
-    arch=online_ranp -> online_r_anp.OnlineLatentModel (causal streaming)
+    arch=cnp          anp.DeterministicModel           attentive CNP
+    arch=anp          anp.LatentModel                  attentive latent NP
+    arch=pfn          pfn.PFNModel                     prior-data fitted network
+    arch=rcnp         r_anp.DeterministicModel         recurrent CNP
+    arch=ranp         r_anp.LatentModel                recurrent latent NP
+    arch=online_ranp  online_r_anp.OnlineLatentModel   streaming RANP
 
-model=cnp/anp are FLAT baselines (no spatial encoding: raw acoustics only,
-never sensor_pos) measuring the out-of-position degradation per architecture;
-model=spatial_cnp/spatial_anp are the same archs with the sensor-position-aware
-front end enabled (the models meant to close that gap).
+The plain configs (cnp, anp, ...) use the raw acoustics only; the spatial_*
+configs add the spatial front end, which also receives the sensor positions.
 
-WHY TWO CALLING CONVENTIONS (the one thing that matters here)
--------------------------------------------------------------
-* cnp / anp  (anp.py): forward(context_x, context_y, target_x, target_y, beta)
-                       , the caller pre-splits context and target into
-                        separate tensors.
+Calling conventions:
+  split   (cnp, anp, pfn)  forward(context_x, context_y, target_x, target_y, beta)
+  indexed (rcnp, ranp)     forward(x_seq, context_indices, context_y,
+                                   target_indices, target_y, beta), with the
+                           full sequence in x_seq
+  online  (online_ranp)    forward_streaming(x_seq, y_seq, ctx_idx, chunk_size)
+All of them return (mean, var, loss, kl, nll).
 
-* ranp (r_anp.py): forward(x_seq, context_indices, context_y, target_indices,
-                        target_y, beta), the caller passes the FULL sequence
-                        (B, T, Dx) plus integer index tensors; the model runs
-                        its internal LSTM over the whole sequence and splits by
-                        index.
+Data: <processed>/geometry_split/{train,val,test}_data.pkl as written by
+data/process_data.py, lists of dicts with "X" (points x features), "y"
+(points x 3), "sensor_pos" (sensors x 3), "geometry_id" and "theta".
 
-The collate fn below produces BOTH forms; `model_forward` dispatches on the
-model family. All four return the same 5-tuple (mean, var, loss, kl, nll), so
-the loss/optimization code is shared. For ANP/RANP (latent models) target_y is
-passed during training so the posterior + KL term are active; beta controls the
-KL weight.
+Examples:
+    python scripts/train/train_np_geometry.py model=spatial_cnp
+    python scripts/train/train_np_geometry.py model=pfn data.normalize_y=true \\
+        training.epochs=500
 
-DATA CONTRACT (data_process_random_positions.py, mode=geometry)
----------------------------------------------------------------
-<processed>/geometry_split/{train,val,test}_data.pkl  -> list of dicts:
-    {"X":(ppt,1010), "y":(ppt,3), "sensor_pos":(10,3), "geometry_id":int,
-     "theta":float}
-
-CONFIGURATION (Hydra)
----------------------
-All hyperparameters live in ``config/`` and are composed by Hydra. Override
-anything from the command line, e.g.:
-
-    python train_np_geometry.py model=cnp
-    python train_np_geometry.py model=spatial_cnp
-    python train_np_geometry.py model=anp data.normalize_y=true \
-        data.context.sample_mode=first training.epochs=500
-    python train_np_geometry.py model=ranp wandb.enabled=false
-
-Outputs (to the Hydra run dir, or ``out_dir`` if set):
-    best.pt, last.pt, train_log.csv, config.yaml
+Outputs (Hydra run directory, or out_dir): best.pt, last.pt, train_log.csv,
+config.yaml.
 """
 
 import os
@@ -74,17 +52,15 @@ from hydra.core.hydra_config import HydraConfig
 
 import wandb
 
-# --- model imports: support both ../src/models and a local copy -------------
-# Add the repo root (parent of src/) so that `from src.models.anp import ...`
-# works regardless of the (Hydra-changed) current working directory.
+# Make `src.models` importable whatever the working directory (Hydra may
+# change it).
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, _PROJECT_ROOT)
 
-# Anchor Hydra's output dir (and any config path) to the repo root regardless of
-# the launch directory: `${repo_root:}` in config/train.yaml resolves to here.
-# Registered at import time so it is available when Hydra composes the config.
+# `${repo_root:}` in config/train.yaml resolves to the repository root, so
+# outputs and data paths do not depend on the launch directory.
 OmegaConf.register_resolver("repo_root", lambda: _PROJECT_ROOT, replace=True)
-# Model factory, shared with the eval scripts (one copy, so they cannot drift).
+# Model factory shared with the evaluation scripts.
 from src.models.registry import build_model, is_latent  # type: ignore  # noqa: E402
 from src.models.anp import physical_var_floor, set_var_floor  # type: ignore  # noqa: E402
 
@@ -92,14 +68,8 @@ import viz  # type: ignore  # noqa: E402  # periodic W&B training visualizations
 
 
 def should_log_viz(ep, total_epochs, viz_cfg):
-    """Whether to build+log the training figures at this epoch.
-
-    Schedule: the explicit `milestones` epochs (dense early on), then every
-    `every_n_epochs` once past the last milestone, plus always the final epoch.
-    With the default config (milestones=[5,10,25,50,100], every_n_epochs=100)
-    this fires at 5, 10, 25, 50, 100, then 200, 300, 400, ... If `milestones`
-    is empty it degrades to a plain every-N-epochs cadence.
-    """
+    """Whether to log the training figures at this epoch: at each of the
+    `milestones`, then every `every_n_epochs`, and always at the last epoch."""
     if ep == total_epochs:
         return True  # always capture the final state
     milestones = list(viz_cfg.get("milestones", []) or [])
@@ -123,8 +93,8 @@ def compute_y_stats(dataset):
 
 
 def compute_x_stats(dataset, max_samples=200):
-    """Single global mean/std of the acoustic features (for the spatial encoder's
-    'standardize' mode). A subsample is enough -- the global scale is stable."""
+    """Global mean and std of the acoustic features, for the spatial front end's
+    'standardize' mode. Estimated on a subsample."""
     n = min(len(dataset.samples), max_samples)
     xs = np.concatenate(
         [np.asarray(dataset.samples[i]["X"], dtype=np.float32).ravel() for i in range(n)])
@@ -132,7 +102,7 @@ def compute_x_stats(dataset, max_samples=200):
 
 
 # --------------------------------------------------------------------------- #
-# Dataset (one item = one trajectory) + collate producing BOTH conventions
+# Dataset (one item = one trajectory) + collate producing both conventions
 # --------------------------------------------------------------------------- #
 class TrajectoryDataset(Dataset):
     def __init__(self, pkl_path):
@@ -160,15 +130,8 @@ class TrajectoryDataset(Dataset):
 
 
 def _worker_rng(base_seed):
-    """NumPy Generator seeded uniquely per DataLoader worker.
-
-    A ``default_rng(seed)`` captured in a collate closure is forked to every
-    worker with the SAME seed, so with num_workers>1 all workers draw the
-    identical context-size sequence -> context diversity collapses by ~num_workers
-    (the whole point of per-batch context sampling is lost). Seeding by
-    (base_seed, worker_id) via a SeedSequence gives each worker a decorrelated
-    stream while staying deterministic for a given run seed. Single-process
-    loading (worker_info is None) reduces to worker id 0."""
+    """NumPy generator seeded per DataLoader worker, so that workers draw
+    different context sizes while staying reproducible for a given seed."""
     wi = t.utils.data.get_worker_info()
     wid = 0 if wi is None else wi.id
     base = 0 if base_seed is None else int(base_seed)
@@ -176,10 +139,9 @@ def _worker_rng(base_seed):
 
 
 def sample_sensor_mask(rng, B, S, mode, p=0.3, min_keep=3):
-    """(B, S) bool sensor mask, True = present, one per sample (train-only sensor
-    dropout, as in the RANP topologies work): 'bernoulli' drops each sensor with
-    probability p, 'k_uniform' keeps a uniform number of sensors in [min_keep, S].
-    At least min_keep sensors stay present."""
+    """(B, S) bool sensor mask, True for present sensors, used for sensor dropout
+    in training. 'bernoulli' drops each sensor with probability p; 'k_uniform'
+    keeps a uniform number of sensors in [min_keep, S]. At least min_keep stay."""
     keep = np.ones((B, S), dtype=bool)
     for b in range(B):
         if mode == "bernoulli":
@@ -211,58 +173,31 @@ def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None, ctx_sample_mode="r
                  exclude_ctx_from_target=True, per_sample=False, aug_m=0.0,
                  calibration=False, dataset=None, indexed=False, rot_aug=False,
                  sensor_drop=None, pos_err=0.0):
-    """Builds a batch carrying BOTH calling conventions:
-       - context_x/context_y/target_x/target_y  (for cnp/anp)
-       - x_seq + context_indices/target_indices (for ranp)
-       Context is a subset of the points determined by ctx_sample_mode.
-       ctx_sample_mode='first'  -> take the first n_ctx points (ordered prefix)
-       ctx_sample_mode='random' -> random permutation (original behaviour)
+    """Collate function producing both calling conventions:
+       - context_x / context_y / target_x / target_y (split models)
+       - x_seq with context_indices / target_indices (indexed models)
 
-       Target-set composition (exclude_ctx_from_target):
-         True  -> targets are the COMPLEMENT of the context (non-overlapping;
-                  the model is scored only on unseen points). [default]
-         False -> targets are ALL points (context is a subset of the targets,
-                  the standard NP convention).
-
-       per_sample (Option C): if True, each sample in the batch gets its OWN
-       context size (instead of one size shared by the whole batch). Context is
-       padded to the batch-max and a `context_mask` marks the real slots; targets
-       become ALL points with a per-sample `target_mask` selecting the scored set.
-       This decouples context-size variability from batch size, so a large GPU
-       batch still carries many context sizes. SPLIT convention only (cnp/anp/
-       spatial_*); it emits no context_indices, so ranp/rcnp/online can't use it.
-       Ignored when fixed_ctx is set (validation keeps one fixed size for all).
-
-       calibration (the CALIBRATION regime): if True the context points come
-       from a DIFFERENT trajectory of the SAME (geometry, theta) as the
-       targets -- a separate 'calibration transit' -- and the targets become ALL
-       points of the sample's own trajectory. This is the operationally faithful
-       setting (the calibration track is never the track you want to localize)
-       and it removes the trajectory-continuation shortcut that same-trajectory
-       context makes available: with a prefix of the target's OWN path revealed,
-       a model can score well by extrapolating that path and ignoring the
-       acoustics entirely. Needs `dataset` (donor lookup). `exclude_ctx_from_target`
-       is moot here -- context and targets are disjoint by construction.
-
-       indexed: under calibration, also emit the indexed convention for ranp/rcnp:
-       x_seq = the calibration points followed by the target transit, context
-       indices = the first n_ctx steps, targets = the rest. Needs one context
-       size per batch (per_sample=False). Ignored outside calibration.
-
-       rot_aug: per-sample random rotation and reflection of the whole scene
-       about the array centroid (train only), after the translation.
-
-       sensor_drop: None, or (mode, p, min_keep) for sample_sensor_mask (train
-       only). Each sample gets a `sensor_mask` (B, S) shared by its context and
-       target points: a failed sensor is missing for the whole deployment. The
-       spatial encoder drops masked sensors from its attention and pooling.
-
-       pos_err: max sd [m] of perturb_sensor_pos (train only; 0 disables)."""
+       ctx_sample_mode: 'first' takes the first n_ctx points, 'random' a random
+           subset.
+       exclude_ctx_from_target: if True (default) the targets are the points not
+           in the context, otherwise all points.
+       per_sample: each sample gets its own context size; the context is padded
+           and marked with context_mask, and target_mask selects the scored
+           targets. Split models only; ignored when fixed_ctx is set.
+       calibration: the context comes from another trajectory of the same
+           deployment (same geometry and theta), and the targets are all points
+           of the sample's own trajectory. Needs `dataset`.
+       indexed: in the calibration regime, also build the indexed convention,
+           with x_seq = the calibration points followed by the target transit.
+       rot_aug: random rotation and reflection of the scene about the array
+           centroid (training only).
+       sensor_drop: None or (mode, p, min_keep) for sample_sensor_mask (training
+           only); the mask is shared by a sample's context and targets.
+       pos_err: maximum sd in meters for perturb_sensor_pos (training only)."""
     _rng = {"g": None}   # created lazily, once per DataLoader worker
 
-    # Donor pools for the CALIBRATION regime: dataset indices grouped by
-    # (geometry_id, theta), so a sample's context is drawn from another
-    # trajectory of the SAME deployment (same array layout, same channel).
+    # Calibration regime: dataset indices grouped by (geometry_id, theta), so
+    # the context can come from another trajectory of the same deployment.
     _donors = None
     if calibration:
         if dataset is None:
@@ -292,9 +227,8 @@ def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None, ctx_sample_mode="r
                       if all(sp.numel() > 0 for sp in sps) else None)
         B, ppt, _ = Xs.shape
 
-        # ---- CALIBRATION regime: context from a SEPARATE trajectory ----------
-        # Built BEFORE augmentation so the donor's labels can take the same
-        # rigid shift below (one physical scene => one coordinate frame).
+        # ---- calibration regime: context from another trajectory ------------
+        # Built before augmentation, so the context labels get the same shift.
         _cal = None
         if calibration:
             if per_sample and fixed_ctx is None:
@@ -319,13 +253,8 @@ def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None, ctx_sample_mode="r
                         dX = np.asarray(dataset.samples[j]["X"], dtype=np.float32)
                         break
                 if dy is None:
-                    # Deterministic fallback. With few trajectories per (geometry,
-                    # theta) -- e.g. 10 in the layout-heavy prior -- the random
-                    # draw hits the target's own path with probability 1/k each
-                    # time, so pure rejection sampling eventually exhausts its
-                    # retries and would kill a multi-hour run. Scan the pool
-                    # instead; this succeeds whenever the group holds >= 2
-                    # distinct trajectories, which the collate factory asserts.
+                    # Fallback: scan the group for a different trajectory
+                    # (each group holds at least two).
                     for j in pool.tolist():
                         cand = np.asarray(dataset.samples[int(j)]["y"], dtype=np.float32)
                         if not np.array_equal(cand, own):
@@ -345,14 +274,10 @@ def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None, ctx_sample_mode="r
                 cmask[b, :k] = True
             _cal = {"x": cx, "y": cy, "mask": cmask}
 
-        # ---- translation augmentation (train-only; aug_m == 0 disables) -------
-        # Per-sample rigid 2-D shift of the WHOLE scene (sensor_pos AND y
-        # together). The simulated channel depends only on RELATIVE source-
-        # sensor geometry (acoustic_data_generator.py: d0 = ||r_pos - traj||),
-        # so the acoustic features X stay EXACTLY valid while the scene moves ->
-        # free sensor-displacement diversity along precisely the layout-OOD axis
-        # (teaches the absolute-frame Fourier position encoding offsets beyond
-        # the training hull of array centres, where the extrap penalty lives).
+        # ---- translation augmentation (training only) -------------------------
+        # Shift the whole scene (sensor positions and labels) by a random 2-D
+        # offset per sample. The channel depends only on the relative
+        # source-sensor geometry, so the acoustic features stay valid.
         if aug_m and aug_m > 0:
             if sensor_pos is None:
                 raise ValueError("translation augmentation needs sensor_pos in "
@@ -363,18 +288,13 @@ def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None, ctx_sample_mode="r
             sensor_pos = sensor_pos.clone()
             sensor_pos[..., :2] = sensor_pos[..., :2] + delta
             if _cal is not None:
-                # The calibration transit belongs to the SAME scene, so it takes
-                # the SAME rigid shift -- otherwise the context labels and the
-                # target labels would sit in different frames.
+                # The calibration trajectory belongs to the same scene.
                 _cal["y"] = _cal["y"].clone()
                 _cal["y"][..., :2] = _cal["y"][..., :2] + delta
 
-        # ---- rotation augmentation (train-only; rot_aug=False disables) ---------
-        # Same argument as the translation: the channel depends only on relative
-        # source-sensor geometry, so a rigid rotation (or reflection) of the scene
-        # about its array centroid leaves X exactly valid. Needed by the array-
-        # centered SensorSetEncoder, whose input is translation- but not
-        # rotation-invariant.
+        # ---- rotation augmentation (training only) ----------------------------
+        # A rigid rotation or reflection of the scene about the array centroid
+        # also leaves the acoustic features valid.
         if rot_aug:
             if sensor_pos is None:
                 raise ValueError("rotation augmentation needs sensor_pos in the data")
@@ -393,13 +313,10 @@ def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None, ctx_sample_mode="r
                 _cal["y"] = _cal["y"].clone()
                 _cal["y"][..., :2] = _rot(_cal["y"][..., :2])
 
-        # ---- CALIBRATION return: context is a different trajectory ------------
-        # Targets are ALL points of this sample's own trajectory; context and
-        # targets are disjoint by construction, so nothing needs excluding.
-        # For an indexed model (ranp/rcnp) the cross-trajectory context becomes
-        # one sequence: the calibration points, then the target transit. Without
-        # `indexed` no x_seq/context_indices are emitted, so an indexed model fails
-        # loudly rather than silently using the wrong points.
+        # ---- calibration regime: return ---------------------------------------
+        # Targets are all points of the sample's own trajectory. For indexed
+        # models, context and targets form one sequence: the calibration points,
+        # then the target transit.
         if _cal is not None and indexed:
             if not bool(_cal["mask"].all()):
                 raise ValueError("indexed calibration batches need one context size "
@@ -421,14 +338,14 @@ def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None, ctx_sample_mode="r
                 "gids": gids, "thetas": ths, "sensor_pos": sensor_pos,
             }
 
-        # ---- Option C: per-sample context sizes (padded + masked) -------------
+        # ---- per-sample context sizes (padded and masked) ---------------------
         if per_sample and fixed_ctx is None:
             ncs = rng.integers(ctx_min, ctx_max + 1, size=B).clip(1, ppt)
             max_ctx = int(ncs.max())
             cx = t.zeros(B, max_ctx, Xs.size(-1), dtype=Xs.dtype)
             cy = t.zeros(B, max_ctx, ys.size(-1), dtype=ys.dtype)
             cmask = t.zeros(B, max_ctx, dtype=t.bool)
-            tmask = t.ones(B, ppt, dtype=t.bool)     # which points to SCORE
+            tmask = t.ones(B, ppt, dtype=t.bool)     # which points to score
             for b in range(B):
                 k = int(ncs[b])
                 if ctx_sample_mode == "first":
@@ -484,14 +401,11 @@ def make_collate(ctx_min, ctx_max, fixed_ctx=None, seed=None, ctx_sample_mode="r
 
 def make_online_collate(ctx_min, ctx_max, chunk_size, fixed_ctx=None, seed=None,
                         ctx_sample_mode="random"):
-    """Collate for the 'online' (streaming) convention. Emits the FULL ordered
-    trajectory plus the timesteps that become context ('fixes') and the chunk
-    size. Temporal order is preserved (never shuffled). ctx_idx are the fix
-    timesteps, shared across the batch; the model reveals them causally.
-       ctx_sample_mode='random' -> fixes scattered across the trajectory
-                                    (realistic: periodic position fixes)
-       ctx_sample_mode='first'  -> fixes are an initial prefix (known start,
-                                    then dead-reckon)."""
+    """Collate for the online (streaming) convention: the full ordered
+    trajectory, the timesteps that become context (position fixes, shared across
+    the batch) and the chunk size.
+       ctx_sample_mode='random' -> fixes spread over the trajectory
+       ctx_sample_mode='first'  -> fixes form an initial prefix"""
     _rng = {"g": None}   # created lazily, once per DataLoader worker
 
     def collate(batch):
@@ -539,8 +453,7 @@ def model_forward(model, conv, batch, device, beta, with_target_y=True,
     if conv == "split":
         cx = batch["context_x"].to(device)
         tx = batch["target_x"].to(device)
-        # Per-sample context batching (Option C) and the calibration regime supply
-        # these; absent otherwise. Every split model (cnp / anp / pfn) accepts them.
+        # Masks from per-sample context batching or the calibration regime.
         kw = {}
         cmask = batch.get("context_mask")
         if cmask is not None:
@@ -593,11 +506,7 @@ def run_epoch(model, conv, loader, device, beta, optimizer=None, desc="",
                          "context_y": (batch["context_y"].to(device) - ym) / ys,
                          "target_y":  (batch["target_y"].to(device)  - ym) / ys}
         with t.set_grad_enabled(train):
-            # Deployment-faithful validation/inference: latent models predict from
-            # the PRIOR latent (context only, no peeking at target labels) whenever
-            # we are NOT training. Training uses the posterior (teacher forcing).
-            # The posterior + KL/NLL are still computed for logging; only the z
-            # that drives the prediction differs. Deterministic models ignore it.
+            # Outside training, latent models predict from the prior latent.
             mean, var, loss, kl, nll = model_forward(
                 model, conv, batch, device, beta, with_target_y=True,
                 predict_with_prior=(not train))
@@ -613,8 +522,7 @@ def run_epoch(model, conv, loader, device, beta, optimizer=None, desc="",
         with t.no_grad():
             mean_phys = mean * ys + ym if ym is not None else mean
             dist = t.sqrt(((mean_phys - ty_raw) ** 2).sum(-1) + 1e-12)  # (B, n_tgt)
-            # Per-sample context-batching scores only each sample's target subset;
-            # mask the MAE the same way (else padded/context points would count).
+            # With per-sample batching, score only each sample's targets.
             tmask = batch.get("target_mask")
             if tmask is not None:
                 tmask = tmask.to(device).float()
@@ -630,7 +538,7 @@ def run_epoch(model, conv, loader, device, beta, optimizer=None, desc="",
         n += b
         bar.set_postfix(loss=f"{loss.item():.3f}", mae=f"{mae:.2f}")
     per_geo_mae = {g: err_sum[g] / err_cnt[g] for g in err_sum}
-    # kl appended LAST so existing tr[0..3]/va[0..3] index uses stay valid.
+    # kl is last, so tr[0..3] and va[0..3] keep their meaning.
     return tot_loss / n, tot_nll / n, tot_mae / n, per_geo_mae, tot_kl / n
 
 
@@ -644,14 +552,12 @@ def resolve_device(device_cfg):
 
 
 def flat_ckpt_config(cfg, device):
-    """A flat dict stored in the checkpoint so eval_np_geometry.py can read
-    num_hidden / rnn_* / ctx_sample_mode etc. via simple ``.get`` calls."""
+    """Flat dict of model settings stored in the checkpoint and used to rebuild
+    the model."""
     m = cfg.model
     ctx = cfg.data.context
     return {
-        # "model" holds the ARCH (dispatch key for eval's build_model); "name"
-        # is the display name (e.g. spatial_cnp). Checkpoint keys keep the
-        # historical flat names so eval_np_geometry.py needs no changes.
+        # "model" holds the architecture, "name" the display name.
         "model": m.get("arch", m.name),
         "name": m.name,
         "num_hidden": m.num_hidden,
@@ -724,8 +630,7 @@ def main(cfg: DictConfig):
         )
 
     # ---- data --------------------------------------------------------------
-    # Resolve a relative data_dir against the repo root (not the launch cwd) so
-    # training works regardless of where it is launched from.
+    # A relative data_dir is resolved against the repository root.
     data_dir = cfg.data.data_dir
     if not os.path.isabs(data_dir):
         data_dir = os.path.normpath(os.path.join(_PROJECT_ROOT, data_dir))
@@ -733,16 +638,10 @@ def main(cfg: DictConfig):
     train_ds = TrajectoryDataset(os.path.join(data_dir, "train_data.pkl"))
     val_ds = TrajectoryDataset(os.path.join(data_dir, "val_data.pkl"))
 
-    # Optionally cap the number of TRAINING geometries (val/test untouched) so a
-    # "how many sensor layouts do we need?" sweep holds the held-out set fixed and
-    # only varies training coverage. Keeps the FIRST N distinct geometry_ids
-    # (sorted) -> nested subsets (10 subset of 20 subset of 40) for a clean curve.
+    # Optionally cap the number of training geometries (validation and test are
+    # unchanged). The first N geometry ids are kept, so smaller sets are nested.
     max_train_geoms = cfg.data.get("max_train_geometries", None)
-    # Restrict TRAINING to an explicit set of geometry ids, read from a JSON list.
-    # `max_train_geometries` can only take the first N in sorted order, which cannot
-    # express "every deployment in a depth band". Validation and test are untouched,
-    # so the held-out pool stays identical across arms and the comparison is about
-    # what the model was trained on, nothing else.
+    # Optionally restrict training to the geometry ids listed in a JSON file.
     geom_file = cfg.data.get("train_geometry_ids", None)
     if geom_file:
         import json as _json
@@ -763,10 +662,8 @@ def main(cfg: DictConfig):
         train_ds.samples = [s for s in train_ds.samples if int(s.get("geometry_id", -1)) in keep_set]
         print(f"[{model_name}] capped training to {len(keep)} geometries: {keep}")
 
-    # Optionally cap the number of TRAINING trajectories (source paths). Composes
-    # with the geometry cap -> training = (first N layouts) x (first M paths).
-    # Keeps the first M distinct traj_ids (sorted) -> nested subsets. Needs data
-    # processed with traj_id (geometry / topology modes); no-op on older data.
+    # Optionally cap the number of training trajectories (first M trajectory
+    # ids); combines with the geometry cap.
     max_train_trajs = cfg.data.get("max_train_trajectories", None)
     if max_train_trajs:
         keep_t = sorted(set(int(s.get("traj_id", -1)) for s in train_ds.samples))[:int(max_train_trajs)]
@@ -774,11 +671,7 @@ def main(cfg: DictConfig):
         train_ds.samples = [s for s in train_ds.samples if int(s.get("traj_id", -1)) in keep_tset]
         print(f"[{model_name}] capped training to {len(keep_t)} trajectories")
 
-    # Optionally cap the VALIDATION trajectories too. Set this equal to
-    # max_train_trajectories to validate on the SAME source paths as training
-    # (pure layout-generalization, matching the original test) -- this removes the
-    # train/val path mismatch that inflates the late-epoch overfitting overshoot.
-    # Only the val pool is touched; the geometries (held-out layouts) are untouched.
+    # Optionally cap the validation trajectories as well.
     max_val_trajs = cfg.data.get("max_val_trajectories", None)
     if max_val_trajs:
         keep_v = sorted(set(int(s.get("traj_id", -1)) for s in val_ds.samples))[:int(max_val_trajs)]
@@ -790,9 +683,7 @@ def main(cfg: DictConfig):
     print(f"[{model_name}] feat_dim={feat_dim} out_dim={out_dim} ppt={ppt} "
           f"| train={len(train_ds)} val={len(val_ds)}")
 
-    # Region labels (interp / extrap) for held-out-geometry reporting. Present
-    # only for the geometry split (splits.json); absent for topology / within-
-    # geometry data, in which case the per-region breakdown is simply skipped.
+    # Region labels (interp / extrap) from splits.json, when available.
     region_by_gid = {}
     _splits_path = os.path.join(data_dir, "splits.json")
     if os.path.exists(_splits_path):
@@ -810,10 +701,8 @@ def main(cfg: DictConfig):
     online = arch.lower() == "online_ranp"
     ctx = cfg.data.context
     excl_ctx = ctx.get("exclude_from_target", True)
-    # Per-sample context batching (Option C): decouples context-size variability
-    # from batch size so a large GPU batch stays diverse. Needs the padding/target
-    # masks, which only the split models (cnp / anp / pfn) handle; block the
-    # indexed/online models loudly.
+    # Per-sample context sizes need the padding and target masks, which only the
+    # split models (cnp / anp / pfn) handle.
     MASKED_ARCHS = ("cnp", "anp", "pfn")
     per_sample = bool(ctx.get("per_sample", False))
     if per_sample and arch not in MASKED_ARCHS:
@@ -821,13 +710,10 @@ def main(cfg: DictConfig):
             f"data.context.per_sample=true is only supported for the split models "
             f"(cnp / anp / pfn and their spatial_* variants), not '{model_name}' (arch={arch}). "
             f"Set data.context.per_sample=false for this model.")
-    # CALIBRATION regime: context drawn from a DIFFERENT trajectory of the same
-    # (geometry, theta). Split models take it as a padded, masked context set.
-    # Indexed models (ranp / rcnp) take ONE sequence, the calibration points
-    # followed by the target transit (as eval_calibration.py feeds them), which
-    # needs one context size per batch, so per_sample is already blocked above.
-    # The online convention reveals fixes inside its own sequence and cannot
-    # express it. Block anything else loudly.
+    # Calibration regime: context from another trajectory of the same deployment.
+    # Split models take it as a padded context set; indexed models take one
+    # sequence (calibration points, then the target transit) and need one context
+    # size per batch. Not available for the online model.
     INDEXED_ARCHS = ("ranp", "rcnp")
     calibration = bool(ctx.get("calibration", False))
     indexed = arch in INDEXED_ARCHS
@@ -837,9 +723,8 @@ def main(cfg: DictConfig):
             f"(cnp / anp / pfn and their spatial_* variants) and the indexed ones "
             f"(ranp / rcnp), not '{model_name}' (arch={arch}). "
             f"Set data.context.calibration=false for this model.")
-    # Translation augmentation (train only): rigid per-sample 2-D shift of the
-    # scene. Only meaningful when the model actually SEES sensor_pos; for a flat
-    # model shifting the labels alone would just inject label noise.
+    # Translation augmentation (training only); only meaningful for models that
+    # receive the sensor positions.
     aug_m = float(cfg.data.get("trans_aug_m", 0.0) or 0.0)
     if aug_m > 0:
         _sc0 = cfg.model.get("spatial", None)
@@ -891,7 +776,7 @@ def main(cfg: DictConfig):
             ctx_sample_mode=ctx.sample_mode)
     else:
         if per_sample:
-            print(f"[{model_name}] per-sample context batching ON (Option C): "
+            print(f"[{model_name}] per-sample context batching on: "
                   f"per-sample context sizes + padding mask (train only; "
                   f"validation keeps the fixed ctx={ctx.eval}).")
         if calibration:
@@ -906,10 +791,8 @@ def main(cfg: DictConfig):
             exclude_ctx_from_target=excl_ctx, per_sample=per_sample,
             aug_m=aug_m, calibration=calibration, dataset=train_ds, indexed=indexed,
             rot_aug=rot_aug, sensor_drop=sensor_drop, pos_err=pos_err)
-        # Validation stays standard fixed-ctx (comparable across configs); the
-        # fixed_ctx path ignores per_sample by construction. Under CALIBRATION it
-        # also draws its context cross-trajectory (donors from the VAL pool), so
-        # the selection metric matches the regime we actually care about.
+        # Validation uses a fixed context size; in the calibration regime its
+        # context also comes from another trajectory (of the validation pool).
         val_collate = make_collate(
             ctx.min, ctx.max,
             fixed_ctx=ctx.eval, seed=seed + 1,
@@ -917,9 +800,8 @@ def main(cfg: DictConfig):
             exclude_ctx_from_target=excl_ctx,
             calibration=calibration, dataset=val_ds, indexed=indexed)
 
-    # pin_memory speeds host->device copies on CUDA (harmless/off on CPU).
-    # persistent_workers avoids re-forking workers every epoch when num_workers>0
-    # (and lets each worker's rng keep advancing across epochs -> more variety).
+    # pin_memory speeds up host-to-device copies on CUDA; persistent_workers keeps
+    # the worker processes (and their RNG state) across epochs.
     nw = int(cfg.training.num_workers)
     pin = (device.type == "cuda")
     persist = nw > 0
@@ -932,9 +814,8 @@ def main(cfg: DictConfig):
         num_workers=nw, collate_fn=val_collate,
         pin_memory=pin, persistent_workers=persist)
 
-    # ---- spatial encoder config (sensor-position-aware front end) -----------
-    # Enabled via model.spatial.enabled; n_sensors is inferred from the data
-    # (present only for the geometry split, which carries sensor_pos).
+    # ---- spatial front end ---------------------------------------------------
+    # Enabled with model.spatial.enabled; n_sensors is read from the data.
     spatial_cfg = None
     _sc = cfg.model.get("spatial", None)
     if _sc is not None and bool(_sc.get("enabled", False)):
@@ -973,18 +854,15 @@ def main(cfg: DictConfig):
         model.set_y_stats(y_mean, y_std)          # None (unnormalized) keeps 0 / 1
         print(f"[{model_name}] array-centered frame ON: labels relative to the "
               f"sensor centroid inside the model")
-    # Predictive-variance floor in PHYSICAL units^2 (opt-in, +model.var_floor_phys=...).
-    # Unset, the floor is 1e-3 in model units, i.e. 1e-3 * y_std^2 when y is
-    # normalized -- a std floor of 0.032 * y_std, which can dwarf the real error.
+    # Optional variance floor in physical units^2 (model.var_floor_phys); the
+    # default is 1e-3 in model units.
     var_floor_phys = cfg.model.get("var_floor_phys", None)
     if var_floor_phys is not None:
         floor = physical_var_floor(var_floor_phys, y_std if cfg.data.normalize_y else None)
         set_var_floor(model, floor)
         print(f"[{model_name}] variance floor {var_floor_phys:g} physical units^2 "
               f"-> {floor.numpy()} in model units")
-    # For the spatial encoder's 'standardize' acoustic mode, set the global
-    # acoustic mean/std from the train data (preserves cross-sensor amplitude
-    # ratios, unlike per-sensor LayerNorm).
+    # Global acoustic statistics for the spatial front end's 'standardize' mode.
     _se = getattr(model, "spatial_encoder", None)
     if _se is not None and getattr(_se, "norm_mode", "") == "standardize":
         xm, xs_ = compute_x_stats(train_ds)
@@ -1006,10 +884,8 @@ def main(cfg: DictConfig):
         f.write("epoch,train_loss,train_nll,train_kl,train_mae,"
                 "val_loss,val_nll,val_kl,val_mae,lr,sec\n")
 
-    # latent models use beta; deterministic ignore it (no KL). The effective KL
-    # weight is linearly warmed up from 0 to base_beta over kl_warmup_epochs (a
-    # constant beta from epoch 1 invites posterior collapse); kl_warmup_epochs=0
-    # disables the warmup (constant base_beta).
+    # KL weight for the latent models, warmed up linearly from 0 to base_beta
+    # over kl_warmup_epochs (0 disables the warmup).
     base_beta = cfg.training.beta if is_latent(arch) else 0.0
     kl_warmup = int(cfg.training.get("kl_warmup_epochs", 0))
 
@@ -1030,8 +906,7 @@ def main(cfg: DictConfig):
         fixed_idx = viz.select_fixed_trajectories(
             val_ds, int(viz_cfg.get("n_trajectories", 6)), seed=seed)
         if viz_cfg.get("plots", {}).get("degradation_scatter", False):
-            # The degradation scatter needs the train/val/test pools + region
-            # labels (from splits.json). Loaded once here, reused every log step.
+            # The degradation scatter needs the data pools and region labels.
             splits_path = os.path.join(data_dir, "splits.json")
             if os.path.exists(splits_path):
                 with open(splits_path) as f:
@@ -1051,10 +926,9 @@ def main(cfg: DictConfig):
 
     best_val_mae = float("inf")  # best.pt is selected by validation MAE (physical units)
     best_epoch = 0
-    # Early stopping: stop after `early_stop_patience` epochs with no val-MAE
-    # improvement (> min_delta). 0/null disables (train the full `epochs`).
-    # min_delta only gates the patience counter: best.pt follows every improvement
-    # (gating it too froze best.pt once errors fell to a few times min_delta).
+    # Early stopping after `early_stop_patience` epochs without a validation MAE
+    # improvement larger than early_stop_min_delta (0 or null disables it).
+    # best.pt is updated on every improvement.
     es_patience = int(cfg.training.get("early_stop_patience", 0) or 0)
     es_min_delta = float(cfg.training.get("early_stop_min_delta", 0.0))
     es_ref = float("inf")        # val MAE at the last patience reset
@@ -1073,9 +947,8 @@ def main(cfg: DictConfig):
         with open(log_path, "a") as f:
             f.write(f"{ep},{tr[0]:.6f},{tr[1]:.6f},{tr[4]:.6e},{tr[2]:.6f},"
                     f"{va[0]:.6f},{va[1]:.6f},{va[4]:.6e},{va[2]:.6f},{lr_now:.2e},{dt:.1f}\n")
-        # Break the (blended) val MAE down by held-out region so interp vs extrap
-        # are tracked separately, the blended number is dominated by the few
-        # extrapolation geometries. va[3] is {geometry_id: mae} from the val pass.
+        # Validation MAE by held-out region (interp / extrap), from the
+        # per-geometry MAE in va[3].
         region_maes = {}
         if region_by_gid:
             buckets = defaultdict(list)
@@ -1091,7 +964,7 @@ def main(cfg: DictConfig):
         # ---- best-checkpoint selection + early stopping (by val MAE) ----------
         if va[2] < best_val_mae:
             best_val_mae = va[2]; best_epoch = ep
-            # "model_name" stores the ARCH: eval_np_geometry.py dispatches on it.
+                # "model_name" stores the architecture, used to rebuild the model.
             t.save({"model": model.state_dict(), "config": ckpt_cfg,
                     "model_name": arch, "convention": conv,
                     "feat_dim": feat_dim, "out_dim": out_dim, "epoch": ep,

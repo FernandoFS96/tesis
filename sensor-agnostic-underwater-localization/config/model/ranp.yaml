@@ -1,26 +1,16 @@
-# Recurrent attentive latent NP (LSTM, posterior + KL) -> r_anp.LatentModel
+# Recurrent latent NP (r_anp.LatentModel).
 defaults:
-  - _rnn_base # shared RNN-family hyperparameters
+  - _rnn_base
   - _self_
 
 arch: ranp
 name: ranp
 
-# Correlated (x, y) output covariance. false = the original AXIS-ALIGNED
-# diagonal Gaussian (bit-identical, and adds no parameters, so old
-# checkpoints still load). true adds ONE extra output, the x-y correlation.
-# z stays independent: it is constant in this data (y_std[2] ~ 1e-6), so a
-# full 3x3 covariance would be singular.
+# Correlated (x, y) output covariance (false: diagonal Gaussian).
 full_cov: false
 
-# Feed-forward sublayer inside each attention block (x + FFN(LayerNorm(x)), 4x
-# inner, GELU). false = the original block, which has NO feed-forward stage at
-# all -- measured to cost ~74% of the gap to a real transformer backbone at
-# matched parameters on the 8000-layout layout-OOD task. Off by default: no
-# parameters are created and existing checkpoints load unchanged.
+# Feed-forward sublayer in each attention block.
 attn_ffn: false
 
-# How the latent encoder pools its points into q(z): attention | mean.
-# attention = the RANP's original learned softmax pooling over its RNN states.
-# The ANP uses mean (see anp.yaml).
+# Pooling of the latent encoder: attention | mean.
 latent_pooling: attention

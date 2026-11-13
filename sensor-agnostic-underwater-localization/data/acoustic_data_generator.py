@@ -7,13 +7,10 @@ import pickle
 import argparse
 from omegaconf import OmegaConf
 
-'''
-Use:
-    python acoustic_data_generator.py \
-        --n_traj 150 \
-        --snr 10 \
-        --rep 1
-
+'''Acoustic channel simulator: source trajectories, sensor layouts and the
+signals received at each sensor, with the statistical channel model of
+Qarabaqi and Stojanovic. Called by data/generate.py, with the parameters in
+config/data_pipeline.yaml.
 '''
 
 # Path to the data-pipeline config. This is loaded directly (no Hydra) because
@@ -30,9 +27,7 @@ def load_traj_config(path=None):
     return OmegaConf.load(path)
 
 def _fftconv(a, v, mode='full'):
-    """FFT-based convolution (scipy if available, else numpy direct). Used by the
-    matched-filter receiver path, where a direct O(N*M) correlate over a 1024-tap
-    probe would dominate generation time."""
+    """FFT convolution (scipy if available, otherwise numpy)."""
     try:
         from scipy.signal import fftconvolve
         return fftconvolve(a, v, mode=mode)
@@ -161,72 +156,60 @@ class channel():
         self.params['w0'] = np.pi / self.params['T']  # Rotation pulsation
 
     def generate_sensor_positions(self, traj, scale=1.10, min_span=50.0):
-        """
-        Genera posiciones de sensores adaptadas al tamaño de las trayectorias 'traj'
-        para las tres topologías: 'ellipsoidal', 'random' y 'aligned'.
+        """Sensor positions adapted to the extent of the trajectories `traj`, for
+        the 'ellipsoidal', 'random' and 'aligned' topologies.
 
-        Parámetros
-        ----------
-        traj : np.ndarray
-            Array (3, n_traj, ppt+1) con las trayectorias ya generadas.
-        scale : float
-            Factor >1 para dar un pequeño margen alrededor de las trayectorias.
-        min_span : float
-            Amplitud mínima (m) para evitar rangos demasiado pequeños.
+        traj: (3, n_traj, ppt+1) trajectories.
+        scale: factor > 1 that leaves a margin around the trajectories.
+        min_span: minimum extent in meters.
 
-        Devuelve
-        --------
-        r_posicion : np.ndarray de forma (3, n_sensors)
+        Returns the sensor positions, (3, n_sensors).
         """
         assert self.params is not None, "params must be initialized"
 
         n_sensors = self.params['n_sensors']
         hr0 = self.params['ci']['hr0']
 
-        # --- 1) Medidas robustas del "tamaño" de las trayectorias ---
+        # --- 1) robust extent of the trajectories ---
         xs = traj[0].ravel()
         ys = traj[1].ravel()
         if xs.size == 0:
             raise ValueError("Trajectories array is empty")
 
-        # Caja que contiene las trayectorias con percentiles robustos
+        # Bounding box from robust percentiles
         x_lo, x_hi = np.percentile(xs, [2.0, 98.0])
         y_lo, y_hi = np.percentile(ys, [2.0, 98.0])
 
-        # Centro y spans
+        # Center and spans
         cx = 0.5 * (x_lo + x_hi)
         cy = 0.5 * (y_lo + y_hi)
         span_x = max((x_hi - x_lo) * scale, min_span)
         span_y = max((y_hi - y_lo) * scale, min_span)
 
-        # Aseguramos aspecto similar al original de la elipse (b = a/2)
-        # Usaremos 'a' a partir del radio robusto r95
+        # Ellipse with semi-axes a and b = a/2, from the robust radius r95
         r = np.sqrt(xs**2 + ys**2)
         r95 = float(np.percentile(r, 95)) if r.size > 0 else 1.0
-        a = max(scale * r95, min_span / 2)     # semieje mayor ~ tamaño de la espiral
-        b = 0.5 * a                             # elipse "aplastada" (como antes)
+        a = max(scale * r95, min_span / 2)     # semi-major axis
+        b = 0.5 * a                             # flattened ellipse
 
-        # --- 2) Topologías ---
+        # --- 2) topologies ---
         if self.topology == 'ellipsoidal':
-            # Elipse centrada en (cx, cy) con semiejes a y b
+            # Ellipse centered at (cx, cy) with semi-axes a and b
             thetas = np.linspace(0.0, 2*np.pi, n_sensors, endpoint=False)
             x = cx + a * np.cos(thetas)
             y = cy + b * np.sin(thetas)
 
         elif self.topology == 'random':
-            # Dispersión uniforme dentro de una caja centrada en (cx, cy)
-            # Caja ligeramente rectangular como en tu código original (y la mitad que x)
+            # Uniform scatter in a box centered at (cx, cy), half as tall as wide
             max_x = 0.5 * span_x
             max_y = 0.5 * span_y
-            # Si quieres mantener la "mitad" en y, puedes forzar max_y = max_x/2
             max_y = max(max_y, min_span / 2.0)
-            rng = np.random.default_rng(10)  # reproducibilidad
+            rng = np.random.default_rng(10)  # reproducible
             x = rng.uniform(cx - max_x, cx + max_x, n_sensors)
             y = rng.uniform(cy - max_y, cy + max_y, n_sensors)
 
         elif self.topology == 'aligned':
-            # Alineados en x, centrados en cx, con y = cy
-            # Longitud total ≈ span_x; si quieres menos/mas largo, ajusta factor
+            # Aligned along x, centered at cx, with y = cy
             x = np.linspace(cx - 0.5*span_x, cx + 0.5*span_x, n_sensors)
             y = np.full(n_sensors, cy)
 
@@ -261,7 +244,7 @@ class channel():
             raise ValueError(f"Unknown trajectory generation method: {method}")
 
     def _generate_spiral_trajectories(self):
-        """Original outward-spiral trajectories.
+        """Outward-spiral trajectories.
 
         Parameters are read from the ``spiral`` block of the trajectory
         config (config/data_pipeline.yaml).
@@ -289,31 +272,14 @@ class channel():
         return traj
 
     def _generate_hermite_trajectories(self):
-        """Free-tangent piecewise-cubic Hermite trajectories.
+        """Piecewise cubic Hermite trajectories.
 
-        Each trajectory is built from ``n_segments`` cubic Hermite segments
-        joined with C1 continuity (matched position *and* tangent at every
-        knot, so the path is smooth in xy). Parameters are read from the
-        ``hermite`` block of config/data_pipeline.yaml.
-
-        Design notes
-        ------------
-        * The knot tangent *directions* form a slowly-turning sequence: the
-          first is uniform over all directions, and each subsequent one differs
-          from the previous by at most ``max_turn`` radians. This keeps the
-          cosine distance between consecutive tangents small, no sudden
-          turn-arounds, while still allowing the path to wander.
-        * Waypoints step along those same directions, so each segment leaves a
-          knot in its tangent direction (no cusps / overshoot).
-        * Tangent magnitudes are tied to the adjacent segment lengths
-          (Catmull-Rom-style tension scaling), so segment length controls speed
-          and the curve stays well-shaped. Speed therefore varies along the
-          trajectory, as it already does for the spiral.
-
-        Why this suits the context task: the first few points lie on the first
-        segment and reveal roughly the first knot/tangent, but the later
-        waypoints are sampled independently and stay hidden, so the first 5
-        context points do not determine the rest of the trajectory.
+        Each trajectory joins n_segments cubic Hermite segments with C1
+        continuity. The knot tangent directions follow a bounded random walk
+        (each turns by at most max_turn from the previous one), the waypoints
+        are placed along those directions, and the tangent magnitudes scale with
+        the adjacent segment lengths. Parameters come from the hermite block of
+        config/data_pipeline.yaml.
         """
         assert self.params is not None, "params must be initialized"
         n_traj = self.params['n_traj']
@@ -342,18 +308,10 @@ class channel():
 
         traj = np.zeros([3, n_traj, ppt + 1])
 
-        # --- optional SPEED CONTROL (null/absent -> legacy behaviour) ----------
-        # Without it the speed is whatever the sampled segment lengths imply
-        # (measured: mean 1.71 m/s, only 31% of steps in 2-5 m/s), which is slow
-        # for a crewed/uncrewed underwater vessel. With speed_min/speed_max set,
-        # each trajectory draws a target speed and is re-parameterised BY ARC
-        # LENGTH so it holds that speed exactly. Shape sampling is untouched, so
-        # only the scale (and hence the speed) changes.
-        #
-        # The step time is T_tot: acoustic_data_generator uses exactly that when
-        # it forms the vehicular Doppler term
-        # (v_t0 = (traj[t+1] - traj[t]) / T_tot), so realistic speeds here also
-        # mean a realistic Doppler in the simulated channel.
+        # --- optional speed control ------------------------------------------
+        # With speed_min / speed_max set, each trajectory draws a target speed
+        # and is re-parameterized by arc length to hold it. The time step is
+        # T_tot, the one used for the vehicular Doppler term.
         v_min = cfg.get('speed_min', None)
         v_max = cfg.get('speed_max', None)
         speed_ctrl = (v_min is not None) and (v_max is not None)
@@ -394,12 +352,9 @@ class channel():
 
             # --- evaluate the piecewise-Hermite curve ---
             if speed_ctrl:
-                # Sample the curve densely, measure its arc length, rescale the
-                # SHAPE about its start point so the total length equals
-                # v * dt_step * ppt, then resample at equal arc-length steps.
-                # Scaling about P[0] is exact: P and M scale linearly, so the
-                # whole curve (and its arc length) scales by the same factor
-                # while the start point stays put.
+                # Sample densely, measure the arc length, scale the shape about
+                # its start point to the target length, then resample at equal
+                # arc-length steps.
                 t_dense = np.linspace(0.0, K, max(2000, 40 * (ppt + 1)))
                 sd = np.clip(np.floor(t_dense).astype(int), 0, K - 1)
                 xyd = hermite_segment(P[sd], M[sd], P[sd + 1], M[sd + 1],
@@ -424,19 +379,19 @@ class channel():
         return traj
 
     def obtain_h(self):
-        # Generar (o cargar) trayectorias
+        # Generate (or load) the trajectories
         assert self.params is not None, "params must be initialized"
         self.traj = self.generate_trajectories()
     
-        # Generar sensores adaptados al tamaño real de las trayectorias
+        # Sensor positions adapted to the trajectories
         self.r_posicion = self.generate_sensor_positions(self.traj, scale=0.6, min_span=20.0)
            
         # Process values for each pair (sensor, trajectory)
         def process_sensor(ise):
             assert self.params is not None, "params must be initialized"
             import scipy.signal as signal
-            # Opt-in: keep the absolute time-of-flight so inter-sensor TDOA
-            # survives into the features (default False == original behaviour).
+            # Optional: keep the absolute time of flight, so the delay
+            # differences between sensors are preserved (off by default).
             abs_delay = bool(self.params.get('absolute_delay', False))
             Lf = len(range_m(self.params['ci']['fmin'], self.params['ci']['fmax'], self.params['ci']['df']))
             h_val = np.zeros([self.params['n_traj'], self.params['ppt'], Lf],
@@ -448,7 +403,6 @@ class channel():
                 assert self.traj is not None, "trajectories (traj) must be initialized"
                 assert self.r_posicion is not None, "sensor positions (r_posicion) must be initialized"
                 for ptx in range(self.params['ppt']):
-                    # [Rest of the processing code remains the same as original]
                     d0 = np.linalg.norm(self.r_posicion[:, ise] - self.traj[:, itx, ptx])
                     
                     # Obtain frequency parameters
@@ -606,7 +560,7 @@ class channel():
                                 path = np.append(path, np.logical_not(path[-1]).astype(int))
 
                             return l, tau, Gamma, theta, ns, nb, hp
-                        # FIND LARGE SCALE MODEL PARAMETERS
+                        # Large-scale model parameters
                         lmean, taumean, Gamma, theta, ns, nb, hp = mpgeometry(h, h - ht, h - hr, d, fc,
                                                                               self.params['ci']['k'],
                                                                               self.params['ci']['cut'],
@@ -695,24 +649,11 @@ class channel():
                             H = H + hp[p] * np.tile(np.exp(-1j * 2 * np.pi * f_vec * taumean[p]), [1, Lt]) * gamma
                         H = np.tile(H0, [1, Lt]) * H
                         if abs_delay:
-                            # Restore the ABSOLUTE propagation delay of the direct
-                            # path, as a common phase ramp over the whole response.
-                            #
-                            # WHY: mpgeometry returns delays RELATIVE to each
-                            # sensor's own direct arrival (tau = dell - dell[0], and
-                            # taumean[0] == 0). That independently zeroes EVERY
-                            # sensor's time origin, so the inter-sensor time
-                            # differences (TDOA) -- the quantity array geometry is
-                            # actually encoded in -- are deleted before the features
-                            # are ever formed. Applying the direct-path delay here
-                            # shifts the finished impulse response as a whole and
-                            # leaves its relative multipath structure untouched.
-                            #
-                            # AMBIGUITY: the response is sampled at df over the band,
-                            # so delays are unambiguous only while max(tau) < 1/df
-                            # (c/df in range). With df=50 Hz that is 30 m and this
-                            # flag is useless; pick df from the longest range you
-                            # need (see config/data_pipeline.yaml channel.df).
+                            # Restore the absolute delay of the direct path as a
+                            # common phase ramp. Path delays are relative to each
+                            # sensor's direct arrival, which removes the delay
+                            # differences between sensors. Delays are unambiguous
+                            # only while max(tau) < 1/df.
                             H = H * np.exp(-1j * 2 * np.pi * f_vec
                                            * (lmean[0] / self.params['ci']['c']))
                         H_LS[:, LScount * Lt: (LScount + 1) * Lt] = H.T
@@ -731,7 +672,6 @@ class channel():
         return np.array(out).T  # tau x t x traj x sensor
 
     def filter(self, n, snr=0, nt=10, multiprocessing=True, specific=None, signal_type='sinusoid', rep=1):
-        # [Keep the original filter method unchanged]
         assert self.params is not None, "params must be initialized"
         print(f'Filtering for topology: {self.topology}...')
         # Obtain trajs
@@ -748,7 +688,7 @@ class channel():
         def process_sensor(ise):
             assert self.params is not None, "params must be initialized"
             assert self.h is not None, "channel matrix (h) must be initialized"
-            # Opt-in receiver pulse compression (default False == legacy path).
+            # Optional matched filtering at the receiver.
             mfilt = bool(self.params.get('matched_filter', False))
             h = np.roll(self.h, 50, axis=0)
             s = np.zeros([n, self.params['ppt']])
@@ -767,18 +707,8 @@ class channel():
                     x[:, ipt] = (1 + self.params['m'] * np.cos(self.params['w0'] * np.arange(n))) * s[:, ipt]
                     x[:, ipt] = x[:, ipt] / np.sqrt(np.sum(np.power(x[:, ipt], 2)))
                 elif signal_type == 'chirp':
-                    # Broadband linear-FM sweep (the active-sonar probe).
-                    #
-                    # WHY: a single tone probes the channel at ONE frequency, so the
-                    # filtered record collapses to (amplitude, phase) -- measured
-                    # effective rank 2 of 201 -- and carries no delay information;
-                    # amplitude alone correlates with range at r = -0.08 because
-                    # multipath destroys the spreading law. A chirp excites the whole
-                    # band, so the record retains the impulse-response structure and
-                    # therefore the time-of-arrival.
-                    #
-                    # Band is in NORMALISED frequency (cycles/sample) of this
-                    # abstract probe-signal domain, like w0 for 'sinusoid'.
+                    # Linear frequency sweep; the band is in normalized
+                    # frequency (cycles/sample).
                     f0, f1 = self.params.get('chirp_band', (0.02, 0.45))
                     kk = np.arange(n)
                     x[:, ipt] = np.cos(2 * np.pi * (f0 * kk
@@ -794,17 +724,10 @@ class channel():
                     raise RuntimeError('Too low number of samples')
                 y = np.zeros([h.shape[0], self.params['ppt']])
                 if mfilt:
-                    # ---- receiver-side PULSE COMPRESSION (matched filter) -------
-                    # A broadband probe only reveals time-of-arrival after being
-                    # correlated with the transmitted waveform -- that is what a
-                    # sonar receiver does. Two details matter and both were wrong
-                    # in the legacy path:
-                    #   * use the FULL convolution: the legacy 'valid'[0:tau] window
-                    #     truncates away the region the delay lives in, which
-                    #     destroys the alignment (measured: corr 0.96 -> -0.04).
-                    #   * window the correlation at the delay origin, index n-1,
-                    #     so output tap k corresponds to delay k.
-                    # Noise is added BEFORE compression (it enters at the receiver).
+                    # ---- matched filter (pulse compression) ------------------
+                    # Full correlation with the transmitted waveform, windowed at
+                    # the delay origin (index n-1) so output tap k is delay k.
+                    # Noise is added before compression.
                     Lh = h.shape[0]
                     for ptx in range(self.params['ppt']):
                         yf = np.real(np.convolve(x[:, ptx], h[:, ptx, itx, ise], 'full'))
@@ -848,7 +771,6 @@ def generate_batch_of_trajs(channel, signal_type, n=1024, snr=0, rep=1):
 
 
 def generate_params(options=None):
-    # [Keep the original generate_params function unchanged]
     channel_info = {'h0': 50,  # Surface height(depth)[m]
                     'ht0': 50,  # TX height [m]
                     'hr0': 1,  # RX height [m]
@@ -920,12 +842,9 @@ def generate_params(options=None):
 
 def plot_validation(channels_dict, option_idx=0, n_samples=10, seed=None,
                     validation_dir='data/validation'):
-    """
-    Genera n_samples imágenes de comparación de topologías
-    para trayectorias elegidas aleatoriamente.
-    Cada imagen muestra la MISMA trayectoria en las 3 topologías.
-    Se muestra el numero de cada sensor y se marcan claramente el punto de inicio (verde) y el punto final (negro) de la trayectoria.
-    """
+    """Save n_samples figures comparing the topologies on randomly chosen
+    trajectories. Each figure shows the same trajectory with the three sensor
+    layouts, the sensor numbers, and the start (green) and end (black) points."""
     import os
     import numpy as np
     import matplotlib.pyplot as plt
@@ -933,41 +852,40 @@ def plot_validation(channels_dict, option_idx=0, n_samples=10, seed=None,
     topologies = ['ellipsoidal', 'random', 'aligned']
     titles = ['Ellipsoidal Topology', 'Random Topology', 'Aligned Topology']
 
-    # cuántas trayectorias hay en total (lo tomamos de la primera topología)
+    # Total number of trajectories (from the first topology)
     n_traj = channels_dict[topologies[0]].traj.shape[1]
 
-    # generador aleatorio
+    # Random generator
     rng = np.random.default_rng(seed)
-    # elegimos hasta n_samples trayectorias distintas
+    # Up to n_samples distinct trajectories
     chosen_trajs = rng.choice(n_traj, size=min(n_samples, n_traj), replace=False)
 
-    # carpeta base (pasada desde process(): <out_dir>/<method>/validation)
+    # Base folder (<out_dir>/<method>/validation, passed from process())
     plot_dir = validation_dir
-    # NUEVA subcarpeta
+    # Subfolder for these figures
     samples_dir = os.path.join(plot_dir, f'random_trajectories_option_{option_idx}')
     os.makedirs(samples_dir, exist_ok=True)
 
-    # Para que todas las imágenes tengan el mismo encuadre,
-    # primero calculamos los límites globales UNA VEZ
+    # Global limits, so all figures share the same framing
     x_min, x_max = float('inf'), float('-inf')
     y_min, y_max = float('inf'), float('-inf')
     for topology in topologies:
         c = channels_dict[topology]
-        traj_all = c.traj  # shape: (2, n_traj, T) o similar
+        traj_all = c.traj  # shape (2, n_traj, T)
         for traj_idx in chosen_trajs:
             traj = traj_all[:, traj_idx, :]
             x_min = min(x_min, traj[0, :].min())
             x_max = max(x_max, traj[0, :].max())
             y_min = min(y_min, traj[1, :].min())
             y_max = max(y_max, traj[1, :].max())
-            # también miramos sensores
+            # include the sensors
             sensors = c.r_posicion
             x_min = min(x_min, sensors[0, :].min())
             x_max = max(x_max, sensors[0, :].max())
             y_min = min(y_min, sensors[1, :].min())
             y_max = max(y_max, sensors[1, :].max())
 
-    # ahora sí: generamos una figura por trayectoria elegida
+    # One figure per selected trajectory
     for k, trajectory_idx in enumerate(chosen_trajs):
         fig, axes = plt.subplots(1, 3, figsize=(20, 10))
 
@@ -976,18 +894,17 @@ def plot_validation(channels_dict, option_idx=0, n_samples=10, seed=None,
             traj = c.traj[:, trajectory_idx, :]
             sensors = c.r_posicion
 
-            # trayectoria
+            # trajectory
             ax.plot(traj[0, :], traj[1, :], 'b-', linewidth=3)
-            # punto inicio
+            # start point
             ax.plot(traj[0, 0], traj[1, 0], 'go', markersize=17)
-            # punto final
+            # end point
             ax.plot(traj[0, -1], traj[1, -1], 'ko', markersize=17)
-            # sensores junto con su número
+            # sensors with their numbers
             for i, (x, y) in enumerate(zip(sensors[0, :], sensors[1, :])):
                 ax.text(x, y, str(i), fontsize=15, ha='center', va='center', color='white', weight='bold')
                 ax.plot(x, y, 'ro', markeredgecolor='black', markersize=17)
 
-            #ax.set_title(f"{title}\n(traj {trajectory_idx})", fontsize=20)
             ax.set_xlim([x_min, x_max])
             ax.set_ylim([y_min, y_max])
             ax.set_aspect('equal', adjustable='box')
@@ -1003,7 +920,7 @@ def plot_validation(channels_dict, option_idx=0, n_samples=10, seed=None,
 
         plt.tight_layout()
 
-        # nombre de la imagen
+        # image file name
         out_path = os.path.join(
             samples_dir,
             f'topology_comparison_option_{option_idx}_traj_{int(trajectory_idx):03d}.png'
@@ -1011,66 +928,54 @@ def plot_validation(channels_dict, option_idx=0, n_samples=10, seed=None,
         plt.savefig(out_path, dpi=300, bbox_inches='tight')
         plt.close(fig)
 
-    print(f"Se han guardado {len(chosen_trajs)} imágenes en: {samples_dir}")
+    print(f"Saved {len(chosen_trajs)} figures to {samples_dir}")
 
 def save_velocity_histogram(traj, T_tot, bins=40, option_idx=None,
                             validation_dir='data/validation'):
-    """
-    Calcula el histograma de velocidades a partir de las trayectorias generadas
-    y guarda la figura en el directorio actual.
+    """Histogram of the per-step speeds of the generated trajectories, saved as
+    a figure.
 
-    Parámetros
-    ----------
-    traj : np.ndarray
-        Array de trayectorias con forma (3, n_traj, ppt+1).
-    T_tot : float
-        Tiempo T_tot usado actualmente en el canal para la velocidad "vehicular".
-        IMPORTANTE: aquí se interpreta como tiempo por salto (tal y como está en tu código).
-    bins : int
-        Número de bins del histograma.
-    filename : str
-        Nombre del archivo de imagen a guardar (PNG).
+    traj: (3, n_traj, ppt+1) trajectories.
+    T_tot: time per step, as used for the vehicular Doppler term.
+    bins: number of histogram bins.
+    filename: output PNG name.
 
-    Retorna
-    -------
-    dict con estadísticas básicas: {'mean': ..., 'min': ..., 'max': ..., 'std': ...}
+    Returns a dict with 'mean', 'min', 'max' and 'std'.
     """
     assert traj.ndim == 3 and traj.shape[0] == 3, "traj debe ser de forma (3, n_traj, ppt+1)"
-    # Diferencias entre puntos consecutivos (componentes x,y,z)
+    # Differences between consecutive points
     diffs = np.diff(traj, axis=2)                 # -> (3, n_traj, ppt)
-    # Módulo del desplazamiento por salto
+    # Step lengths
     step_dists = np.linalg.norm(diffs, axis=0)    # -> (n_traj, ppt)
-    # Velocidades por salto con la semántica actual: v = Δs / T_tot
+    # Speed per step: v = ds / T_tot
     speeds = step_dists / float(T_tot)            # -> (n_traj, ppt)
     speeds_flat = speeds.ravel()
 
-    # Estadísticas
+    # Statistics
     v_mean = float(np.mean(speeds_flat))
     v_min  = float(np.min(speeds_flat))
     v_max  = float(np.max(speeds_flat))
     v_std  = float(np.std(speeds_flat))
 
-    # Figura
+    # Figure
     plt.figure(figsize=(8, 5))
     plt.hist(speeds_flat, bins=bins, edgecolor="k")
     plt.xlabel("Velocidad por salto (m/s)")
     plt.ylabel("Frecuencia")
     plt.title("Histograma de velocidades (Δs / T_tot)")
-    # Texto con stats
+    # Statistics text
     txt = f"mean={v_mean:.2f} m/s\nstd={v_std:.2f} m/s\nmin={v_min:.2f} m/s\nmax={v_max:.2f} m/s"
     plt.gca().text(0.98, 0.95, txt, ha="right", va="top", transform=plt.gca().transAxes,
                    bbox=dict(boxstyle="round", facecolor="white", alpha=0.8, lw=0.5))
     plt.tight_layout()
 
-    # Guardado dentro de la carpeta de la tarea/método (pasada desde process()).
+    # Saved inside the task/method folder (passed from process()).
     plot_dir = validation_dir
     filename=f"velocity_hist_theta_{option_idx}.png"
     os.makedirs(plot_dir, exist_ok=True)
     plt.savefig(f'{plot_dir}/{filename}', dpi=300, bbox_inches='tight')
     plt.close()
 
-    #print(f"Histograma guardado en: {base_dir}/validation/{filename}")
-    #print(f"Velocidad media: {v_mean:.3f} m/s | std: {v_std:.3f} m/s | min: {v_min:.3f} m/s | max: {v_max:.3f} m/s")
 
     return {"mean": v_mean, "std": v_std, "min": v_min, "max": v_max}
 
@@ -1090,10 +995,9 @@ def process(channel_options, snr, rep, nop=-1, n_traj_override=None,
             channel_info/sensor_positions_<theta>.npy   (3, n_sensors)
             channel_info/trajs_<theta>.npy        (3, n_traj, ppt+1) full traj
 
-    With ``variant_subdir=False`` the ``<method>`` level is omitted (legacy
-    flat layout). The ``channel_info`` copies let the QC / velocity scripts
-    verify the sensor layouts and recover per-jump velocity (needs the ppt+1
-    endpoint) without re-running the physics.
+    With ``variant_subdir=False`` the ``<method>`` level is omitted. The
+    ``channel_info`` copies keep the sensor layout and the full (ppt+1)
+    trajectories, so both can be inspected without re-running the physics.
     """
     if topologies is None:
         topologies = ['ellipsoidal', 'random', 'aligned']
@@ -1143,21 +1047,14 @@ def process(channel_options, snr, rep, nop=-1, n_traj_override=None,
             # Store for validation plotting
             channels_for_validation[topology] = c
             
-            # Generate the filtered features + target coordinates. We pass an
-            # explicit canonical ordering via `specific=` so the trajectory rows
-            # (and their matched features) are stored in the SAME order for every
-            # topology. Without it, channel.filter() draws a RANDOM trajectory
-            # ordering (np.random.choice over n_traj) per call, which would store
-            # each topology's trajectories in a different row order, breaking
-            # row-alignment across geometries (trajectory i in 'ellipsoidal' would
-            # not correspond to trajectory i in 'random') even though they share
-            # the same underlying ensemble.
+            # Pass a fixed trajectory order (`specific=`), so trajectory i is
+            # the same in every topology; filter() would otherwise shuffle them.
             n_traj_c = c.params['n_traj']
             canonical = list(range(n_traj_c))
             data, trjs = c.filter(1024, snr=snr, nt=n_traj_c, signal_type='sinusoid',
                                   rep=rep, specific=canonical)
             
-            # Save the generated data. Layout groups by METHOD first, then
+            # Save the generated data. Layout groups by method first, then
             # topology, then channel option (so spiral / hermite datasets never
             # overwrite each other):
             #   <out_dir>/<method>/<topology>/channel_option_<theta>/...
@@ -1177,13 +1074,13 @@ def process(channel_options, snr, rep, nop=-1, n_traj_override=None,
             assert trjs is not None, "Trajectories are None"
             np.save(f'{topology_dir}/trajectory/trajectories.npy', trjs)
             np.save(f'{topology_dir}/filtered_data/filtered_data.npy', data)
-            # Sensor layout + full (ppt+1) trajectory for the QC / velocity tools.
+            # Sensor layout and full (ppt+1) trajectories, for inspection.
             np.save(f'{info_dir}/sensor_positions_{option}.npy', c.r_posicion)
             np.save(f'{info_dir}/trajs_{option}.npy', c.traj)
 
             print(f" Data saved for topology: {topology}")
         
-        # Validation artifacts live INSIDE the task/method folder so they are not
+        # Validation artifacts live inside the task/method folder so they are not
         # overwritten when generating a different trajectory method:
         #   <out_dir>/<method>/validation/   (or <out_dir>/validation/ when flat)
         validation_dir = (f'{out_dir}/{method}/validation' if variant_subdir
@@ -1207,7 +1104,7 @@ def parse_float_list(s):
     return [float(p) for p in parts]
 
 def run_topology_task(cfg):
-    """Generate the TOPOLOGY-task datasets from a unified config object
+    """Generate the topology-task datasets from a unified config object
     (config/data_pipeline.yaml). Reads the shared ``channel`` block, the
     ``topology_task`` block and ``method``; writes one dataset per topology
     (all sharing the same trajectories + channels) under

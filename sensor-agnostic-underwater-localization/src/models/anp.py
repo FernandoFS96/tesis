@@ -1,15 +1,10 @@
-"""src/models/anp.py -- attentive neural processes and their shared building blocks.
+"""Attentive neural processes and the building blocks shared by all models.
 
-Models: ``DeterministicModel`` (attentive CNP) and ``LatentModel`` (ANP), both
-with the optional sensor-position-aware ``SpatialEncoder`` front end.
+DeterministicModel (attentive CNP) and LatentModel (ANP), each with an optional
+spatial front end that encodes the sensor positions. r_anp.py, online_r_anp.py
+and pfn.py reuse the layers, encoders, decoders and loss helpers defined here.
 
-This module is also the single home of the blocks the other model files reuse
-(r_anp.py, online_r_anp.py, pfn.py): ``Linear``, ``Attention``, the encoders and
-decoders, and the loss helpers ``gaussian_nll`` / ``gaussian_kl`` /
-``reduce_nll``. Change a block here and every model picks it up.
-
-Mask convention everywhere: a bool mask is True for a REAL point and False for a
-padded slot.
+Masks are boolean: True for a real point, False for padding.
 """
 
 import math
@@ -32,20 +27,10 @@ class Linear(nn.Module):
 def gaussian_nll(mean, var, rho, y):
     """Per-element Gaussian NLL, shape (..., D).
 
-    rho is None -> exactly the independent diagonal Gaussian these models have
-    always used (bit-identical, not merely equivalent).
-
-    rho given -> the FIRST TWO output dims (x, y) form a CORRELATED 2x2 block and
-    any remaining dims stay independent. z is deliberately excluded: it is
-    constant in this data (y_std[2] ~ 1e-6), so a full 3x3 covariance would be
-    singular. Measured motivation: the true posterior on a random array has
-    |corr| ~ 0.71, and the best possible AXIS-ALIGNED Gaussian is 0.74 nats from
-    it while a correlated one is 0.15 -- a gap no amount of training can close
-    with a diagonal head.
-
-    The joint (x, y) term is split evenly across the two slots so the returned
-    shape, and therefore every existing .mean() / target-mask reduction
-    downstream, is unchanged. Only the SUM has meaning, and it is correct.
+    Without rho the dimensions are independent. With rho, the first two
+    dimensions (x, y) form a correlated 2x2 block and the rest stay independent;
+    z is left out because it is constant in this data. The joint (x, y) term is
+    split evenly across the two slots, so the output shape is unchanged.
     """
     d = y - mean
     if rho is None:
@@ -83,19 +68,17 @@ def reduce_nll(nll, target_mask=None):
     return (nll * m).sum() / denom
 
 
-# Every decoder head predicts var = var_floor + softplus(.). The floor lives in the
-# units the model predicts in, so with normalized targets (y / y_std) the default
-# 1e-3 becomes 1e-3 * y_std^2 in physical units: with y_std = 52 m that is a 1.6 m
-# std floor, far above a well-trained model's error, which makes it underconfident.
-# physical_var_floor + set_var_floor express the floor in physical units instead.
+# Decoder heads predict var = var_floor + softplus(.), with the floor in model
+# units. With normalized targets the same floor means a different physical floor
+# for each target scale; physical_var_floor and set_var_floor set it in physical
+# units instead.
 DEFAULT_VAR_FLOOR = 1e-3
 
 
 def physical_var_floor(var_floor_phys, y_std=None, cap=DEFAULT_VAR_FLOOR):
-    """Per-output-dim floor, in model units, for a floor var_floor_phys given in
-    physical units^2. y_std: the per-dim target scale when targets are normalized
-    (None = the model predicts physical units). Never above `cap` (the default),
-    so a degenerate near-constant dim (y_std ~ 1e-6) keeps the default floor."""
+    """Per-dimension floor in model units for a floor given in physical units^2.
+    y_std is the target scale when targets are normalized (None otherwise). The
+    result is capped at `cap`, so near-constant dimensions keep the default."""
     if y_std is None:
         return t.as_tensor(float(var_floor_phys), dtype=t.float32)
     ys = t.as_tensor(y_std, dtype=t.float32)
@@ -135,7 +118,7 @@ class LatentEncoder(nn.Module):
         self.mu = Linear(num_hidden, num_latent)
         self.log_var = Linear(num_hidden, num_latent)
         if pooling == "attention":
-            # Plain nn.Linear named 'pool_attn': existing RANP checkpoints use this key.
+            # A plain Linear named pool_attn, for checkpoint compatibility.
             self.pool_attn = nn.Linear(num_hidden, 1)
 
     def _pool(self, h, mask):
@@ -179,8 +162,7 @@ class DeterministicEncoder(nn.Module):
         self.target_projection = Linear(input_dim, num_hidden)
 
     def forward(self, context_x, context_y, target_x, context_mask=None):
-        # context_mask: optional bool (B, n_ctx), True = real context point (else
-        # a padded slot to be ignored). Lets a batch hold per-sample context sizes.
+        # context_mask: optional bool (B, n_ctx), True for real context points.
         encoder_input = t.cat([context_x, context_y], dim=-1)
         encoder_input = self.input_projection(encoder_input)
 
@@ -203,18 +185,15 @@ class Decoder(nn.Module):
         super(Decoder, self).__init__()
         self.target_projection = Linear(input_dim, num_hidden)
         self.linears = nn.ModuleList([Linear(num_hidden * 3, num_hidden * 3, w_init='relu') for _ in range(3)])
-        # Per-layer LayerNorm + dropout, matching the CNP's DeterministicDecoder
-        # (and the RANP decoder in r_anp.py) so ANP-vs-CNP comparisons differ in
-        # the latent path only, not in decoder regularization.
+        # Same LayerNorm + dropout as the deterministic decoder, so the latent
+        # and deterministic models differ only in the latent path.
         self.norms = nn.ModuleList([nn.LayerNorm(num_hidden * 3) for _ in range(3)])
         self.dropout = nn.Dropout(p=dropout)
         self.mean_projection = Linear(num_hidden*3, output_dim)
         self.log_var_projection = Linear(num_hidden*3, output_dim)
-        # x-y correlation; absent entirely when full_cov=False, so the
-        # state_dict is unchanged and old checkpoints still load.
+        # x-y correlation head, created only when full_cov=True.
         self.rho_projection = Linear(num_hidden*3, 1) if full_cov else None
-        # Predictive-variance floor, in the units the model predicts in (see
-        # set_var_floor). Non-persistent: not in the state_dict.
+        # Variance floor in model units (see set_var_floor), not saved.
         self.register_buffer("var_floor", t.tensor(DEFAULT_VAR_FLOOR), persistent=False)
 
 
@@ -244,7 +223,7 @@ class MultiheadAttention(nn.Module):
         query:      (B', Lq, d)
         attn_mask:  optional bool (B', Lq, Lk), True = attend (else masked out).
         """
-        # SDPA apply scale 1/sqrt(d) internally and can use optimized kernels
+        # SDPA applies the 1/sqrt(d) scaling internally.
         dropout_p = self.attn_dropout.p if self.training else 0.0
 
         # scaled_dot_product_attention expects (query, key, value)
@@ -255,7 +234,7 @@ class MultiheadAttention(nn.Module):
             is_causal=False
         )
 
-        # For max perf, SDPA does not return attention weights.
+        # SDPA does not return attention weights.
         attn_weights = None
         return out, attn_weights
 
@@ -263,23 +242,10 @@ class MultiheadAttention(nn.Module):
 class Attention(nn.Module):
     """Attention sublayer, optionally followed by a feed-forward sublayer.
 
-    ``ffn=False`` (default) is the ORIGINAL block, bit-identical: attention,
-    concat-with-residual, linear, residual add, LayerNorm -- and no feed-forward
-    stage at all. That omission is measurable: on the 8000-layout layout-OOD task
-    this block reaches val 12.47 / train 21.88 where a standard pre-LN transformer
-    block of the same width reaches 8.28 / 11.02, and a capacity-matched
-    comparison attributed ~74% of that gap to architecture rather than size. The
-    missing piece is the per-token nonlinearity below.
-
-    ``ffn=True`` appends the standard sublayer -- ``x + FFN(LayerNorm(x))`` with a
-    4x inner expansion and GELU -- leaving the attention path untouched. It is
-    added AFTER the existing LayerNorm as a residual branch, so with the new
-    weights at their initialisation the block still computes very nearly the
-    original function and training starts from a comparable point.
-
-    Gated off by default so every existing config, checkpoint and result is
-    unaffected: when ``ffn=False`` no parameters are created and the state_dict
-    keys are unchanged.
+    With ffn=False the block is attention, concatenation with the residual, a
+    linear layer, a residual add and LayerNorm. ffn=True appends a standard
+    x + FFN(LayerNorm(x)) sublayer (4x expansion, GELU) after the LayerNorm; its
+    parameters are only created when ffn=True.
     """
 
     def __init__(self, num_hidden, h=4, dropout=0.1, ffn=False, ffn_mult=4):
@@ -348,13 +314,11 @@ class Attention(nn.Module):
 # Spatial (sensor-position-aware) front-end encoder
 # =========================================================================== #
 class FourierPositionEncoding(nn.Module):
-    """Map a low-dim physical position to a higher-dim embedding via sinusoids at
-    several spatial wavelengths (à la NeRF / PEACH). Wavelengths are in PHYSICAL
-    metres (log-spaced over [min_wavelength, max_wavelength]) so positions can be
-    fed in their absolute frame, do NOT centre/normalise per-geometry, or the
-    sensor-DISPLACEMENT signal we are trying to encode is erased.
+    """Sinusoidal encoding of a position at log-spaced wavelengths in meters.
+    Positions are encoded in their absolute frame, so the encoding keeps where
+    the array is.
 
-    Output dim = in_dim * 2 * n_bands (sin & cos per band per coordinate)."""
+    Output dim = in_dim * 2 * n_bands (sin and cos per band and coordinate)."""
 
     def __init__(self, n_bands=8, min_wavelength=10.0, max_wavelength=1000.0, in_dim=2):
         super().__init__()
@@ -373,28 +337,23 @@ class FourierPositionEncoding(nn.Module):
 
 
 class SpatialEncoder(nn.Module):
-    """Sensor-position-aware front end. Turns each trajectory point's flat
-    ``feat_dim = tau * n_sensors`` acoustic vector into a per-point ``num_hidden``
-    embedding that is *permutation-equivariant over sensors* and tagged with each
-    sensor's physical position, so a displaced layout is a new set of
-    (position, measurement) pairs rather than a scrambled vector.
+    """Spatial front end. Turns each point's flat acoustic vector
+    (feat_dim = tau * n_sensors) into a num_hidden embedding that is equivariant
+    to the order of the sensors and carries each sensor's position.
 
-    Pipeline (tokenize=True): per-sensor tokens -> concat Fourier position ->
-    shared projection -> [self-attention across sensors] -> pool -> per-point vec.
+    Pipeline (tokenize=True): one token per sensor, concatenated with a Fourier
+    encoding of its position, a shared projection, self-attention across the
+    sensors and pooling.
 
-    Flags expose the ablation ladder:
-      tokenize      False -> keep the flat vector, only (optionally) append a
-                             flattened position embedding, then project (the
-                             "does it just need position?" control, NOT
-                             permutation invariant).
-      use_position  add Fourier position features (else pure acoustics).
-      use_attention cross-sensor self-attention (else Deep-Sets pool only).
-      pooling       'attention' (learned query) | 'mean'.
+    Ablation flags:
+      tokenize       False keeps the flat vector (optionally with all sensor
+                     positions appended) and projects it.
+      use_position   add the Fourier position features.
+      use_attention  self-attention across sensors (else pooling only).
+      pooling        'attention' (learned query) or 'mean'.
 
-    IMPORTANT reshape: the flat vector is tau-major / sensor-minor
-    (flat[k] = feature(tau = k // n_sensors, sensor = k % n_sensors)), so
-    ``x.view(..., tau, n_sensors)`` then move the sensor axis. A naive
-    ``view(..., n_sensors, tau)`` would mix sensors and silently break everything.
+    The flat vector is tau-major / sensor-minor, so it is reshaped to
+    (..., tau, n_sensors) before the sensor axis is moved.
     """
 
     def __init__(self, feat_dim, n_sensors, num_hidden, *, tokenize=True,
@@ -420,14 +379,11 @@ class SpatialEncoder(nn.Module):
                         if use_position else None)
         pos_out = self.pos_enc.out_dim if use_position else 0
 
-        # CRITICAL: raw acoustics have std ~5e-3 vs ~0.7 for the Fourier position
-        # features, so without balancing them the position swamps the token and
-        # the model collapses to constant prediction. Modes:
-        #   layernorm   -- per-sensor LayerNorm; unit-scales each spectrum but
-        #                  DESTROYS cross-sensor amplitude ratios (a range cue).
-        #   standardize -- divide by ONE global std (set from train data); keeps
-        #                  the relative amplitudes across sensors/bins/points.
-        #   none        -- no balancing (collapses; ablation only).
+        # Raw acoustics are on a much smaller scale than the Fourier features
+        # (std ~5e-3 vs ~0.7), so they are rescaled first:
+        #   layernorm    per-sensor LayerNorm (loses cross-sensor amplitude ratios)
+        #   standardize  one global std computed on the training set
+        #   none         no rescaling
         if isinstance(norm_acoustic, bool):
             norm_acoustic = "layernorm" if norm_acoustic else "none"
         self.norm_mode = str(norm_acoustic).lower()
@@ -436,19 +392,13 @@ class SpatialEncoder(nn.Module):
         norm_dim = self.tau if tokenize else feat_dim
         self.acoustic_norm = nn.LayerNorm(norm_dim) if self.norm_mode == "layernorm" else None
         if self.norm_mode == "standardize":
-            # global scalar stats; populated from data via set_acoustic_stats().
+            # Set from the training data by set_acoustic_stats().
             self.register_buffer("x_mean", t.zeros(1))
             self.register_buffer("x_scale", t.ones(1))
 
-        # Learned per-SENSOR-SLOT embedding. The shared token_proj + permutation-
-        # invariant pool make the sensors exchangeable, which is the right bias
-        # when each token already carries its POSITION. With use_position=False
-        # it is fatal: the point embedding becomes an unordered multiset of the
-        # per-sensor measurements, so nothing links "sensor 3" across context
-        # points -- and multilaterating a layout from a calibration set requires
-        # exactly that correspondence. Sensor slot IS a stable label within a
-        # deployment, so tagging it restores the correspondence while keeping
-        # the cross-sensor attention. Default False = original behaviour.
+        # Optional learned embedding per sensor slot. Without position features
+        # the tokens are exchangeable and nothing identifies a sensor across
+        # points; the slot embedding restores that. Off by default.
         self.sensor_id_embed = bool(sensor_id_embed) and tokenize
         if self.sensor_id_embed:
             self.sensor_emb = nn.Parameter(t.randn(1, n_sensors, num_hidden) * 0.02)
@@ -482,12 +432,10 @@ class SpatialEncoder(nn.Module):
         return a
 
     def forward(self, x, sensor_pos, sensor_mask=None):
-        # x: (B, N, feat_dim);  sensor_pos: (B, n_sensors, 3), constant over the
-        # N points of a trajectory (same geometry). Returns (B, N, num_hidden).
-        # sensor_mask: optional bool (B, n_sensors), True = present sensor. A
-        # False sensor is dropped from the cross-sensor attention and the pool,
-        # so the point embedding is built only from surviving sensors -> lets us
-        # evaluate graceful degradation as sensors fail (tokenized path only).
+        # x: (B, N, feat_dim); sensor_pos: (B, n_sensors, 3), the same for all
+        # N points. Returns (B, N, num_hidden). sensor_mask: optional bool
+        # (B, n_sensors), True for present sensors; missing sensors are left
+        # out of the attention and the pooling (tokenized path only).
         B, N, F = x.shape
         pos = sensor_pos[..., :self.pos_dim] if self.use_position else None  # (B,S,pd)
 
@@ -533,25 +481,9 @@ class SpatialEncoder(nn.Module):
 
 
 class SensorSetEncoder(nn.Module):
-    """Sensor-set front end (model.spatial.encoder=set). As a stand-alone per-point
-    regressor it matches the MFP with the true environment on B1 (3.0 m against
-    19.7 m for the NPs with SpatialEncoder; scripts/eval/acoustic_regressor.py).
-
-    Differences from SpatialEncoder:
-      - positions enter as plain coordinates relative to the array centroid
-        (scaled by pos_scale), not a Fourier code of absolute coordinates, so the
-        embedding is translation invariant. Pair it with model.frame=centroid so
-        the labels share that frame (src/models/frame.py);
-      - each sensor token is an MLP of (record, position), not one linear map;
-      - the sensors mix through full pre-norm transformer layers (attention + FFN)
-        and a readout token, not attention-only layers and an attention pool.
-
-    Same interface as SpatialEncoder: forward(x, sensor_pos, sensor_mask) ->
-    (B, N, num_hidden), x tau-major / sensor-minor, acoustics standardized by one
-    global scale (set_acoustic_stats). The centroid is over ALL sensors, present
-    or masked, so a deployment keeps one frame when sensors drop out. bf16=True
-    runs the encoder under bfloat16 autocast on CUDA (it sees every context and
-    target point, so it dominates activation memory)."""
+    """Alternative sensor-set encoder (model.spatial.encoder=set), with the same
+    interface as SpatialEncoder. Sensor positions are taken relative to the
+    array centroid."""
 
     def __init__(self, feat_dim, n_sensors, num_hidden, *, d_model=256, n_layers=6,
                  n_heads=8, pos_scale=100.0, dropout=0.0, bf16=True):
@@ -640,9 +572,7 @@ class LatentModel(nn.Module):
     def __init__(self, num_hidden, input_dim, output_dim, dropout=0.1, spatial_cfg=None, full_cov=False, attn_ffn=False,
                  latent_pooling="mean"):
         super(LatentModel, self).__init__()
-        # Optional sensor-position-aware front end. When enabled it maps the raw
-        # (B, N, feat_dim) acoustics to (B, N, num_hidden), so the NP encoders see
-        # num_hidden-dim inputs instead of the flat feat_dim.
+        # Optional spatial front end: (B, N, feat_dim) -> (B, N, num_hidden).
         self.spatial_encoder, enc_input_dim = build_spatial_encoder(
             spatial_cfg, input_dim, num_hidden, dropout)
         self.latent_encoder = LatentEncoder(num_hidden, num_latent=num_hidden,
@@ -665,20 +595,13 @@ class LatentModel(nn.Module):
     def forward(self, context_x, context_y, target_x, target_y=None, beta: float = 1.0,
                 predict_with_prior: bool = False, sensor_pos=None, sensor_mask=None,
                 context_mask=None, target_mask=None):
-        # sensor_mask: optional bool (B, n_sensors), True = present; drops failed
-        # sensors from the spatial front end (eval-time robustness study).
-        # predict_with_prior: if True the DECODER is driven by the PRIOR latent
-        # (context only) even when target_y is supplied, the deployment-faithful
-        # path (at inference the latent cannot peek at target labels). The
-        # posterior + KL/NLL are still computed when target_y is given, so the
-        # validation loss stays comparable to training; only the z that drives the
-        # prediction changes. Use False for training (posterior teacher forcing).
-        # context_mask: optional bool (B, n_ctx), True = real context point (else a
-        # padded slot), so one batch can carry per-sample context sizes.
-        # target_mask: optional bool (B, T), True = score this target point (e.g.
-        # excluding each sample's own context points). Unscored targets are also
-        # left out of the posterior, so no point is counted twice there. Both
-        # masks come from the per-sample / calibration batching paths.
+        # sensor_mask: optional bool (B, n_sensors), True for present sensors.
+        # predict_with_prior: decode from the prior latent (context only) even
+        #   when target_y is given; the posterior and the KL are still computed.
+        #   Used for validation; training decodes from the posterior.
+        # context_mask: optional bool (B, n_ctx), True for real context points.
+        # target_mask: optional bool (B, T), True for scored targets; unscored
+        #   targets are also left out of the posterior.
         if self.spatial_encoder is not None:
             # sensor_pos is per-trajectory (same geometry for context & targets).
             context_x = self.spatial_encoder(context_x, sensor_pos, sensor_mask=sensor_mask)
@@ -688,10 +611,7 @@ class LatentModel(nn.Module):
 
         posterior_mu = posterior_var = None
         if target_y is not None:
-            # Posterior conditions on context UNION targets (standard ANP; also
-            # what online_r_anp.py does): the best-informed distribution the KL
-            # teaches the context-only prior to approximate. Training-only
-            # machinery -- deployment always runs the prior path (target_y=None).
+            # The posterior conditions on context and targets (training only).
             post_mask = None
             if context_mask is not None or target_mask is not None:
                 B = context_x.size(0)
@@ -706,11 +626,7 @@ class LatentModel(nn.Module):
                 mask=post_mask)
 
         use_posterior = (target_y is not None) and (not predict_with_prior)
-        # train(): decode a SAMPLE of z (stochastic ELBO). eval(): decode the
-        # distribution MEAN -- the point-prediction analogue of disabling dropout;
-        # a single sampled z adds zero-mean noise that only inflates MAE and makes
-        # checkpoint selection jittery. Sampling at eval is still available by
-        # calling with the module in train() mode.
+        # Sample z in training; use the mean of the distribution in eval mode.
         if use_posterior:
             z = posterior if self.training else posterior_mu
         else:
@@ -724,19 +640,15 @@ class LatentModel(nn.Module):
         if target_y is not None:
             nll = gaussian_nll(y_pred_mean, y_pred_var, y_pred_rho, target_y)
             nll = reduce_nll(nll, target_mask)
-            # NLL is a MEAN over batch x targets x output dims while the KL SUMS
-            # over the latent dims, so an unnormalized `nll + beta*kl` weighs the
-            # KL ~ num_targets*output_dim times more than the per-point ELBO
-            # (~120x here) and crushes the posterior onto the prior. Normalize the
-            # KL to the same per-target-point, per-dim units (Le et al. 2018) so
-            # beta=1 reads as the standard ELBO.
+            # The NLL is a mean over targets and output dims while the KL sums
+            # over latent dims, so the KL is normalized to the same per-point
+            # units (Le et al., 2018); beta=1 then gives the standard ELBO.
             kl_per_sample = gaussian_kl(prior_mu, prior_var, posterior_mu, posterior_var)
             if target_mask is None:
                 kl = kl_per_sample.mean() / (num_targets * target_y.size(-1))
             else:
-                # Samples score different numbers of targets: divide the summed KL
-                # by the total scored elements, the same denominator reduce_nll
-                # uses. With equal counts this equals the line above.
+                # Per-sample target counts: divide by the number of scored
+                # elements, as reduce_nll does.
                 kl = kl_per_sample.sum() / (target_mask.sum().clamp(min=1) * target_y.size(-1))
             loss = nll + beta * kl
         else:
@@ -799,15 +711,8 @@ class DeterministicModel(nn.Module):
     def forward(self, context_x, context_y, target_x, target_y=None, beta: float = 1.0,
                 predict_with_prior: bool = False, sensor_pos=None, context_mask=None,
                 target_mask=None, sensor_mask=None):
-        # predict_with_prior is accepted for a uniform interface with the latent
-        # models but has no effect: a deterministic CNP never uses target labels
-        # to predict, so there is no posterior to peek at.
-        # context_mask: optional bool (B, n_ctx) marking real vs padded context
-        # slots, so one batch can carry per-sample context sizes (masked pooling).
-        # target_mask: optional bool (B, T) marking which target points to SCORE
-        # (per-sample; e.g. exclude each sample's own context points). Both come
-        # from the per-sample context-batching path (data.context.per_sample).
-        # sensor_mask: optional bool (B, n_sensors), True = present (sensor-drop study).
+        # predict_with_prior has no effect here; it keeps the interface of the
+        # latent models. The masks are as in LatentModel.forward.
         if self.spatial_encoder is not None:
             context_x = self.spatial_encoder(context_x, sensor_pos, sensor_mask=sensor_mask)
             target_x = self.spatial_encoder(target_x, sensor_pos, sensor_mask=sensor_mask)

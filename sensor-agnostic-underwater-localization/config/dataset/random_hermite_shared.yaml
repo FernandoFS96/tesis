@@ -1,4 +1,4 @@
-# Dataset identity -- see topology_spiral.yaml for the full note.
+# Random-layout task, Hermite trajectories shared by all deployments.
 task: random
 method: hermite
 mode: shared

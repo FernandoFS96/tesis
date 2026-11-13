@@ -1,17 +1,10 @@
-"""src/models/frame.py -- run a model with its positions relative to the array
-centroid (model.frame=centroid).
+"""Positions relative to the array centroid (model.frame=centroid).
 
-The channel depends only on source-sensor geometry, so where a deployment sits in
-the data frame carries no information. A model that predicts absolute positions
-must still learn that offset from sensor_pos; the per-point regressor that matches
-the MFP on B1 (scripts/eval/acoustic_regressor.py) predicts relative to the array
-centroid instead. CentroidFrame gives any model that frame without touching the
-trainer's or the evaluators' calling convention: they keep passing labels in the
-normalized absolute frame and get predictions back in it.
-
-Inside, each label is shifted by the deployment's offset in model units,
-(y_mean - centroid) / y_std, on x and y only. The scale is unchanged, so the
-predictive variance, the variance floor and the NLL need no correction.
+CentroidFrame wraps a model so that, internally, labels are expressed relative to
+the centroid of the deployment's sensors. Callers still pass and receive labels
+in the normalized absolute frame. The shift, (y_mean - centroid) / y_std, is
+applied to x and y only and leaves the scale unchanged, so the predictive
+variance and the NLL need no correction.
 """
 import inspect
 
@@ -23,8 +16,7 @@ class CentroidFrame(nn.Module):
     def __init__(self, inner, output_dim):
         super().__init__()
         self.inner = inner
-        # Normalization of the labels the caller passes (identity if unnormalized);
-        # set by the trainer, restored from the checkpoint's state_dict.
+        # Label normalization used by the caller; set by the trainer.
         self.register_buffer("y_mean", t.zeros(output_dim))
         self.register_buffer("y_std", t.ones(output_dim))
         self._sig = inspect.signature(inner.forward)
@@ -36,12 +28,11 @@ class CentroidFrame(nn.Module):
             self.y_std.copy_(t.as_tensor(y_std, dtype=t.float32))
 
     def __getattr__(self, name):
-        # spatial_encoder and the other submodules the trainer and the evaluators
-        # look up live on the wrapped model.
+        # Fall through to the wrapped model (e.g. spatial_encoder).
         try:
             return super().__getattr__(name)
         except AttributeError:
-            if name == "inner" or name.startswith("_"):     # half-built (copy / pickle)
+            if name == "inner" or name.startswith("_"):
                 raise
             return getattr(super().__getattr__("inner"), name)
 

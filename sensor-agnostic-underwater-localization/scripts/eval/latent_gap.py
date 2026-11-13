@@ -1,17 +1,11 @@
-"""
-latent_gap.py
-=============
+"""Latent models decoded from the prior and from the posterior (Appendix B).
 
-Prior-versus-posterior latent gap (Appendix D), on the protocol of Table 3: the
-held-out pool of the SHARED development set, six transits per deployment and
-three evaluation seeds on each of the three training seeds, the latest run of
-each seed (the rule the s4_family evaluation used).
+Same protocol as Table 3: the held-out pool of the shared development set, six
+transits per deployment, three evaluation seeds on each training seed. The prior
+column reproduces the MAE of Table 3; the deterministic models have no latent,
+so their two columns coincide.
 
     python scripts/eval/latent_gap.py --out-dir output/eval_paper/latent_gap_v2
-
-The prior column is computed with eval_suite.predict, so it must reproduce the
-MAE column of Table 3. The deterministic models carry no latent and are the
-control: their two columns must coincide.
 """
 import argparse, glob, os, re, sys, csv, warnings
 import statistics as st
@@ -27,7 +21,7 @@ SPEC = [("spatial_anp", "paper_spatial_anp", True), ("flat_anp", "paper_flat_anp
 
 
 def ckpts(exp):
-    """Latest run per training seed, as for s4_family."""
+    """Latest run of each training seed."""
     best = {}
     for p in glob.glob(f"output/hydra/training/*/{exp}/seed_*/best.pt"):
         s = int(p.split("/seed_")[1].split("/")[0])
@@ -89,8 +83,8 @@ def main():
                 w.writerow([label, es, mi, f"{pr:.4f}", f"{po:.4f}"])
     with open(os.path.join(args.out_dir, "results.csv"), "w", newline="") as f:
         w = csv.writer(f)
-        # *_std: population sd over the n evaluations, the convention of Table 3;
-        # *_sd_train: sample sd over training seeds after averaging the eval seeds.
+        # *_std: sd over all evaluations (as in Table 3); *_sd_train: sd over
+        # training seeds after averaging the evaluation seeds.
         w.writerow(["model", "prior_mean", "prior_std", "post_mean", "post_std",
                     "prior_sd_train", "post_sd_train", "n", "n_train"])
         for label, rs in per.items():

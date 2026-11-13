@@ -1,44 +1,15 @@
-"""src/models/pfn.py -- Prior-Data Fitted Network backbone.
+"""Prior-Data Fitted Network (Mueller et al., 2022; Hollmann et al., 2023).
 
-A drop-in alternative to ``anp.DeterministicModel`` / ``anp.LatentModel`` for the
-SAME task (sensor_pos supplied), so it can be trained on the frozen split and
-compared against CNP / ANP / RANP / spatial_CNP as one more row in the table.
+Same interface as the models in anp.py (forward signature, the 5-tuple
+(mean, var, loss, kl, nll) and the optional spatial front end), so it plugs into
+the same trainer and evaluation scripts.
 
-WHAT IS ACTUALLY DIFFERENT (Mueller et al. ICLR'22, Hollmann et al. ICLR'23)
----------------------------------------------------------------------------
-The objective the existing models minimise is ALREADY the Prior-Data NLL, so
-this is not a foreign method being grafted on -- it completes one the project is
-most of the way to. Three concrete changes:
-
-1. ONE unified transformer encoder over the joint ``[context, target]``
-   sequence, instead of three separate modules (LatentEncoder /
-   DeterministicEncoder / Decoder) with their own projections.
-
-2. A REAL transformer block: ``MHA -> +res -> LN -> FFN(4x) -> +res -> LN``.
-   The existing ``anp.Attention`` block has **no feed-forward sublayer at all**
-   -- roughly half the parameters and most of the per-token nonlinearity of a
-   standard block are simply missing, and the stack is ~2 layers deep against
-   TabPFN's 12. This is the cheapest of the three changes and the one most
-   likely to move MAE.
-
-3. TabPFN's attention mask (their Eq. 4): context tokens attend to each other
-   bidirectionally; target tokens attend to CONTEXT ONLY -- never to each other
-   and never to themselves, their own state flowing through the residual branch
-   instead. One forward pass therefore emits an independent predictive for every
-   target, and queries cannot leak into one another.
-
-No positional encoding is applied on the point axis, so the model is
-permutation-invariant over the context set (the correct bias for a set). There
-is no latent variable and no KL term: the loss is the plain Prior-Data NLL,
-which is what ``beta`` and ``predict_with_prior`` are accepted-and-ignored for.
-
-The output head is still a diagonal Gaussian, matching the existing baselines,
-so this experiment isolates the BACKBONE. Swapping in the Riemann/grid head of
-spec 4.3 is a separate, later change.
-
-INTERFACES ARE DELIBERATELY UNCHANGED -- same ``forward`` signature, same
-5-tuple return ``(mean, var, loss, kl, nll)``, same ``spatial_cfg`` front end --
-so this drops into the existing trainer and evaluation harness untouched.
+Context and target points form one sequence processed by a stack of pre-LN
+transformer blocks. Following TabPFN, context tokens attend to each other and
+target tokens attend to the context only, never to each other or to
+themselves, so each target gets an independent prediction. There is no
+positional encoding on the point axis, so the context is treated as a set.
+The model has no latent variable; the loss is the Gaussian NLL.
 """
 
 import torch as t
@@ -49,12 +20,11 @@ from .anp import Linear, build_spatial_encoder, gaussian_nll, reduce_nll, DEFAUL
 
 
 class TransformerBlock(nn.Module):
-    """Pre-LN transformer block: the standard thing ``anp.Attention`` is missing.
+    """Pre-LN transformer block (attention + feed-forward).
 
-    ``key_mask`` is (B, L) and marks which SEQUENCE POSITIONS may be used as
-    keys. Because it is applied on the key axis only, masking the target region
-    once makes targets invisible to every query including themselves, which is
-    exactly the TabPFN rule.
+    key_mask (B, L) marks which sequence positions may be used as keys. It acts
+    on the key axis only, so masking the target positions hides them from every
+    query, including themselves.
     """
 
     def __init__(self, d_model, n_heads=8, ffn_mult=4, dropout=0.1):
@@ -84,7 +54,7 @@ class TransformerBlock(nn.Module):
         q = self.q(h).view(B, L, self.h, self.dk).transpose(1, 2)
         k = self.k(h).view(B, L, self.h, self.dk).transpose(1, 2)
         v = self.v(h).view(B, L, self.h, self.dk).transpose(1, 2)
-        # (B,1,1,L) broadcasts over heads and queries: same attendable keys for all.
+            # (B, 1, 1, L): the same keys for every head and query.
         am = key_mask[:, None, None, :] if key_mask is not None else None
         a = F.scaled_dot_product_attention(
             q, k, v, attn_mask=am,
@@ -96,13 +66,9 @@ class TransformerBlock(nn.Module):
 
 
 class CrossBlock(nn.Module):
-    """Cross-attention block with separate query / key-value streams, plus FFN.
-
-    Used by ``readout="cross"``. Queries and keys are supplied by the CALLER from
-    the acoustics alone, while the values carry the full (x + y) context
-    encoding -- so retrieval happens by acoustics-to-acoustics similarity and the
-    label is only ever read out, never matched on.
-    """
+    """Cross-attention block with separate query and key-value streams, plus a
+    feed-forward sublayer. Used by readout="cross": queries and keys come from
+    the acoustics only, and the values carry the context encoding."""
 
     def __init__(self, d_model, n_heads=8, ffn_mult=4, dropout=0.1):
         super().__init__()
@@ -136,20 +102,13 @@ class CrossBlock(nn.Module):
 
 
 class PFNModel(nn.Module):
-    """Transformer neural process with a switchable readout.
+    """Transformer neural process with two readouts.
 
-    readout="joint" (default) -- TabPFN: one stack over [context, target] with
-        targets attending to context only. Faithful to the paper, but the label
-        is added into the context TOKEN, so query-key matching happens in a mixed
-        (acoustics + position) space. That is fine with millions of prior
-        datasets; on a small training pool it measurably fails to generalise
-        (topology task: train 28 / val 71, against a same-size CNP at 23 / 9).
-
-    readout="cross" -- keep the deep FFN-equipped stack to ENCODE the context,
-        then read out with CNP-style cross-attention whose queries and keys come
-        from the ACOUSTICS ALONE and whose values carry the (x + y) encoding.
-        This restores the retrieval bias that makes the CNP work here while
-        keeping the backbone change we actually wanted to evaluate.
+    readout="joint" (default): one stack over [context, target], with targets
+        attending to the context only (TabPFN).
+    readout="cross": the stack encodes the context, and the targets read it out
+        through cross-attention whose queries and keys come from the acoustics
+        alone.
     """
 
     def __init__(self, num_hidden, input_dim, output_dim, dropout=0.1,
@@ -161,7 +120,7 @@ class PFNModel(nn.Module):
         self.output_dim = output_dim
         self.x_proj = Linear(enc_dim, num_hidden, w_init='relu')
         self.y_proj = Linear(output_dim, num_hidden)
-        # One learned vector standing in for "label unknown" on target tokens.
+        # Learned vector standing in for the unknown label of a target token.
         self.mask_embed = nn.Parameter(t.randn(1, 1, num_hidden) * 0.02)
         self.blocks = nn.ModuleList([
             TransformerBlock(num_hidden, n_heads, ffn_mult, dropout)
@@ -173,26 +132,21 @@ class PFNModel(nn.Module):
             self.cross = nn.ModuleList([
                 CrossBlock(num_hidden, n_heads, ffn_mult, dropout)
                 for _ in range(n_cross_layers)])
-        # The cross readout also hands the target's own acoustics straight to the
-        # head, mirroring the CNP decoder's concat of target_x with r.
+        # The cross readout also passes the target's own acoustics to the head.
         head_in = num_hidden * (2 if self.readout == "cross" else 1)
         self.head = nn.Sequential(
             Linear(head_in, num_hidden, w_init='relu'), nn.GELU(),
             Linear(num_hidden, 2 * output_dim))
-        # Predictive-variance floor (see anp.set_var_floor); not in the state_dict.
+        # Variance floor (see anp.set_var_floor), not saved in the state_dict.
         self.register_buffer("var_floor", t.tensor(DEFAULT_VAR_FLOOR), persistent=False)
 
     def forward(self, context_x, context_y, target_x, target_y=None,
                 beta: float = 1.0, predict_with_prior: bool = False,
                 sensor_pos=None, sensor_mask=None,
                 context_mask=None, target_mask=None):
-        # beta / predict_with_prior exist only for interface parity with the
-        # latent models; a PFN has no latent, so there is nothing to weight or
-        # to peek at.
-        # sensor_mask: optional bool (B, n_sensors), True = present. Forwarded to
-        # the shared SpatialEncoder exactly as the anp models do -- without it the
-        # sensor-dropout evaluator (eval_suite tier 4) cannot score this model at
-        # all, which is how the omission surfaced.
+        # beta and predict_with_prior keep the interface of the latent models
+        # and have no effect. sensor_mask: optional bool (B, n_sensors), True for
+        # present sensors, passed to the spatial front end.
         if self.spatial_encoder is not None:
             context_x = self.spatial_encoder(context_x, sensor_pos,
                                              sensor_mask=sensor_mask)
@@ -207,7 +161,7 @@ class PFNModel(nn.Module):
 
         km = (t.ones(B, n, dtype=t.bool, device=ctx.device)
               if context_mask is None else context_mask.to(t.bool))
-        # A row with no attendable key would make the softmax NaN; keep slot 0.
+        # A row with no attendable key would give NaN; keep position 0.
         km = km.clone()
         km[:, 0] |= ~km.any(dim=1)
 

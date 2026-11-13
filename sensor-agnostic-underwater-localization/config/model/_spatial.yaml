@@ -1,52 +1,34 @@
-# Shared sensor-position-aware (spatial) front-end block — single source of
-# truth included by cnp.yaml and anp.yaml (disabled there; the spatial_cnp /
-# spatial_anp variants flip `enabled: true`). See src/models/anp.py:SpatialEncoder.
+# Spatial front end (src/models/anp.py, SpatialEncoder), included by the model
+# configs; the spatial_* variants set enabled: true. Each point's features are
+# split into one token per sensor, tagged with a Fourier encoding of the sensor
+# position, mixed by attention across sensors and pooled. Needs the geometry
+# split, which provides sensor_pos; n_sensors is read from the data.
 #
-# When enabled it tokenizes each point's features by sensor, tags each token
-# with its Fourier-encoded physical position, attends across sensors, and pools
-# to a per-point vector --> permutation-equivariant over sensors. Requires the
-# geometry split (data=layout_ood / layout_seen, carries sensor_pos); n_sensors
-# is inferred from the data.
-#
-# ---------------------------------------------------------------------------
-# ABLATION LADDER (attributes the gain: tokenization vs position vs attention).
-# Same data + protocol; override the flags on the CLI:
-#
-#  1. flat baseline            model=cnp (or anp) spatial off
-#  2. flat + position          model=spatial_cnp model.spatial.tokenize=false (NOT permutation-invariant; "just needs position?")
-#  3. tokens + attn, no pos    model=spatial_cnp model.spatial.use_position=false (invariance alone)
-#  4. tokens + pos, no attn    model=spatial_cnp model.spatial.use_attention=false (Deep-Sets; is attention needed?)
-#  5. full                     model=spatial_cnp (or spatial_anp)
-# ---------------------------------------------------------------------------
-# Label frame. absolute = labels in the data frame (the paper models). centroid =
-# labels relative to the sensor centroid inside the model (src/models/frame.py);
-# pair it with encoder=set, whose input is array-centered.
+# Ablations (Appendix A of the paper):
+#   model=spatial_cnp model.spatial.tokenize=false        no per-sensor tokens
+#   model=spatial_cnp model.spatial.use_position=false    no position encoding
+#   model=spatial_cnp model.spatial.use_attention=false   no cross-sensor attention
+#   model=spatial_cnp model.spatial.pooling=mean          mean instead of attention pooling
+
+# absolute: labels in the data frame | centroid: relative to the array centroid
 frame: absolute
 spatial:
   enabled: false
-  # Front end. legacy = SpatialEncoder below (the paper models). set =
-  # SensorSetEncoder: array-centered plain coordinates, MLP tokens, transformer
-  # over sensors; the set_* keys apply to it only, the legacy keys do not.
-  encoder: legacy
+  encoder: legacy        # legacy: SpatialEncoder | set: SensorSetEncoder (set_* keys)
   set_d_model: 256
   set_layers: 6
   set_heads: 8
-  set_pos_scale: 100.0   # meters per input unit of the centered sensor coordinates
+  set_pos_scale: 100.0
   set_dropout: 0.0
-  set_bf16: true         # bfloat16 autocast for the encoder on CUDA
-  tokenize: true         # per-sensor tokens (invariant). false -> flat+position control
-  use_position: true     # add Fourier position features per sensor
-  use_attention: true    # cross-sensor self-attention (else Deep-Sets pool only)
-  pooling: attention     # attention (learned query) | mean
-  norm_acoustic: standardize  # balance acoustic vs position scale: layernorm (per-sensor, drops amplitude ratios) | standardize (global scale, keeps them) | none (collapses)
-  # Break sensor exchangeability with a learned per-slot embedding. Needed when
-  # use_position=false: the shared projection + permutation-invariant pool
-  # otherwise reduce each point to an UNORDERED multiset of per-sensor
-  # measurements, so nothing links a given sensor across context points -- and
-  # inferring a layout from a calibration set requires exactly that link.
-  sensor_id_embed: false
+  set_bf16: true
+  tokenize: true         # one token per sensor
+  use_position: true     # Fourier position features
+  use_attention: true    # self-attention across sensors
+  pooling: attention     # attention | mean
+  norm_acoustic: standardize  # standardize (one global scale) | layernorm (per sensor) | none
+  sensor_id_embed: false # learned embedding per sensor slot
   n_attn_layers: 3
   n_fourier_bands: 8
-  min_wavelength: 10.0    # metres; span the sensor-displacement scale
+  min_wavelength: 10.0   # meters
   max_wavelength: 1000.0
-  pos_dim: 2             # (x, y); sensors share a constant depth
+  pos_dim: 2             # (x, y); all sensors share one depth

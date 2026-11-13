@@ -1,40 +1,16 @@
-"""
-eval_np_geometry.py
-===================
+"""Evaluate one checkpoint on the geometry-split data.
 
-Unified evaluation of a trained CNP / ANP / RANP baseline on the geometry-split data. It reads the model type and calling convention from the checkpoint, 
-so the same command evaluates any of the three the same way, producing comparable out-of-position degradation numbers.
+Reads the model type and calling convention from the checkpoint and reports:
+  * MAE per pool (train / val / test) and the degradation from train to held-out
+  * held-out MAE for interpolation and extrapolation, and their gap
+  * per-geometry MAE (CSV, sorted by centroid distance) and a figure of the
+    degradation against displacement
 
-Reported (identically to the original CNP eval):
-  * per-pool MAE (train / val / test)
-  * degradation: MAE(val/test) - MAE(train), absolute and %
-  * interpolation vs extrapolation held-out MAE + the extrap-interp gap
-  * per-geometry MAE CSV, sorted by centroid distance
-  * degradation-vs-displacement figure
+    python scripts/eval/eval_np_geometry.py --ckpt <run>/best.pt --out-dir <run>/eval
 
-USAGE
------
-    python eval_np_geometry.py \
-        --data-dir ../../data/data_random_positions/hermite_shared/processed/geometry_split \
-        --ckpt     ../runs/anp_baseline/best.pt \
-        --out-dir  ../runs/anp_baseline/eval \
-        --eval-ctx 20 --n-context-draws 5
-
-    Context-size sweep (temporal-reliance diagnostic):
-    python eval_np_geometry.py  \
-        --data-dir ../../data/data_random_positions/hermite_shared/processed/geometry_split \
-        --ckpt     ../runs/anp_baseline/best.pt \
-        --out-dir  ../runs/anp_baseline/eval --eval-ctx-sweep "1,2,3,5,10,20" \
-        --ctx-sample-mode first
-
-    Shuffle test:
-    python eval_np_geometry.py \
-        --data-dir ../../data/data_random_positions/hermite_shared/processed/geometry_split \
-        --ckpt     ../runs/anp_baseline/best.pt \
-        --out-dir  ../runs/anp_baseline/eval_shuf --eval-ctx 20 --shuffle-temporal
-
-To see results for all three models (CNP, ANP, RANP) in one place, run the above three commands for each model.
-To compare all three at once, point --ckpt at each best.pt in turn.
+The data directory is taken from the checkpoint unless --data-dir is given.
+Optional diagnostics: a context-size sweep (--eval-ctx-sweep "1,2,3,5,10,20")
+and a shuffled-order test (--shuffle-temporal).
 """
 
 import os, sys, json, pickle, argparse
@@ -47,11 +23,9 @@ from collections import defaultdict
 
 from tqdm import tqdm
 
-# Add the repo root (parent of src/) so that `from src.models.anp import ...` works.
+# Make `src.models` importable from the repository root.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-# Model factory + checkpoint loader, shared with the trainer (one copy, so the
-# eval side can no longer rebuild a checkpoint differently from how it was
-# trained). build_model is re-exported for eval_suite / compare_offline_online.
+# Model factory and checkpoint loader shared with the trainer.
 from src.models.registry import build_model, model_from_checkpoint  # type: ignore  # noqa: F401
 
 
@@ -77,19 +51,12 @@ class TrajectoryDataset:
 @t.no_grad()
 def forward_one(model, conv, X, y, idx, device, shuffle_temporal=False, perm=None,
                 tgt_idx=None, sensor_pos=None):
-    """Single-trajectory forward for either convention. X,y: (1, ppt, ·).
+    """Forward pass on one trajectory for either convention. X, y: (1, ppt, .).
 
-    `tgt_idx` selects which points are predicted/returned. If None, all ppt
-    points are targets (original behaviour). Predictions are returned ALIGNED
-    with tgt_idx, i.e. output row k corresponds to point tgt_idx[k]; the caller
-    must therefore score against y[:, tgt_idx, :].
-
-    If shuffle_temporal is True, the trajectory point ORDER is permuted before
-    the forward pass. This is a diagnostic: a recurrent model that relies on
-    temporal smoothness will degrade sharply under shuffling, whereas a purely
-    acoustic model is order-invariant. `perm` (a fixed permutation) can be
-    supplied so the same shuffle is applied across draws/models for
-    comparability."""
+    tgt_idx selects the predicted points (all points if None); row k of the
+    output corresponds to point tgt_idx[k]. With shuffle_temporal the point
+    order is permuted first (a fixed permutation can be passed as `perm`), which
+    affects recurrent models but not order-invariant ones."""
     ppt = X.size(1)
     if tgt_idx is None:
         tgt_idx = t.arange(ppt, device=device, dtype=t.long)
@@ -161,14 +128,10 @@ def per_geometry_mae(model, conv, ds, device, eval_ctx, n_draws, seed=0,
 def per_geometry_mae_online(model, ds, device, eval_ctx, n_draws, chunk_size,
                             seed=0, y_mean=None, y_std=None,
                             ctx_sample_mode="random", exclude_ctx_from_target=False):
-    """Deployment-faithful streaming eval for the online model.
-
-    Drives the ACTUAL deployment API (model.step / model.register_context) over
-    each trajectory in temporal order: reveal one chunk at a time, predict it
-    from the prior using context seen SO FAR, then register the chunk's 'fixes'.
-    The context-fix indices are drawn identically to per_geometry_mae (same rng
-    seed + draw order), so an offline and an online model can be compared under
-    the EXACT same scenario."""
+    """Streaming evaluation of the online model through its deployment API
+    (step / register_context), one chunk at a time in temporal order. The fix
+    indices are drawn as in per_geometry_mae, so offline and online models see
+    the same context."""
     rng = np.random.default_rng(seed)
     err_sum = defaultdict(float); err_cnt = defaultdict(int)
     model.eval()
@@ -176,7 +139,7 @@ def per_geometry_mae_online(model, ds, device, eval_ctx, n_draws, chunk_size,
     ys = y_std.to(device)  if y_std  is not None else None
     for _ in range(n_draws):
         for i in range(len(ds)):
-            X, y, gid, th, _sp = ds[i]   # online models are not spatial; ignore sensor_pos
+            X, y, gid, th, _sp = ds[i]   # sensor_pos unused by the online model
             X = X.unsqueeze(0).to(device); y = y.unsqueeze(0).to(device)
             ppt = X.size(1)
             n_ctx = max(1, min(eval_ctx, ppt))
@@ -194,8 +157,7 @@ def per_geometry_mae_online(model, ds, device, eval_ctx, n_draws, chunk_size,
                 e = min(s + chunk_size, ppt)
                 mean, var, h = model.step(X[:, s:e], state)   # prior prediction
                 preds[:, s:e] = mean * ys + ym if ym is not None else mean
-                # register any fixes that land in this chunk (context y must be
-                # in the model's normalized space)
+                # register the fixes in this chunk (labels in normalized units)
                 local = [j for j in range(s, e) if j in ctx_set]
                 if local:
                     sel = t.tensor(local, device=device, dtype=t.long)
@@ -285,9 +247,8 @@ def main():
 
     ck = t.load(args.ckpt, map_location=device)
 
-    # Resolve data_dir: CLI flag wins, else fall back to the checkpoint's stored
-    # data_dir (so eval always matches what the model trained on). A relative
-    # path is resolved against the repo root.
+    # data_dir: the CLI flag, else the one stored in the checkpoint; a relative
+    # path is resolved against the repository root.
     _repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     data_dir = args.data_dir or ck.get("config", {}).get("data_dir")
     if data_dir is None:
@@ -296,8 +257,8 @@ def main():
         data_dir = os.path.normpath(os.path.join(_repo, data_dir))
     print(f"[eval] data_dir={data_dir}")
 
-    # splits.json only exists for the held-out geometry split; for topology /
-    # within-geometry data it is absent and region labels default to 'train'.
+    # splits.json only exists for the geometry split; without it every
+    # geometry is labelled 'train'.
     splits_path = os.path.join(data_dir, "splits.json")
     if os.path.exists(splits_path):
         with open(splits_path) as f:
@@ -321,13 +282,11 @@ def main():
     if conv == "online" and args.shuffle_temporal:
         print("[warn] --shuffle-temporal is ignored for online (streaming) models.")
 
-    # normalization stats: auto-loaded from checkpoint (None for old checkpoints)
+    # normalization stats: auto-loaded from checkpoint (None if absent)
     y_mean = ck.get("y_mean")
     y_std  = ck.get("y_std")
 
-    # context sampling mode: CLI flag overrides checkpoint config. Fallback is
-    # 'first' (the causal-safe choice) so a checkpoint that never stored the mode
-    # is not silently evaluated with future-fix leakage; we warn when we assume it.
+    # Context sampling mode: CLI flag, else the checkpoint's, else 'first'.
     if args.ctx_sample_mode:
         ctx_sample_mode = args.ctx_sample_mode
     elif "ctx_sample_mode" in cfg:
@@ -337,19 +296,16 @@ def main():
         print("[eval] checkpoint did not store ctx_sample_mode; assuming 'first' "
               "(causal). Pass --ctx-sample-mode to override.")
 
-    # target-set composition: CLI flag overrides checkpoint config (old
-    # checkpoints, trained on all points, default to False).
+    # Target-set composition: CLI flag, else the checkpoint's.
     if args.exclude_ctx is not None:
         exclude_ctx = args.exclude_ctx == "true"
     else:
         exclude_ctx = bool(cfg.get("exclude_ctx_from_target", False))
 
-    # ---- deployment-causality check (real-time localization, no GPS) ----------
-    # Causal <=> context is a PAST prefix of every target: ctx_sample_mode='first'
-    # AND targets are the complement (exclude_ctx=true). Otherwise a target can
-    # attend a fix that lies in its FUTURE -- unavailable at deployment, and it
-    # inflates exactly the models that aggregate context (latent/recurrent). The
-    # causal LSTM never leaks future acoustics; this is only about future FIXES.
+    # ---- causality check ----------------------------------------------------
+    # The evaluation is causal when the context is a prefix of every target
+    # (ctx_sample_mode='first' with exclude_ctx=true); otherwise a target can
+    # use a fix that lies in its future.
     is_causal = (ctx_sample_mode == "first") and exclude_ctx
     if not is_causal:
         reasons = []

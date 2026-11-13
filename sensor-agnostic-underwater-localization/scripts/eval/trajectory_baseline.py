@@ -1,16 +1,12 @@
-"""
-trajectory_baseline.py
-======================
+"""Trajectory-only reference: a network that predicts the later positions of a
+transit from its first --nctx positions, without the acoustics.
 
-The best the trajectory alone can do: a network that never hears the acoustics.
-It maps the first --nctx (default 10) positions of a transit to its later positions, trained on
-the TRAINING-split trajectories of the benchmark (raw trajectory files, so the
-large feature pickles are not loaded), in coordinates relative to the last context
-fix, with random rotations and reflections (the trajectory generator is
-isotropic). Scored on the protocol of eval_suite.py.
+Trained on the training trajectories of the dataset (read from the raw
+trajectory files), in coordinates relative to the last context point, with
+random rotations and reflections. Scored with the protocol of eval_suite.py.
 
-    python scripts/eval/trajectory_baseline.py \
-        --data-dir data/pfn10kd/hermite_distinct/processed/geometry_split \
+    python scripts/eval/trajectory_baseline.py \\
+        --data-dir data/pfn10kd/hermite_distinct/processed/geometry_split \\
         --out-dir output/eval_paper/baselines/b1
 """
 import argparse, glob, json, os, re, sys, csv
@@ -33,12 +29,13 @@ def train_paths(data_dir):
         if int(re.search(r"position_set_(\d+)", d).group(1)) not in train:
             continue
         f = sorted(glob.glob(os.path.join(d, "channel_option_*", "random", "trajectory", "trajectories.npy")))[0]
-        P.append(np.load(f)[:2].transpose(1, 2, 0))           # (n_traj, ppt, 2); paths repeat across theta
+        P.append(np.load(f)[:2].transpose(1, 2, 0))           # (n_traj, ppt, 2)
     return np.concatenate(P).astype(np.float32)
 
 
 def rel(P, n):
-    """(N, ppt, 2) -> first n positions and the rest, relative to the last context fix, scaled."""
+    """(N, ppt, 2) -> first n positions and the rest, relative to the last
+    context point and scaled."""
     o = P[:, n - 1:n]
     return (P[:, :n] - o) / SCALE, (P[:, n:] - o) / SCALE
 

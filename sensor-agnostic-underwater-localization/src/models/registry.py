@@ -1,12 +1,7 @@
-"""src/models/registry.py -- the ONE place that turns an arch name (or a saved
-checkpoint) into a model.
+"""Build models by architecture name or from a saved checkpoint.
 
-The trainer and every eval script build models through here, so a new model
-option is wired in once instead of once per script. (Separate copies of this
-factory drifted twice: PFN ``readout`` and ``attn_ffn`` were not forwarded by the
-eval copy, so those checkpoints could not be rebuilt.)
-
-Unsupported option combinations raise instead of being silently ignored.
+Used by the trainer and by the evaluation scripts. Unsupported option
+combinations raise an error.
 """
 
 from . import anp as anp_mod
@@ -29,12 +24,10 @@ def build_model(name, num_hidden, input_dim, output_dim, *,
                 n_layers=6, n_heads=8, ffn_mult=4,
                 readout="joint", n_cross_layers=2, full_cov=False,
                 attn_ffn=False, latent_pooling=None, frame="absolute"):
-    """Returns (model, convention). convention is how the trainer calls forward:
+    """Returns (model, convention), where convention is how forward is called:
     'split' (context/target tensors), 'indexed' (full sequence + indices) or
-    'online' (streaming). latent_pooling=None keeps each latent model's own
-    default ('mean' for anp, 'attention' for ranp / online_ranp).
-    frame='centroid' wraps the model in frame.CentroidFrame (labels relative to
-    the array centroid inside the model; the calling convention is unchanged)."""
+    'online' (streaming). latent_pooling=None keeps each latent model's default.
+    frame='centroid' wraps the model in CentroidFrame."""
     frame = str(frame).lower()
     if frame not in ("absolute", "centroid"):
         raise ValueError(f"frame must be absolute|centroid, got {frame}")
@@ -61,8 +54,7 @@ def _build(name, num_hidden, input_dim, output_dim, *, rnn_type, rnn_layers, rnn
         raise ValueError(f"latent_pooling applies to latent models only, not '{name}'")
     pool_kw = {} if latent_pooling is None else {"latent_pooling": latent_pooling}
 
-    if name == "pfn":  # masked single-stack transformer (spatial_cfg -> spatial_pfn)
-        # attn_ffn is not an option here: every PFN block already has its FFN.
+    if name == "pfn":  # PFN blocks always include their feed-forward layer
         if full_cov:
             raise ValueError("full_cov is not implemented for pfn")
         return pfn_mod.PFNModel(num_hidden, input_dim, output_dim, dropout=dropout,
@@ -89,7 +81,7 @@ def _build(name, num_hidden, input_dim, output_dim, *, rnn_type, rnn_layers, rnn
                                            rnn_dropout=rnn_dropout, dropout=dropout,
                                            spatial_cfg=spatial_cfg, full_cov=full_cov,
                                            attn_ffn=attn_ffn), "indexed"
-    # online_ranp: streaming / online-deployable latent RANP (a sketch; see its docstring)
+    # online_ranp: streaming latent RANP
     unsupported = [k for k, v in (("spatial", spatial_cfg), ("full_cov", full_cov),
                                   ("attn_ffn", attn_ffn)) if v]
     if unsupported:
@@ -103,16 +95,13 @@ def _build(name, num_hidden, input_dim, output_dim, *, rnn_type, rnn_layers, rnn
 
 
 def model_from_checkpoint(ck, device="cpu"):
-    """Rebuild a model from a checkpoint written by train_np_geometry.py, load its
-    weights strictly and put it in eval mode. Returns (model, convention).
-
-    ck: the dict from torch.load(best.pt / last.pt)."""
+    """Rebuild a model from a checkpoint written by train_np_geometry.py (the dict
+    returned by torch.load), load its weights and put it in eval mode.
+    Returns (model, convention)."""
     cfg = ck.get("config", {})
     name = ck.get("model_name", "cnp")
     sd = ck["model"]
-    # attn_ffn entered the checkpoint config only after some runs were trained:
-    # when it is absent, infer it from the weights (the '*.ffn.*' parameters exist
-    # only when it was on; PFN blocks always have them, so PFN is excluded).
+    # Older checkpoints do not store attn_ffn; infer it from the weights.
     attn_ffn = cfg.get("attn_ffn", None)
     if attn_ffn is None:
         attn_ffn = name != "pfn" and any(
@@ -129,7 +118,7 @@ def model_from_checkpoint(ck, device="cpu"):
         latent_pooling=cfg.get("latent_pooling", None),
         frame=cfg.get("frame", "absolute"))
     model.to(device).load_state_dict(sd)
-    # The variance floor is not in the state_dict: re-apply the one the run used.
+    # The variance floor is not part of the state_dict.
     vf = cfg.get("var_floor_phys", None)
     if vf is not None:
         y_std = ck.get("y_std") if cfg.get("normalize_y", False) else None
