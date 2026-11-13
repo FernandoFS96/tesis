@@ -1,8 +1,0 @@
-# Attentive latent NP with the spatial front end.
-defaults:
-  - anp
-  - _self_
-
-name: spatial_anp
-spatial:
-  enabled: true

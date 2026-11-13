@@ -1,4 +1,0 @@
-# Random-layout task, Hermite trajectories shared by all deployments.
-task: random
-method: hermite
-mode: shared

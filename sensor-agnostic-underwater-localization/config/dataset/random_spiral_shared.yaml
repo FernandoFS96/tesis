@@ -1,4 +1,0 @@
-# Random-layout task, spiral trajectories shared by all deployments.
-task: random
-method: spiral
-mode: shared

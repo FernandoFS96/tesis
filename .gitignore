@@ -5,7 +5,6 @@
 !/underwater-localization/
 !/underwater-localization-topologies/
 !/magnetic-localization/
-!/sensor-agnostic-underwater-localization/
 
 # Everywhere: caches, logs and model weights
 __pycache__/

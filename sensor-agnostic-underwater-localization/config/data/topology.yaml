@@ -1,7 +1,0 @@
-# Topology task: one model per array topology, split by trajectory.
-defaults:
-  - _base
-  - _self_
-
-topology: random         # ellipsoidal | random | aligned
-data_dir: data/topology_task/${dataset.method}/processed/topology_${data.topology}

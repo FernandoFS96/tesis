@@ -1,8 +1,0 @@
-# Attentive CNP with the spatial front end.
-defaults:
-  - cnp
-  - _self_
-
-name: spatial_cnp
-spatial:
-  enabled: true

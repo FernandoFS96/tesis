@@ -1,4 +1,0 @@
-# Random-layout task, Hermite trajectories, separate trajectories per deployment.
-task: random
-method: hermite
-mode: distinct

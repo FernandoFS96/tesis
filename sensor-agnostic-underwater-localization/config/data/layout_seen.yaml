@@ -1,9 +1,0 @@
-# Random-layout task, seen layouts: every layout appears in training, and
-# validation and test use new trajectories. Targets are all points.
-defaults:
-  - _base
-  - _self_
-
-data_dir: data/random_task/${dataset.method}_${dataset.mode}/processed/within_geometry_split
-context:
-  exclude_from_target: false

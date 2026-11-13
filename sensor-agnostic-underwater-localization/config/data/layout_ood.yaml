@@ -1,7 +1,0 @@
-# Random-layout task, held-out layouts: validation and test arrays never appear
-# in training. data_dir follows the composed dataset (method and mode).
-defaults:
-  - _base
-  - _self_
-
-data_dir: data/random_task/${dataset.method}_${dataset.mode}/processed/geometry_split

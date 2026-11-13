@@ -1,5 +1,0 @@
-# Dataset identity, used both for generation (python data/generate.py
-# dataset=topology_spiral) and for training (dataset=topology_spiral).
-task: topology        # topology | random
-method: spiral        # spiral | hermite (trajectory shape)
-mode: null            # shared | distinct (random task only)

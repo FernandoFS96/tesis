@@ -1,9 +1,0 @@
-# Recurrent CNP with the spatial front end, applied to each point before the RNN.
-defaults:
-  - rcnp
-  - _spatial
-  - _self_
-
-name: spatial_rcnp
-spatial:
-  enabled: true
